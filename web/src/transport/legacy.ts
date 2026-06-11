@@ -60,6 +60,8 @@ export function toUiEvent(e: AgentEvent): UiEvent | null {
       return { kind: 'ask_user_question', step: e.step, spec: e.spec ?? defaultAskSpec(e.question) };
     case 'user_answer':
       return { kind: 'ask_user_answer', step: e.step, answer: e.answer };
+    case 'user_cancel':
+      return { kind: 'ask_user_cancel', step: e.step, reason: e.reason };
     case 'progress_stalled':
       return { kind: 'notice', step: e.step, message: e.question ? `${e.reason}\n${e.question}` : e.reason };
     case 'recovery':

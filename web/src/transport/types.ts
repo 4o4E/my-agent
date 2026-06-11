@@ -29,6 +29,7 @@ export type UiEvent =
   | { kind: 'notice'; step: number; message: string }
   | { kind: 'ask_user_question'; step: number; runId?: string; spec: AskUserSpec }
   | { kind: 'ask_user_answer'; step: number; answer: AskUserAnswer }
+  | { kind: 'ask_user_cancel'; step: number; reason?: string }
   | { kind: 'final'; step: number; output: string }
   | { kind: 'error'; step: number; message: string };
 

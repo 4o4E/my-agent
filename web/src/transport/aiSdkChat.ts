@@ -105,6 +105,11 @@ export function uiEventStreamToChunks(
             closeReason();
             safe({ type: 'data-ask-user-answer', id: `answer-${e.step}`, data: e.answer } as unknown as UIMessageChunk);
             break;
+          case 'ask_user_cancel':
+            closeText();
+            closeReason();
+            safe({ type: 'data-ask-user-cancel', id: `cancel-${e.step}`, data: { reason: e.reason } } as unknown as UIMessageChunk);
+            break;
           case 'reasoning': {
             closeText();
             const id = `r-${e.step}`;

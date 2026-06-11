@@ -68,6 +68,7 @@ export type AgentEvent =
     }
   | { type: 'user_question'; step: number; question: string; toolCallId?: string; spec?: AskUserSpec }
   | { type: 'user_answer'; step: number; answer: AskUserAnswer }
+  | { type: 'user_cancel'; step: number; reason?: string }
   | { type: 'progress_stalled'; step: number; reason: string; question?: string }
   | { type: 'recovery'; step: number; message: string }
   | { type: 'final'; step: number; output: string }

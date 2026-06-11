@@ -24,6 +24,16 @@ export function emptyAskUserDraft(spec?: AskUserSpec): AskUserDraft {
   };
 }
 
+function blankAskUserDraft(): AskUserDraft {
+  return {
+    selectedIds: [],
+    customOptions: [],
+    pendingCustom: '',
+    text: '',
+    note: '',
+  };
+}
+
 function allOptions(spec: AskUserSpec, draft: AskUserDraft): AskUserOption[] {
   return [
     ...spec.options,
@@ -153,6 +163,7 @@ export function AskUserQuestionCard({
   spec,
   draft,
   answer,
+  canceled,
   disabled,
   onDraftChange,
   onSubmit,
@@ -161,13 +172,14 @@ export function AskUserQuestionCard({
   spec: AskUserSpec;
   draft: AskUserDraft;
   answer?: AskUserAnswer;
+  canceled?: boolean;
   disabled?: boolean;
   onDraftChange: (draft: AskUserDraft) => void;
   onSubmit: (answer: AskUserAnswer) => void;
   onCancel: () => void;
 }) {
-  const readonly = !!answer;
-  const viewDraft = answer ? draftFromAnswer(answer) : draft;
+  const readonly = !!answer || !!canceled;
+  const viewDraft = answer ? draftFromAnswer(answer) : canceled ? blankAskUserDraft() : draft;
   const options = optionsForRender(spec, viewDraft, answer);
   const canSubmit = canSubmitDraft(spec, viewDraft);
   const canUseRecommended = canSubmitDraft(spec, {
@@ -203,7 +215,7 @@ export function AskUserQuestionCard({
 
   return (
     <div className="not-prose rounded-md border bg-card p-3 text-sm shadow-sm">
-      <div className="font-medium">{readonly ? '已提交回答' : '需要你回答'}</div>
+      <div className="font-medium">{canceled ? '已取消回答' : readonly ? '已提交回答' : '需要你回答'}</div>
       <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{spec.question}</div>
 
       {spec.mode === 'text' ? (

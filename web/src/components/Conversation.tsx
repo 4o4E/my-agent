@@ -238,6 +238,7 @@ function ToolBlock({
 function AssistantPart({
   part,
   answer,
+  canceled,
   toolActive,
   timingMaps,
   workspaceRoot,
@@ -250,6 +251,7 @@ function AssistantPart({
 }: {
   part: Part;
   answer?: AskUserAnswer;
+  canceled?: boolean;
   toolActive: boolean;
   timingMaps: ReturnType<typeof buildTimingMaps>;
   workspaceRoot: string | null;
@@ -281,6 +283,7 @@ function AssistantPart({
         spec={spec}
         draft={draft}
         answer={answer}
+        canceled={canceled}
         disabled={!runId}
         onDraftChange={(next) => runId && onAskUserDraftChange(runId, next)}
         onSubmit={(answer) => runId && onAskUserSubmit(runId, answer)}
@@ -289,6 +292,9 @@ function AssistantPart({
     );
   }
   if (part.type === 'data-ask-user-answer') {
+    return null;
+  }
+  if (part.type === 'data-ask-user-cancel') {
     return null;
   }
   if (isToolPart(part)) {
@@ -305,13 +311,14 @@ function AssistantPart({
   return null;
 }
 
-function answerForQuestion(parts: Part[], index: number): AskUserAnswer | undefined {
+function askUserStateForQuestion(parts: Part[], index: number): { answer?: AskUserAnswer; canceled?: boolean } {
   for (let i = index + 1; i < parts.length; i++) {
     const part = parts[i];
-    if (part.type === 'data-ask-user-question') return undefined;
-    if (part.type === 'data-ask-user-answer') return (part as { data: AskUserAnswer }).data;
+    if (part.type === 'data-ask-user-question') return {};
+    if (part.type === 'data-ask-user-answer') return { answer: (part as { data: AskUserAnswer }).data };
+    if (part.type === 'data-ask-user-cancel') return { canceled: true };
   }
-  return undefined;
+  return {};
 }
 
 function ActivityGroup({
@@ -360,22 +367,26 @@ function ActivityGroup({
         <ChevronDown className={cn('size-4 shrink-0 transition-transform', open && 'rotate-180')} />
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-1 ml-3 flex w-[calc(100%-0.75rem)] min-w-0 flex-col gap-1 border-l border-border/60 pl-3">
-        {entries.map(({ part, index }) => (
-          <AssistantPart
-            key={index}
-            part={part}
-            answer={answerForQuestion(entries.map((entry) => entry.part), entries.findIndex((entry) => entry.index === index))}
-            toolActive={`${messageId}:${index}` === lastToolKey}
-            timingMaps={timingMaps}
-            workspaceRoot={workspaceRoot}
-            onOpenRemoteFile={onOpenRemoteFile}
-            runId={runId}
-            askUserDrafts={askUserDrafts}
-            onAskUserDraftChange={onAskUserDraftChange}
-            onAskUserSubmit={onAskUserSubmit}
-            onAskUserCancel={onAskUserCancel}
-          />
-        ))}
+        {entries.map(({ part, index }, entryIndex) => {
+          const askUserState = askUserStateForQuestion(entries.map((entry) => entry.part), entryIndex);
+          return (
+            <AssistantPart
+              key={index}
+              part={part}
+              answer={askUserState.answer}
+              canceled={askUserState.canceled}
+              toolActive={`${messageId}:${index}` === lastToolKey}
+              timingMaps={timingMaps}
+              workspaceRoot={workspaceRoot}
+              onOpenRemoteFile={onOpenRemoteFile}
+              runId={runId}
+              askUserDrafts={askUserDrafts}
+              onAskUserDraftChange={onAskUserDraftChange}
+              onAskUserSubmit={onAskUserSubmit}
+              onAskUserCancel={onAskUserCancel}
+            />
+          );
+        })}
       </CollapsibleContent>
     </Collapsible>
   );
@@ -543,11 +554,13 @@ function AssistantMessage({
       return;
     }
     flushGroup();
+    const askUserState = askUserStateForQuestion(message.parts, i);
     nodes.push(
       <AssistantPart
         key={i}
         part={part}
-        answer={answerForQuestion(message.parts, i)}
+        answer={askUserState.answer}
+        canceled={askUserState.canceled}
         toolActive={`${message.id}:${i}` === lastToolKey}
         timingMaps={timingMaps}
         workspaceRoot={workspaceRoot}
@@ -567,6 +580,7 @@ function AssistantMessage({
         key={`a2ui-${index}`}
         part={part}
         answer={undefined}
+        canceled={undefined}
         toolActive={false}
         timingMaps={timingMaps}
         workspaceRoot={workspaceRoot}

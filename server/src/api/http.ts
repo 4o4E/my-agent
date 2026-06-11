@@ -72,7 +72,7 @@ api.post('/runs/:id/cancel', async (req, res) => {
   if (!run) return res.status(404).json({ error: 'run not found' });
   if (run.status === 'waiting_for_user') {
     const step = (await store.getLastStepIndex(run.id)) + 1;
-    await store.addEvent(run.id, null, { type: 'error', step, message: 'Run canceled by user.' });
+    await store.addEvent(run.id, null, { type: 'user_cancel', step, reason: 'Run canceled by user.' });
     await store.setRunStatus(run.id, 'canceled', { error: 'Run canceled by user.' });
     return res.json({ id: run.id, status: 'canceled' });
   }

@@ -84,6 +84,11 @@ export function foldUiEventsToParts(events: UiEvent[]): Part[] {
         flushText();
         parts.push({ type: 'data-ask-user-answer', id: `answer-${e.step}`, data: e.answer } as unknown as Part);
         break;
+      case 'ask_user_cancel':
+        flushReason();
+        flushText();
+        parts.push({ type: 'data-ask-user-cancel', id: `cancel-${e.step}`, data: { reason: e.reason } } as unknown as Part);
+        break;
       case 'tool': {
         flushReason();
         flushText();
