@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { deleteThread, getRemoteFileInfo, getThread, listThreads, uploadLocalFile, type Thread } from './api';
+import { cancelRun, deleteThread, getRemoteFileInfo, getThread, listThreads, uploadLocalFile, type Thread } from './api';
 import { createAiSdkChatTransport, type ChatThreadHandle } from './transport/aiSdkChat';
 import { runsToUiMessages } from './history';
 import { Sidebar } from './components/Sidebar';
@@ -79,6 +79,7 @@ export function App() {
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const { theme, toggle: toggleTheme } = useThemeCtx();
   const activeThreadId = route.threadId;
 
@@ -122,6 +123,7 @@ export function App() {
         navigateChatRoute({ draft: '', threadId: id }, 'replace');
       },
       onThreadCreated: () => refreshThreads(),
+      setActiveRunId,
     }),
     [navigateChatRoute, refreshThreads],
   );
@@ -130,6 +132,10 @@ export function App() {
 
   const { messages, sendMessage, status, stop, setMessages } = useChat({ transport });
   const busy = status === 'submitted' || status === 'streaming';
+
+  useEffect(() => {
+    if (!busy) setActiveRunId(null);
+  }, [busy]);
 
   useEffect(() => {
     const path = buildChatPath(route);
@@ -245,6 +251,18 @@ export function App() {
     setRightPanelOpen(true);
   }
 
+  function cancelActiveRun() {
+    const runId = activeRunId;
+    if (!runId) {
+      stop();
+      return;
+    }
+    // 先发后端取消请求，再立即停本地流；后端失败会暴露在控制台，界面不被挂住。
+    void cancelRun(runId).catch((err) => console.error('cancel run failed', err));
+    stop();
+    setActiveRunId(null);
+  }
+
   const activeThread = threads.find((t) => t.id === activeThreadId);
   const title = activeThread?.title ?? (activeThreadId ? '会话' : '新会话');
 
@@ -289,8 +307,14 @@ export function App() {
           attachments={attachments}
           onDraftChange={changeDraft}
           onSend={send}
+          onCancel={cancelActiveRun}
           onToggleWide={() => setWide((v) => !v)}
           onRemoveAttachment={(path) => setAttachments((current) => current.filter((a) => a.path !== path))}
+          filesOpen={rightPanelOpen}
+          onToggleRemoteFiles={() => {
+            setPreviewPath(null);
+            setRightPanelOpen((open) => !open);
+          }}
           onOpenRemoteFiles={() => {
             setPreviewPath(null);
             setRightPanelOpen(true);

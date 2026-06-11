@@ -12,6 +12,7 @@ import {
   ChevronDownIcon,
   CircleIcon,
   ClockIcon,
+  FileTextIcon,
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -123,6 +124,8 @@ export const ToolContent = ({ className, ...props }: ToolContentProps) => (
 
 export type ToolInputProps = ComponentProps<"div"> & {
   input: ToolPart["input"];
+  workspaceRoot?: string | null;
+  onOpenRemoteFile?: (path: string) => void;
 };
 
 type JsonLike = null | boolean | number | string | JsonLike[] | { [key: string]: JsonLike };
@@ -149,7 +152,51 @@ function scalarLabel(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
+function stripPathLineSuffix(value: string): string {
+  return value.trim().replace(/(?::\d+){1,2}$/, "");
+}
+
+function isPathKey(key?: string): boolean {
+  return !!key && /(^|_)(path|file|filename|target|source|cwd|dir|directory)(_|$)/i.test(key);
+}
+
+function isFilePathCandidate(value: string, key?: string, workspaceRoot?: string | null): boolean {
+  const path = stripPathLineSuffix(value);
+  if (!path || path.length > 500) return false;
+  if (workspaceRoot && path.startsWith(`${workspaceRoot.replace(/\/+$/, "")}/`)) return true;
+  if (path.startsWith("/") || path.startsWith("./") || path.startsWith("../")) return path.includes("/");
+  if (isPathKey(key)) return path.includes("/") || /\.[A-Za-z0-9]{1,12}$/.test(path);
+  return /^(server|web|docs|src|uploads|tests)\//.test(path);
+}
+
+function FilePathButton({ value, onOpenRemoteFile }: { value: string; onOpenRemoteFile: (path: string) => void }) {
+  const path = stripPathLineSuffix(value);
+  return (
+    <button
+      type="button"
+      onClick={() => onOpenRemoteFile(path)}
+      className="inline-flex max-w-full items-center gap-1 rounded-sm border bg-background px-1.5 py-0.5 font-mono text-xs text-muted-foreground hover:text-foreground"
+      title={path}
+    >
+      <FileTextIcon className="size-3 shrink-0" />
+      <span className="truncate">{value}</span>
+    </button>
+  );
+}
+
+function JsonValue({
+  value,
+  depth = 0,
+  objectKey,
+  workspaceRoot,
+  onOpenRemoteFile,
+}: {
+  value: unknown;
+  depth?: number;
+  objectKey?: string;
+  workspaceRoot?: string | null;
+  onOpenRemoteFile?: (path: string) => void;
+}) {
   if (Array.isArray(value)) {
     if (value.length === 0) return <span className="text-muted-foreground">[]</span>;
     return (
@@ -157,7 +204,7 @@ function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
         {value.map((item, index) => (
           <div key={index} className="grid min-w-0 grid-cols-[2rem,1fr] gap-2">
             <span className="select-none text-right text-muted-foreground">{index}</span>
-            <JsonValue value={item} depth={depth + 1} />
+            <JsonValue value={item} depth={depth + 1} objectKey={objectKey} workspaceRoot={workspaceRoot} onOpenRemoteFile={onOpenRemoteFile} />
           </div>
         ))}
       </div>
@@ -175,12 +222,16 @@ function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
               {key}
             </span>
             <div className="min-w-0">
-              <JsonValue value={item} depth={depth + 1} />
+              <JsonValue value={item} depth={depth + 1} objectKey={key} workspaceRoot={workspaceRoot} onOpenRemoteFile={onOpenRemoteFile} />
             </div>
           </div>
         ))}
       </div>
     );
+  }
+
+  if (typeof value === "string" && onOpenRemoteFile && isFilePathCandidate(value, objectKey, workspaceRoot)) {
+    return <FilePathButton value={value} onOpenRemoteFile={onOpenRemoteFile} />;
   }
 
   return (
@@ -195,20 +246,28 @@ function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
   );
 }
 
-function JsonPanel({ value }: { value: unknown }) {
+function JsonPanel({
+  value,
+  workspaceRoot,
+  onOpenRemoteFile,
+}: {
+  value: unknown;
+  workspaceRoot?: string | null;
+  onOpenRemoteFile?: (path: string) => void;
+}) {
   return (
     <div className="scrollbar-thin max-h-[44vh] overflow-auto rounded-md border bg-background p-2 text-xs text-foreground">
-      <JsonValue value={value as JsonLike} />
+      <JsonValue value={value as JsonLike} workspaceRoot={workspaceRoot} onOpenRemoteFile={onOpenRemoteFile} />
     </div>
   );
 }
 
-export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
+export const ToolInput = ({ className, input, workspaceRoot, onOpenRemoteFile, ...props }: ToolInputProps) => (
   <div className={cn("space-y-1 overflow-hidden", className)} {...props}>
     <h4 className="font-medium text-muted-foreground text-xs">
       参数
     </h4>
-    <JsonPanel value={input ?? {}} />
+    <JsonPanel value={input ?? {}} workspaceRoot={workspaceRoot} onOpenRemoteFile={onOpenRemoteFile} />
   </div>
 );
 

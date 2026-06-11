@@ -35,6 +35,7 @@ interface Props {
   attachments: ComposerAttachment[];
   onDraftChange: (text: string) => void;
   onSend: (text: string) => void;
+  onCancel: () => void;
   onToggleWide: () => void;
   onRemoveAttachment: (path: string) => void;
   onOpenRemoteFiles: () => void;
@@ -55,6 +56,7 @@ export function Composer({
   attachments,
   onDraftChange,
   onSend,
+  onCancel,
   onToggleWide,
   onRemoveAttachment,
   onOpenRemoteFiles,
@@ -119,64 +121,73 @@ export function Composer({
 
   return (
     <div className="bg-card px-6 py-4">
-      <div className={cn('mx-auto', wide ? 'max-w-5xl' : 'max-w-3xl')}>
-        {attachments.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-2">
-            {attachments.map((att) => (
-              <button
-                key={`${att.kind}:${att.path}`}
-                type="button"
-                onClick={() => onRemoveAttachment(att.path)}
-                className="rounded-md border bg-background px-2 py-1 text-left text-xs text-muted-foreground hover:border-destructive hover:text-destructive"
-                title="点击移除附件"
-              >
-                {att.kind === 'local' ? '本地' : '远程'} · {att.name}
-                {att.size != null ? ` · ${formatSize(att.size)}` : ''}
-              </button>
-            ))}
-          </div>
-        )}
-        <PromptInput onSubmit={handleSubmit}>
-          <PromptInputBody>
-            <PromptInputTextarea
-              onChange={(event) => onDraftChange(event.currentTarget.value)}
-              placeholder="描述一个任务…（Enter 发送，Shift+Enter 换行）"
-              value={draft}
-            />
-          </PromptInputBody>
-          <PromptInputFooter>
-            <PromptInputTools>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="ghost" size="icon" disabled={disabled} title="添加附件">
-                    <Paperclip className="size-4" />
+      <div className="flex min-w-0">
+        <div className="min-w-0 flex-1">
+          <div className={cn('mx-auto', wide ? 'max-w-5xl' : 'max-w-3xl')}>
+            {attachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {attachments.map((att) => (
+                  <button
+                    key={`${att.kind}:${att.path}`}
+                    type="button"
+                    onClick={() => onRemoveAttachment(att.path)}
+                    className="rounded-md border bg-background px-2 py-1 text-left text-xs text-muted-foreground hover:border-destructive hover:text-destructive"
+                    title="点击移除附件"
+                  >
+                    {att.kind === 'local' ? '本地' : '远程'} · {att.name}
+                    {att.size != null ? ` · ${formatSize(att.size)}` : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+            <PromptInput onSubmit={handleSubmit}>
+              <PromptInputBody>
+                <PromptInputTextarea
+                  onChange={(event) => onDraftChange(event.currentTarget.value)}
+                  placeholder="描述一个任务…（Enter 发送，Shift+Enter 换行）"
+                  value={draft}
+                />
+              </PromptInputBody>
+              <PromptInputFooter>
+                <PromptInputTools>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="ghost" size="icon" disabled={disabled} title="添加附件">
+                        <Paperclip className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem onClick={onOpenRemoteFiles}>
+                        <Paperclip className="size-4" />
+                        选择远程文件
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+                        <FileUp className="size-4" />
+                        上传本地文件
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(event) => chooseLocal(event.currentTarget.files?.[0])}
+                  />
+                  <Button type="button" variant="ghost" size="sm" onClick={onToggleWide} className="text-muted-foreground">
+                    {wide ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+                    {wide ? '正常宽度' : '加宽对话'}
                   </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  <DropdownMenuItem onClick={onOpenRemoteFiles}>
-                    <Paperclip className="size-4" />
-                    选择远程文件
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
-                    <FileUp className="size-4" />
-                    上传本地文件
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <input
-                ref={fileInputRef}
-                type="file"
-                className="hidden"
-                onChange={(event) => chooseLocal(event.currentTarget.files?.[0])}
-              />
-              <Button type="button" variant="ghost" size="sm" onClick={onToggleWide} className="text-muted-foreground">
-                {wide ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-                {wide ? '正常宽度' : '加宽对话'}
-              </Button>
-            </PromptInputTools>
-            <PromptInputSubmit status={disabled ? 'submitted' : undefined} disabled={disabled} />
-          </PromptInputFooter>
-        </PromptInput>
+                </PromptInputTools>
+                <PromptInputSubmit
+                  status={disabled ? 'streaming' : undefined}
+                  disabled={!disabled && !draft.trim()}
+                  onStop={onCancel}
+                />
+              </PromptInputFooter>
+            </PromptInput>
+          </div>
+        </div>
+        <div className="hidden w-56 shrink-0 xl:block" />
       </div>
       <Dialog open={!!localFile} onOpenChange={(open) => !open && setLocalFile(null)}>
         <DialogContent>

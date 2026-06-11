@@ -188,7 +188,19 @@ function PathAwareResponse({ text, workspaceRoot, onOpenRemoteFile }: { text: st
 }
 
 // `active` 标记最新工具调用；新工具出现时旧块自动折叠，用户手动切换会临时覆盖。
-function ToolBlock({ part, active, timing }: { part: Part; active: boolean; timing?: Timing }) {
+function ToolBlock({
+  part,
+  active,
+  timing,
+  workspaceRoot,
+  onOpenRemoteFile,
+}: {
+  part: Part;
+  active: boolean;
+  timing?: Timing;
+  workspaceRoot: string | null;
+  onOpenRemoteFile: (path: string) => void;
+}) {
   const p = part as {
     type: string;
     toolName?: string;
@@ -214,7 +226,7 @@ function ToolBlock({ part, active, timing }: { part: Part; active: boolean; timi
         <ToolHeader type={p.type as ToolUIPart['type']} state={p.state} duration={formatDuration(durationFromTiming(timing))} />
       )}
       <ToolContent>
-        <ToolInput input={p.input} />
+        <ToolInput input={p.input} workspaceRoot={workspaceRoot} onOpenRemoteFile={onOpenRemoteFile} />
         <ToolOutput output={p.output as never} errorText={p.errorText} />
       </ToolContent>
     </Tool>
@@ -247,7 +259,17 @@ function AssistantPart({
   if (part.type === 'data-a2ui') {
     return <A2uiSurface message={(part as { data: A2uiMessage }).data} />;
   }
-  if (isToolPart(part)) return <ToolBlock part={part} active={toolActive} timing={timingForPart(part, timingMaps)} />;
+  if (isToolPart(part)) {
+    return (
+      <ToolBlock
+        part={part}
+        active={toolActive}
+        timing={timingForPart(part, timingMaps)}
+        workspaceRoot={workspaceRoot}
+        onOpenRemoteFile={onOpenRemoteFile}
+      />
+    );
+  }
   return null;
 }
 

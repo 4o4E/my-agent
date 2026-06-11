@@ -124,6 +124,9 @@ export const startRun = (threadId: string, input: string) =>
     body: JSON.stringify({ input }),
   }).then(json<{ id: string }>);
 
+export const cancelRun = (runId: string) =>
+  fetch(`/api/runs/${runId}/cancel`, { method: 'POST' }).then(json<{ id: string; status: 'canceling' }>);
+
 /** Subscribe to a run's live event stream over WebSocket. */
 export function subscribeRun(
   runId: string,

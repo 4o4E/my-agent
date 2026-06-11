@@ -18,6 +18,7 @@ export interface ChatThreadHandle {
   getThreadId(): string | null;
   setThreadId(id: string): void;
   onThreadCreated(thread: Thread): void;
+  setActiveRunId(id: string | null): void;
 }
 
 /** Extract the plain text of a user UIMessage (its text parts joined). */
@@ -198,6 +199,7 @@ export function createAiSdkChatTransport(handle: ChatThreadHandle): ChatTranspor
       }
 
       const { runId } = await legacyTransport.send(threadId, { text });
+      handle.setActiveRunId(runId);
       return uiEventStreamToChunks(runId, abortSignal);
     },
 
