@@ -1,5 +1,7 @@
 // Agent-level types. LLM message/tool types live in ../llm/types.ts.
 
+import type { A2uiMessage } from './a2ui.js';
+
 export type RunStatus = 'pending' | 'running' | 'done' | 'error';
 
 /**
@@ -12,5 +14,6 @@ export type AgentEvent =
   | { type: 'llm_delta'; step: number; text: string }
   | { type: 'tool_call'; step: number; name: string; args: unknown; id: string }
   | { type: 'tool_result'; step: number; id: string; name: string; result: string }
+  | { type: 'a2ui'; step: number; surfaceId: string; message: A2uiMessage }
   | { type: 'final'; step: number; output: string }
   | { type: 'error'; step: number; message: string };

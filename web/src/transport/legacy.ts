@@ -21,6 +21,8 @@ export function toUiEvent(e: AgentEvent): UiEvent {
       return { kind: 'tool', step: e.step, id: e.id, name: e.name, input: e.args };
     case 'tool_result':
       return { kind: 'tool', step: e.step, id: e.id, name: e.name, output: e.result };
+    case 'a2ui':
+      return { kind: 'a2ui', step: e.step, surfaceId: e.surfaceId, message: e.message };
     case 'final':
       return { kind: 'final', step: e.step, output: e.output };
     case 'error':

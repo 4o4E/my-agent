@@ -51,6 +51,7 @@ const META: Record<string, ToolMeta> = {
   web_fetch: { kind: 'net', urlArgs: ['url'] },
   web_search: { kind: 'net' },
   ask_user: { kind: 'safe' },
+  render_ui: { kind: 'safe' },
 };
 
 /** True when `target` resolves to a location at or under `root`. */

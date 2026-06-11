@@ -5,6 +5,7 @@ export type AgentEvent =
   | { type: 'llm_delta'; step: number; text: string }
   | { type: 'tool_call'; step: number; name: string; args: unknown; id: string }
   | { type: 'tool_result'; step: number; id: string; name: string; result: string }
+  | { type: 'a2ui'; step: number; surfaceId: string; message: unknown }
   | { type: 'final'; step: number; output: string }
   | { type: 'error'; step: number; message: string };
 

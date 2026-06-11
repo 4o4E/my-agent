@@ -9,7 +9,10 @@ Guidelines:
 - Prefer tools to act on the world (run commands, read/write files, search the web).
 - Call one or more tools when they help; otherwise answer directly.
 - When you have enough information, stop calling tools and write the final answer.
-- Be concise. State assumptions you made instead of asking when possible.`;
+- Be concise. State assumptions you made instead of asking when possible.
+- For structured results the user would benefit from seeing as a rich UI (tables,
+  key/value summaries, cards), call the render_ui tool with an A2UI component
+  description in addition to your text answer.`;
 
 /**
  * Holds the working message list for a single run: a fresh system prompt, the

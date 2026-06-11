@@ -138,13 +138,19 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
           { 'gen_ai.tool.name': call.name, 'tool.call_id': call.id },
           async (span) => {
             const out = await runTool(call.name, args);
-            span.setAttribute('tool.result.length', out.length);
+            span.setAttribute('tool.result.length', out.text.length);
             return out;
           },
         );
-        await emit(step.id, { type: 'tool_result', step: stepIdx, id: call.id, name: call.name, result });
+        await emit(step.id, { type: 'tool_result', step: stepIdx, id: call.id, name: call.name, result: result.text });
 
-        const toolMsg = { role: 'tool' as const, content: result, toolCallId: call.id };
+        // Structured display → an additional declarative-UI surface event.
+        if (result.display?.type === 'a2ui') {
+          const surfaceId = result.display.surfaceId ?? result.display.message.surfaceId ?? call.id;
+          await emit(step.id, { type: 'a2ui', step: stepIdx, surfaceId, message: result.display.message });
+        }
+
+        const toolMsg = { role: 'tool' as const, content: result.text, toolCallId: call.id };
         ctx.add(toolMsg);
         await store.addMessage(threadId, runId, step.id, toolMsg);
       }
