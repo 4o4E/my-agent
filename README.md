@@ -282,11 +282,27 @@ npm run typecheck -w server
 
 ## 路线图
 
+> 架构演进(用现成方案替换自建渲染/流式/调试 + A2UI 预留)详见
+> **[docs/refactor-plan.md](docs/refactor-plan.md)**。
+
+已完成:
+
 - [x] 多 provider（OpenAI Responses / Chat / Anthropic / mock）
 - [x] thread / run / step 对话模型
 - [x] 单元测试（工具 / provider 映射 / 执行循环 / 流式拼装）
 - [x] LLM 流式增量（SSE，token 级 `llm_delta` / `reasoning`）
 - [x] 前端 Markdown 渲染 + 深色模式
+
+架构改造(详见改造方案):
+
+- [ ] Phase 0–1: 抽象传输边界 + Streamdown 替换文本/代码渲染
+- [ ] Phase 2–3: 后端接 AI SDK + 前端接 useChat/AI Elements
+- [ ] Phase 4: OTEL → Langfuse/Laminar 调试界面
+- [ ] Phase 5: 声明式生成式 UI（A2UI renderer + 组件 catalog）
+- [ ] Phase 6: 沙箱 / 权限 / 工具策略
+
+业务能力:
+
 - [ ] 鉴权与用户管理（JWT、角色）
 - [ ] 数据权限 / 工具策略层
 - [ ] 数据库探查与 SQL 工具
