@@ -115,6 +115,8 @@ type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   showGlance?: boolean;
   showWrapToggle?: boolean;
   defaultWrap?: boolean;
+  startLineNumber?: number;
+  maxHighlightChars?: number;
 };
 
 interface TokenizedCode {
@@ -252,11 +254,13 @@ const CodeBlockBody = memo(
   ({
     tokenized,
     showLineNumbers,
+    startLineNumber,
     wrap,
     className,
   }: {
     tokenized: TokenizedCode;
     showLineNumbers: boolean;
+    startLineNumber: number;
     wrap: boolean;
     className?: string;
   }) => {
@@ -285,8 +289,9 @@ const CodeBlockBody = memo(
         <code
           className={cn(
             "font-mono text-sm",
-            showLineNumbers && "[counter-increment:line_0] [counter-reset:line]"
+            showLineNumbers && "[counter-increment:line_0]"
           )}
+          style={showLineNumbers ? { counterReset: `line ${Math.max(0, startLineNumber - 1)}` } : undefined}
         >
           {keyedLines.map((keyedLine) => (
             <LineSpan
@@ -302,6 +307,7 @@ const CodeBlockBody = memo(
   (prevProps, nextProps) =>
     prevProps.tokenized === nextProps.tokenized &&
     prevProps.showLineNumbers === nextProps.showLineNumbers &&
+    prevProps.startLineNumber === nextProps.startLineNumber &&
     prevProps.wrap === nextProps.wrap &&
     prevProps.className === nextProps.className
 );
@@ -382,22 +388,27 @@ export const CodeBlockContent = ({
   code,
   language,
   showLineNumbers = false,
+  startLineNumber = 1,
   showGlance = false,
   wrap = false,
+  maxHighlightChars = 120_000,
 }: {
   code: string;
   language: BundledLanguage;
   showLineNumbers?: boolean;
+  startLineNumber?: number;
   showGlance?: boolean;
   wrap?: boolean;
+  maxHighlightChars?: number;
 }) => {
+  const shouldHighlight = code.length <= maxHighlightChars;
   // Memoized raw tokens for immediate display
   const rawTokens = useMemo(() => createRawTokens(code), [code]);
 
   // Synchronous cache lookup — avoids setState in effect for cached results
   const syncTokens = useMemo(
-    () => highlightCode(code, language) ?? rawTokens,
-    [code, language, rawTokens]
+    () => shouldHighlight ? highlightCode(code, language) ?? rawTokens : rawTokens,
+    [code, language, rawTokens, shouldHighlight]
   );
 
   // Async highlighting result (populated after shiki loads)
@@ -416,6 +427,8 @@ export const CodeBlockContent = ({
   useEffect(() => {
     let cancelled = false;
 
+    if (!shouldHighlight) return undefined;
+
     highlightCode(code, language, (result) => {
       if (!cancelled) {
         setAsyncTokens(result);
@@ -425,14 +438,19 @@ export const CodeBlockContent = ({
     return () => {
       cancelled = true;
     };
-  }, [code, language]);
+  }, [code, language, shouldHighlight]);
 
   const tokenized = asyncTokens ?? syncTokens;
 
   return (
     <div className="relative flex min-w-0 overflow-hidden">
       <div className="scrollbar-thin min-w-0 flex-1 overflow-auto">
-        <CodeBlockBody showLineNumbers={showLineNumbers} tokenized={tokenized} wrap={wrap} />
+        <CodeBlockBody
+          showLineNumbers={showLineNumbers}
+          startLineNumber={startLineNumber}
+          tokenized={tokenized}
+          wrap={wrap}
+        />
       </div>
       {showGlance && <CodeBlockGlance tokenized={tokenized} />}
     </div>
@@ -460,13 +478,15 @@ function CodeBlockGlance({ tokenized }: { tokenized: TokenizedCode }) {
   );
 }
 
-export const CodeBlock = ({
+export const CodeBlock = memo(({
   code,
   language,
   showLineNumbers = false,
   showGlance = false,
   showWrapToggle = false,
   defaultWrap = false,
+  startLineNumber = 1,
+  maxHighlightChars = 120_000,
   className,
   children,
   ...props
@@ -512,13 +532,17 @@ export const CodeBlock = ({
           code={code}
           language={language}
           showLineNumbers={showLineNumbers}
+          startLineNumber={startLineNumber}
           showGlance={showGlance}
           wrap={wrap}
+          maxHighlightChars={maxHighlightChars}
         />
       </CodeBlockContainer>
     </CodeBlockContext.Provider>
   );
-};
+});
+
+CodeBlock.displayName = "CodeBlock";
 
 export type CodeBlockCopyButtonProps = ComponentProps<typeof Button> & {
   onCopy?: () => void;

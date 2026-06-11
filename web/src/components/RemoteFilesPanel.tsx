@@ -7,9 +7,9 @@ import { CodeBlock } from '@/components/ai-elements/code-block';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-interface PreviewLine {
-  no: number;
-  text: string;
+interface PreviewChunk {
+  startLine: number;
+  lines: string[];
 }
 
 interface Props {
@@ -110,7 +110,7 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedSize, setSelectedSize] = useState<number | undefined>();
   const [preview, setPreview] = useState<FilePreview | null>(null);
-  const [lines, setLines] = useState<PreviewLine[]>([]);
+  const [chunks, setChunks] = useState<PreviewChunk[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -136,8 +136,8 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
       setSelectedPath(data.path);
       setSelectedSize(size ?? data.size);
       setPreview(data);
-      const nextLines = data.lines.map((text, i) => ({ no: data.startLine + i, text }));
-      setLines(startLine === 1 ? nextLines : (prev) => [...prev, ...nextLines]);
+      const nextChunk = { startLine: data.startLine, lines: data.lines };
+      setChunks((current) => startLine === 1 ? [nextChunk] : [...current, nextChunk]);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -166,8 +166,8 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
     if (open && previewPath) void openFile(previewPath);
   }, [open, previewPath]);
 
-  const previewCode = useMemo(() => lines.map((line) => line.text).join('\n'), [lines]);
   const previewLanguage = selectedPath ? languageForPath(selectedPath) : 'log';
+  const loadedLines = useMemo(() => chunks.reduce((total, chunk) => total + chunk.lines.length, 0), [chunks]);
 
   if (!open) return null;
   const nextLine = preview?.hasMore && preview.nextLine != null ? preview.nextLine : null;
@@ -271,7 +271,23 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
                   添加
                 </Button>
               </div>
-              <CodeBlock code={previewCode} language={previewLanguage} showLineNumbers showGlance showWrapToggle />
+              <div className="space-y-2">
+                {chunks.map((chunk) => (
+                  <CodeBlock
+                    key={chunk.startLine}
+                    code={chunk.lines.join('\n')}
+                    language={previewLanguage}
+                    showLineNumbers
+                    startLineNumber={chunk.startLine}
+                    showGlance={chunk.lines.length >= 80}
+                    showWrapToggle
+                    maxHighlightChars={80_000}
+                  />
+                ))}
+              </div>
+              {preview?.mode === 'chunk' && (
+                <div className="text-xs text-muted-foreground">已加载 {loadedLines} 行</div>
+              )}
               {nextLine != null && (
                 <Button variant="outline" size="sm" onClick={() => void openFile(selectedPath, selectedSize, nextLine)} disabled={loading}>
                   加载更多

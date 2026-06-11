@@ -9,6 +9,7 @@ import { isWithin } from '../tools/policy.js';
 const SMALL_FILE_BYTES = 200 * 1024;
 const DEFAULT_LINE_LIMIT = 200;
 const MAX_LINE_LIMIT = 1000;
+const MAX_PREVIEW_LINE_CHARS = 12_000;
 
 export const filesApi = Router();
 
@@ -35,6 +36,11 @@ function parentRemotePath(abs: string): string | null {
   const root = workspaceRoot();
   if (resolve(abs) === root) return null;
   return toRemotePath(dirname(abs));
+}
+
+function previewLine(line: string): string {
+  if (line.length <= MAX_PREVIEW_LINE_CHARS) return line;
+  return `${line.slice(0, MAX_PREVIEW_LINE_CHARS)} ... [预览已截断 ${line.length - MAX_PREVIEW_LINE_CHARS} 个字符]`;
 }
 
 filesApi.get('/list', async (req, res) => {
@@ -90,7 +96,7 @@ filesApi.get('/preview', async (req, res) => {
 
     if (info.size <= SMALL_FILE_BYTES) {
       const text = await readFile(file, 'utf8');
-      const lines = text.split(/\r?\n/);
+      const lines = text.split(/\r?\n/).map(previewLine);
       return res.json({
         path: toRemotePath(file),
         size: info.size,
@@ -114,7 +120,7 @@ filesApi.get('/preview', async (req, res) => {
         rl.close();
         break;
       }
-      lines.push(line);
+      lines.push(previewLine(line));
     }
 
     res.json({
@@ -130,4 +136,3 @@ filesApi.get('/preview', async (req, res) => {
     res.status(400).json({ error: (err as Error).message });
   }
 });
-
