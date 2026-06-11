@@ -4,17 +4,19 @@
   "private": true,
   "description": "A general-purpose AI agent: Node/TypeScript backend + React web console",
   "type": "module",
-  "workspaces": [
-    "server",
-    "web"
-  ],
+  "packageManager": "pnpm@11.5.3",
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
-    "dev:server": "npm run dev -w server",
-    "dev:web": "npm run dev -w web",
-    "build": "npm run build -w server && npm run build -w web",
-    "db:migrate": "npm run db:migrate -w server",
-    "start": "npm run start -w server"
+    "dev": "concurrently -n server,web -c blue,green \"pnpm --filter server dev\" \"pnpm --filter web dev\"",
+    "dev:server": "pnpm --filter server dev",
+    "dev:web": "pnpm --filter web dev",
+    "build": "pnpm --filter server build && pnpm --filter web build",
+    "db:migrate": "pnpm --filter server db:migrate",
+    "start": "bash scripts/start.sh",
+    "stop": "bash scripts/stop.sh",
+    "restart": "bash scripts/restart.sh",
+    "start:server": "pnpm --filter server start",
+    "test": "pnpm --filter server test",
+    "typecheck": "pnpm --filter server typecheck"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

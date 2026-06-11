@@ -1,0 +1,13 @@
+packages:
+  - server
+  - web
+allowBuilds:
+  esbuild: true
+  protobufjs: true
+minimumReleaseAgeExclude:
+  - '@ai-sdk/react@3.0.203'
+  - '@types/node@25.9.3'
+  - ai@6.0.201
+onlyBuiltDependencies:
+  - esbuild
+  - protobufjs
