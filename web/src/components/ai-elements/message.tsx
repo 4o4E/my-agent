@@ -328,6 +328,8 @@ export const MessageResponse = memo(
     <Streamdown
       className={cn(
         "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        // Long code/shell blocks scroll within a viewport-bounded box.
+        "[&_pre]:max-h-[60vh] [&_pre]:overflow-auto",
         className
       )}
       plugins={streamdownPlugins}
