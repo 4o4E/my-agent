@@ -87,7 +87,9 @@ export function runsToUiMessages(runs: RunWithEvents[]): UIMessage[] {
   const messages: UIMessage[] = [];
   for (const run of runs) {
     messages.push({ id: `${run.id}:u`, role: 'user', parts: [{ type: 'text', text: run.input }] });
-    const parts = foldUiEventsToParts(run.events.map(toUiEvent));
+    const parts = foldUiEventsToParts(
+      run.events.map(toUiEvent).filter((e): e is UiEvent => e !== null),
+    );
     if (parts.length) messages.push({ id: `${run.id}:a`, role: 'assistant', parts });
   }
   return messages;

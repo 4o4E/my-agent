@@ -6,6 +6,7 @@ export type AgentEvent =
   | { type: 'tool_call'; step: number; name: string; args: unknown; id: string }
   | { type: 'tool_result'; step: number; id: string; name: string; result: string }
   | { type: 'a2ui'; step: number; surfaceId: string; message: unknown }
+  | { type: 'compaction'; step: number; estBefore: number; estAfter: number; masked: number; dropped: number }
   | { type: 'final'; step: number; output: string }
   | { type: 'error'; step: number; message: string };
 

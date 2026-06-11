@@ -7,9 +7,13 @@
 import { startRun, subscribeRun, type AgentEvent } from '../api';
 import type { UiEvent, UiTransport, UserInput } from './types';
 
-/** Map one wire `AgentEvent` onto the normalized `UiEvent` model. Exported so
- *  historical runs loaded over REST can be normalized the same way. */
-export function toUiEvent(e: AgentEvent): UiEvent {
+/** Map one wire `AgentEvent` onto the normalized `UiEvent` model, or `null` for
+ *  events with nothing to render (e.g. `compaction` telemetry) and any future
+ *  server event this client doesn't model yet. Returning `null` instead of
+ *  `undefined` keeps an unknown frame from crashing the fold/stream — callers
+ *  filter it out. Exported so historical runs loaded over REST normalize the
+ *  same way as the live stream. */
+export function toUiEvent(e: AgentEvent): UiEvent | null {
   switch (e.type) {
     case 'step_start':
       return { kind: 'step_start', step: e.step };
@@ -27,6 +31,9 @@ export function toUiEvent(e: AgentEvent): UiEvent {
       return { kind: 'final', step: e.step, output: e.output };
     case 'error':
       return { kind: 'error', step: e.step, message: e.message };
+    default:
+      // `compaction` and any unmodeled future event: no UI representation.
+      return null;
   }
 }
 
@@ -36,6 +43,13 @@ export const legacyTransport: UiTransport = {
     return { runId: id };
   },
   subscribe(runId, onEvent, onClose) {
-    return subscribeRun(runId, (e) => onEvent(toUiEvent(e)), onClose);
+    return subscribeRun(
+      runId,
+      (e) => {
+        const ui = toUiEvent(e);
+        if (ui) onEvent(ui);
+      },
+      onClose,
+    );
   },
 };
