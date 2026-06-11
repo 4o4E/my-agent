@@ -11,6 +11,7 @@ import express from 'express';
 import { config } from './config.js';
 import { api } from './api/http.js';
 import { attachWebSocket } from './api/ws.js';
+import { describeShellSandbox } from './tools/sandbox.js';
 
 const app = express();
 app.use(cors());
@@ -27,6 +28,14 @@ server.listen(config.port, () => {
   console.log(`   WebSocket: ws://localhost:${config.port}/ws?runId=<id>`);
   console.log(
     `   Tool sandbox: ${config.tools.sandbox}` +
-      (config.tools.sandbox === 'enforce' ? ` (workspace: ${config.tools.workspaceRoot})` : ''),
+      (config.tools.sandbox === 'enforce'
+        ? ` (workspace: ${config.tools.workspaceRoot}, shell: ${describeShellSandbox({
+            policyMode: config.tools.sandbox,
+            backend: config.tools.sandboxBackend,
+            workspaceRoot: config.tools.workspaceRoot,
+            allowCommands: config.tools.shellAllowCommands,
+            shareNet: config.tools.shellShareNet,
+          })})`
+        : ''),
   );
 });

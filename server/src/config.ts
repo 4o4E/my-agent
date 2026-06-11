@@ -23,7 +23,32 @@ function patterns(v: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function sandboxBackend(v: string | undefined): 'auto' | 'none' | 'bwrap' {
+  return v === 'none' || v === 'bwrap' ? v : 'auto';
+}
+
 const DEFAULT_DATABASE_URL = 'postgres://postgres:postgres@localhost:5432/my_agent';
+const DEFAULT_SHELL_ALLOW_COMMANDS = [
+  'cat',
+  'ls',
+  'pwd',
+  'printf',
+  'sed',
+  'awk',
+  'grep',
+  'find',
+  'head',
+  'tail',
+  'wc',
+  'sort',
+  'uniq',
+  'xargs',
+  'env',
+  'git',
+  'rg',
+  'node',
+  'npm',
+];
 
 export const config = {
   port: Number(process.env.PORT ?? 8080),
@@ -66,11 +91,19 @@ export const config = {
   // the output cap apply in any mode. Default 'off' preserves current behavior.
   tools: {
     sandbox: ((process.env.TOOL_SANDBOX ?? 'off') === 'enforce' ? 'enforce' : 'off') as 'off' | 'enforce',
+    // shell 子进程沙箱后端:auto=Linux+bwrap 时启用,none=直通,bwrap=强制启用。
+    sandboxBackend: sandboxBackend(process.env.TOOL_SANDBOX_BACKEND),
     // Filesystem tools are confined under this root in enforce mode (default: repo root).
     workspaceRoot: resolve(process.env.TOOL_WORKSPACE_ROOT ?? resolve(process.cwd(), '..')),
     allow: list(process.env.TOOL_ALLOW), // if non-empty, ONLY these tools may run
     deny: list(process.env.TOOL_DENY), // these tools are always blocked
     shellEnabled: (process.env.SHELL_ENABLED ?? 'true') !== 'false',
+    // bwrap 模式只投射这些外部命令; shell 内建命令不需要配置。
+    shellAllowCommands: list(process.env.SHELL_ALLOW_COMMANDS).length
+      ? list(process.env.SHELL_ALLOW_COMMANDS)
+      : DEFAULT_SHELL_ALLOW_COMMANDS,
+    // 默认不共享宿主网络命名空间;需要 shell 访问网络时显式打开。
+    shellShareNet: (process.env.SHELL_SHARE_NET ?? 'false') === 'true',
     // Command patterns blocked in enforce mode (regex, case-insensitive).
     // Override via SHELL_DENY (comma/newline separated, so patterns may contain spaces).
     shellDeny: patterns(process.env.SHELL_DENY).length

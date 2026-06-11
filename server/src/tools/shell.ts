@@ -1,23 +1,8 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { config } from '../config.js';
+import { runShellCommand } from './sandbox.js';
 import type { Tool } from './types.js';
 
-const execFileAsync = promisify(execFile);
 const isWindows = process.platform === 'win32';
-
-/**
- * Run a shell command. On Windows this uses PowerShell; elsewhere /bin/sh.
- */
-function spawnShell(command: string, timeout: number) {
-  if (isWindows) {
-    return execFileAsync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', command],
-      { timeout, maxBuffer: 1024 * 1024 * 10, windowsHide: true },
-    );
-  }
-  return execFileAsync('/bin/sh', ['-c', command], { timeout, maxBuffer: 1024 * 1024 * 10 });
-}
 
 export const shellTool: Tool = {
   name: 'shell',
@@ -36,7 +21,13 @@ export const shellTool: Tool = {
     const command = String(args.command ?? '');
     const timeout = Number(args.timeout_ms ?? 60000);
     try {
-      const { stdout, stderr } = await spawnShell(command, timeout);
+      const { stdout, stderr } = await runShellCommand(command, timeout, {
+        policyMode: config.tools.sandbox,
+        backend: config.tools.sandboxBackend,
+        workspaceRoot: config.tools.workspaceRoot,
+        allowCommands: config.tools.shellAllowCommands,
+        shareNet: config.tools.shellShareNet,
+      });
       return [stdout, stderr && `[stderr]\n${stderr}`].filter(Boolean).join('\n').trim() || '(no output)';
     } catch (err) {
       const e = err as { stdout?: string; stderr?: string; message?: string };
