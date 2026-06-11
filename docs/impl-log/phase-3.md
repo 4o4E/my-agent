@@ -1,0 +1,61 @@
+# Phase 3 实施日志 · 前端迁移到 useChat(自定义 ChatTransport)
+
+> 对应 [refactor-plan.md](../refactor-plan.md) §6 Phase 3。
+> 日期:2026-06-11 · 状态:Stage 1 ✅(Stage 2 shadcn 外壳见后续追加)
+
+## 目标
+
+前端用 AI SDK `useChat` 接管消息/流式/分片状态,删除自建的累加/去重逻辑。
+**后端零改动**:复用 Phase 0 的 `UiTransport`/`UiEvent` 抽象,写一个自定义
+`ChatTransport` 把现有 REST+WS(`legacyTransport`)桥接成 `useChat` 消费的
+UI message stream。这样 executor / WS / PG 持久化全部不动,风险最低、锁定最少。
+
+## 设计
+
+- AI SDK 的 `ChatTransport.sendMessages` 返回 `ReadableStream<UIMessageChunk>`。
+  我们把每次 run 的 `UiEvent` 流转成该 chunk 流:text/reasoning → start/delta/end
+  (每 step 一段),tool → `tool-input-available`/`tool-output-available`。
+- 线程的创建/选择/PG 恢复仍走现有 REST;历史 run 经 `runsToUiMessages` 折叠成
+  `UIMessage[]` 交给 `useChat` 初始化,渲染路径与实时流一致。
+
+## 改动(web,后端不动)
+
+新增:
+
+- [web/src/transport/aiSdkChat.ts](../../web/src/transport/aiSdkChat.ts)
+  - `uiEventStreamToChunks(runId, abortSignal, subscribe?)`:`UiEvent` → `UIMessageChunk`
+    可读流;`SubscribeFn` 可注入便于离线测试。
+  - `createAiSdkChatTransport(handle)`:实现 `ChatTransport<UIMessage>`,懒创建线程、
+    `legacyTransport.send` 起 run、订阅转流;`reconnectToStream` 返回 null(恢复走 PG)。
+- [web/src/history.ts](../../web/src/history.ts)
+  - `foldUiEventsToParts`:`UiEvent[]` → 线性 parts(text/reasoning 合并,tool 按 id 合并 input/output)。
+  - `runsToUiMessages`:PG 历史 `RunWithEvents[]` → `UIMessage[]`。
+- [web/src/components/Conversation.tsx](../../web/src/components/Conversation.tsx)
+  —— 渲染 `UIMessage.parts`(text→Streamdown 气泡、reasoning→折叠卡、tool→工具卡)。
+  (此为临时样式版,Stage 2 用 shadcn 重做。)
+
+修改:
+
+- [web/src/App.tsx](../../web/src/App.tsx) —— 用 `useChat({ transport })` 接管;`threadIdRef`
+  让稳定的 transport 读写当前线程;`selectThread` 经 `runsToUiMessages` 恢复历史。
+- [web/src/components/ChatView.tsx](../../web/src/components/ChatView.tsx) —— props 由
+  `turns` 改为 `messages` + `busy`。
+- 删除 [web/src/components/MessageList.tsx](../../web/src/components/MessageList.tsx)
+  (blocks/累加/去重/step 分组逻辑被 useChat parts 取代)。
+- 依赖:新增 `@ai-sdk/react`、`ai`。
+
+## 验收
+
+- `tsc -b` + `vite build`:通过(bundle ~790 kB,+150 kB 为 ai/@ai-sdk/react)。
+- 离线冒烟:
+  - `foldUiEventsToParts`:reasoning→tool(output-available)→text,`final` 不重复正文。✓
+  - `runsToUiMessages`:user + assistant[tool,text]。✓
+  - `uiEventStreamToChunks`(注入 fake subscribe):
+    `start reasoning-start/delta×2/end tool-input-available[shell] tool-output-available text-start/delta/end finish`。✓
+- 后端未改;线程列表/切换/PG 恢复保持。
+
+## 后续(Stage 2)
+
+- 用 shadcn 全量重做对话外壳(侧栏/输入框/消息气泡/工具卡),`Conversation` 改 shadcn 风格。
+- A2UI 声明式 UI(Stage 3/4)将以 `data-a2ui` 分片接入,`uiEventStreamToChunks` 已为
+  `a2ui` 预留分支位。

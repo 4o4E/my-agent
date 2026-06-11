@@ -1,0 +1,178 @@
+// AI SDK ChatTransport that bridges our existing backend (Phase 3).
+//
+// Instead of switching the backend to an HTTP UI-message-stream, we reuse the
+// `UiTransport` abstraction from Phase 0: this transport wraps `legacyTransport`
+// (REST start-run + WS event stream) and converts our normalized `UiEvent`s into
+// the AI SDK `UIMessageChunk` stream that `useChat` consumes. The backend
+// (executor / WS / PostgreSQL) is untouched, so persistence and thread recovery
+// keep working — only the frontend state/rendering moves onto useChat + parts.
+
+import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
+import { createThread, type Thread } from '../api';
+import { legacyTransport } from './legacy';
+import type { UiEvent } from './types';
+
+/** Mutable handle so App and the transport agree on the active thread id, which
+ *  may be created lazily on the first send. */
+export interface ChatThreadHandle {
+  getThreadId(): string | null;
+  setThreadId(id: string): void;
+  onThreadCreated(thread: Thread): void;
+}
+
+/** Extract the plain text of a user UIMessage (its text parts joined). */
+function userText(message: UIMessage | undefined): string {
+  if (!message) return '';
+  return message.parts
+    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+    .map((p) => p.text)
+    .join('')
+    .trim();
+}
+
+/** Subscribe shape (matches `legacyTransport.subscribe`); injectable for tests. */
+export type SubscribeFn = (
+  runId: string,
+  onEvent: (e: UiEvent) => void,
+  onClose?: () => void,
+) => () => void;
+
+/**
+ * Convert a live `UiEvent` subscription for `runId` into a `UIMessageChunk`
+ * ReadableStream. Streams text/reasoning as start/delta/end runs (one run per
+ * step), and tool calls as input/output-available parts.
+ */
+export function uiEventStreamToChunks(
+  runId: string,
+  abortSignal?: AbortSignal,
+  subscribe: SubscribeFn = legacyTransport.subscribe,
+): ReadableStream<UIMessageChunk> {
+  return new ReadableStream<UIMessageChunk>({
+    start(controller) {
+      let closed = false;
+      let openText: string | null = null;
+      let openReason: string | null = null;
+
+      const safe = (chunk: UIMessageChunk) => {
+        if (!closed) controller.enqueue(chunk);
+      };
+      const closeText = () => {
+        if (openText) {
+          safe({ type: 'text-end', id: openText });
+          openText = null;
+        }
+      };
+      const closeReason = () => {
+        if (openReason) {
+          safe({ type: 'reasoning-end', id: openReason });
+          openReason = null;
+        }
+      };
+
+      safe({ type: 'start' });
+
+      const onEvent = (e: UiEvent) => {
+        switch (e.kind) {
+          case 'step_start':
+          case 'a2ui':
+            break;
+          case 'reasoning': {
+            closeText();
+            const id = `r-${e.step}`;
+            if (openReason !== id) {
+              closeReason();
+              safe({ type: 'reasoning-start', id });
+              openReason = id;
+            }
+            safe({ type: 'reasoning-delta', id, delta: e.delta });
+            break;
+          }
+          case 'text': {
+            closeReason();
+            const id = `t-${e.step}`;
+            if (openText !== id) {
+              closeText();
+              safe({ type: 'text-start', id });
+              openText = id;
+            }
+            safe({ type: 'text-delta', id, delta: e.delta });
+            break;
+          }
+          case 'tool': {
+            closeText();
+            closeReason();
+            if (e.input !== undefined) {
+              safe({ type: 'tool-input-available', toolCallId: e.id, toolName: e.name, input: e.input });
+            }
+            if (e.output !== undefined) {
+              safe({ type: 'tool-output-available', toolCallId: e.id, output: e.output });
+            }
+            break;
+          }
+          case 'final': {
+            // If this step produced no streamed text, surface the final output as
+            // a text part; otherwise it was already streamed via 'text' deltas.
+            if (!openText && e.output) {
+              const id = `t-${e.step}`;
+              safe({ type: 'text-start', id });
+              safe({ type: 'text-delta', id, delta: e.output });
+              openText = id;
+            }
+            closeText();
+            closeReason();
+            break;
+          }
+          case 'error': {
+            closeText();
+            closeReason();
+            safe({ type: 'error', errorText: e.message });
+            break;
+          }
+        }
+      };
+
+      const finish = () => {
+        if (closed) return;
+        closeText();
+        closeReason();
+        safe({ type: 'finish' });
+        closed = true;
+        unsubscribe();
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      };
+
+      const unsubscribe = subscribe(runId, onEvent, finish);
+
+      abortSignal?.addEventListener('abort', finish, { once: true });
+    },
+  });
+}
+
+/** A `ChatTransport` backed by the legacy REST+WS pipeline. */
+export function createAiSdkChatTransport(handle: ChatThreadHandle): ChatTransport<UIMessage> {
+  return {
+    async sendMessages({ messages, abortSignal }) {
+      const text = userText(messages[messages.length - 1]);
+
+      let threadId = handle.getThreadId();
+      if (!threadId) {
+        const thread = await createThread(text.slice(0, 40) || '新会话');
+        threadId = thread.id;
+        handle.setThreadId(thread.id);
+        handle.onThreadCreated(thread);
+      }
+
+      const { runId } = await legacyTransport.send(threadId, { text });
+      return uiEventStreamToChunks(runId, abortSignal);
+    },
+
+    // No mid-stream resume for the WS pipeline; recovery is via PG history on load.
+    async reconnectToStream() {
+      return null;
+    },
+  };
+}
