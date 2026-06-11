@@ -308,7 +308,7 @@ function ActivityGroup({
         {totalMs !== undefined && <span className="shrink-0 text-xs font-normal">{formatDuration(totalMs)}</span>}
         <ChevronDown className={cn('size-4 shrink-0 transition-transform', open && 'rotate-180')} />
       </CollapsibleTrigger>
-      <CollapsibleContent className="mt-1 flex w-full min-w-0 flex-col gap-1">
+      <CollapsibleContent className="mt-1 ml-3 flex w-[calc(100%-0.75rem)] min-w-0 flex-col gap-1 border-l border-border/60 pl-3">
         {entries.map(({ part, index }) => (
           <AssistantPart
             key={index}
