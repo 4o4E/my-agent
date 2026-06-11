@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 type Part = UIMessage['parts'][number];
 type Timing = { startedAt?: string; endedAt?: string; durationMs?: number };
 type ActivityEntry = { part: Part; index: number };
+type FileToken = { kind?: string; path: string; name?: string; size?: number };
 
 const PATH_RE = /(?:\/[A-Za-z0-9._~+/@:-]+|(?:\.{1,2}\/)?(?:server|web|docs|src|uploads|tests)\/[A-Za-z0-9._~+/@:-]+)/g;
 
@@ -272,8 +273,59 @@ function copyToClipboard(value: string) {
   void navigator.clipboard.writeText(value);
 }
 
-function UserMessageText({ message }: { message: UIMessage }) {
-  return <div className="whitespace-pre-wrap">{userText(message)}</div>;
+function formatBytes(size?: number): string {
+  if (size == null) return '';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function parseFileTokens(text: string): { text: string; files: FileToken[] } {
+  const files: FileToken[] = [];
+  let clean = '';
+  let lastIndex = 0;
+  const tokenRe = /\[\[file:(\{.*?\})\]\]/g;
+
+  for (const match of text.matchAll(tokenRe)) {
+    clean += text.slice(lastIndex, match.index);
+    lastIndex = (match.index ?? 0) + match[0].length;
+    try {
+      const data = JSON.parse(match[1]) as Partial<FileToken>;
+      if (typeof data.path === 'string' && data.path.trim()) files.push(data as FileToken);
+      else clean += match[0];
+    } catch {
+      clean += match[0];
+    }
+  }
+  clean += text.slice(lastIndex);
+
+  return { text: clean.replace(/\n{3,}/g, '\n\n').trimEnd(), files };
+}
+
+function UserMessageText({ message, onOpenRemoteFile }: { message: UIMessage; onOpenRemoteFile: (path: string) => void }) {
+  const parsed = parseFileTokens(userText(message));
+  return (
+    <div className="space-y-2">
+      {parsed.text && <div className="whitespace-pre-wrap">{parsed.text}</div>}
+      {parsed.files.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {parsed.files.map((file, index) => (
+            <button
+              key={`${file.path}:${index}`}
+              type="button"
+              onClick={() => onOpenRemoteFile(file.path)}
+              className="inline-flex max-w-full items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+              title={file.path}
+            >
+              <FileText className="size-3" />
+              <span className="truncate">{file.name || file.path}</span>
+              {file.size != null && <span className="shrink-0">· {formatBytes(file.size)}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function UserMessageActions({ message, runId }: { message: UIMessage; runId: string | null }) {
@@ -403,7 +455,7 @@ export function Conversation({
                   {m.role === 'user' ? (
                     <>
                       <MessageContent>
-                        <UserMessageText message={m} />
+                        <UserMessageText message={m} onOpenRemoteFile={onOpenRemoteFile} />
                       </MessageContent>
                       <UserMessageActions message={m} runId={runIdForUser(messages, index)} />
                     </>

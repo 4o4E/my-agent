@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { BundledLanguage } from 'shiki';
-import { ChevronRight, FileText, Folder, FolderOpen, Paperclip, RefreshCw, X } from 'lucide-react';
+import { AlignLeft, ChevronRight, FileText, Folder, FolderOpen, Paperclip, RefreshCw, X } from 'lucide-react';
 import { listRemoteFiles, previewRemoteFile, type FilePreview, type RemoteFileEntry } from '@/api';
-import { CodeBlock } from '@/components/ai-elements/code-block';
+import { CodeBlockContent } from '@/components/ai-elements/code-block';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -43,6 +43,8 @@ const LANGUAGE_BY_EXT: Record<string, BundledLanguage> = {
   yaml: 'yaml',
   yml: 'yaml',
 };
+const INITIAL_PREVIEW_LINES = 80;
+const MORE_PREVIEW_LINES = 240;
 
 function fileName(path: string): string {
   const parts = path.split('/').filter(Boolean);
@@ -111,8 +113,10 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
   const [selectedSize, setSelectedSize] = useState<number | undefined>();
   const [preview, setPreview] = useState<FilePreview | null>(null);
   const [chunks, setChunks] = useState<PreviewChunk[]>([]);
+  const [previewWrap, setPreviewWrap] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const previewRequestRef = useRef(0);
 
   async function loadDir(path = currentPath, select = true) {
     setLoading(true);
@@ -129,19 +133,30 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
   }
 
   async function openFile(path: string, size?: number, startLine = 1) {
+    const requestId = previewRequestRef.current + 1;
+    previewRequestRef.current = requestId;
+    if (startLine === 1) {
+      setSelectedPath(path);
+      setSelectedSize(size);
+      setPreview(null);
+      setChunks([]);
+    }
     setLoading(true);
     setError(null);
     try {
-      const data = await previewRemoteFile(path, startLine, 240);
+      const limit = startLine === 1 ? INITIAL_PREVIEW_LINES : MORE_PREVIEW_LINES;
+      const data = await previewRemoteFile(path, startLine, limit);
+      if (previewRequestRef.current !== requestId) return;
       setSelectedPath(data.path);
       setSelectedSize(size ?? data.size);
       setPreview(data);
       const nextChunk = { startLine: data.startLine, lines: data.lines };
       setChunks((current) => startLine === 1 ? [nextChunk] : [...current, nextChunk]);
     } catch (err) {
+      if (previewRequestRef.current !== requestId) return;
       setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (previewRequestRef.current === requestId) setLoading(false);
     }
   }
 
@@ -271,19 +286,41 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
                   添加
                 </Button>
               </div>
-              <div className="space-y-2">
-                {chunks.map((chunk) => (
-                  <CodeBlock
+              <div className="overflow-hidden rounded-md border bg-background text-foreground">
+                <div className="flex items-center justify-between border-b bg-muted/80 px-3 py-2 text-xs text-muted-foreground">
+                  <span className="font-mono">{previewLanguage}</span>
+                  <Button
+                    type="button"
+                    variant={previewWrap ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setPreviewWrap((value) => !value)}
+                    title={previewWrap ? '关闭自动换行' : '开启自动换行'}
+                  >
+                    <AlignLeft className="size-3.5" />
+                    {previewWrap ? '换行' : '不换行'}
+                  </Button>
+                </div>
+                <div className="scrollbar-thin overflow-auto">
+                {loading && chunks.length === 0 && (
+                  <div className="bg-muted/20 px-3 py-8 text-center text-sm text-muted-foreground">
+                    正在加载前 {INITIAL_PREVIEW_LINES} 行…
+                  </div>
+                )}
+                {chunks.map((chunk, index) => (
+                  <CodeBlockContent
                     key={chunk.startLine}
                     code={chunk.lines.join('\n')}
                     language={previewLanguage}
                     showLineNumbers
                     startLineNumber={chunk.startLine}
-                    showGlance={chunk.lines.length >= 80}
-                    showWrapToggle
+                    wrap={previewWrap}
                     maxHighlightChars={80_000}
+                    scroll={false}
+                    bodyClassName={cn(index === 0 ? 'pt-4' : 'pt-0', index === chunks.length - 1 ? 'pb-4' : 'pb-0')}
                   />
                 ))}
+                </div>
               </div>
               {preview?.mode === 'chunk' && (
                 <div className="text-xs text-muted-foreground">已加载 {loadedLines} 行</div>

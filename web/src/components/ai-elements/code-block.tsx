@@ -392,6 +392,9 @@ export const CodeBlockContent = ({
   showGlance = false,
   wrap = false,
   maxHighlightChars = 120_000,
+  scroll = true,
+  className,
+  bodyClassName,
 }: {
   code: string;
   language: BundledLanguage;
@@ -400,6 +403,9 @@ export const CodeBlockContent = ({
   showGlance?: boolean;
   wrap?: boolean;
   maxHighlightChars?: number;
+  scroll?: boolean;
+  className?: string;
+  bodyClassName?: string;
 }) => {
   const shouldHighlight = code.length <= maxHighlightChars;
   // Memoized raw tokens for immediate display
@@ -443,13 +449,14 @@ export const CodeBlockContent = ({
   const tokenized = asyncTokens ?? syncTokens;
 
   return (
-    <div className="relative flex min-w-0 overflow-hidden">
-      <div className="scrollbar-thin min-w-0 flex-1 overflow-auto">
+    <div className={cn("relative flex min-w-0 overflow-hidden", className)}>
+      <div className={cn(scroll ? "scrollbar-thin min-w-0 flex-1 overflow-auto" : "min-w-max flex-1 overflow-visible")}>
         <CodeBlockBody
           showLineNumbers={showLineNumbers}
           startLineNumber={startLineNumber}
           tokenized={tokenized}
           wrap={wrap}
+          className={bodyClassName}
         />
       </div>
       {showGlance && <CodeBlockGlance tokenized={tokenized} />}

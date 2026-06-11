@@ -54,6 +54,16 @@ function beginHorizontalResize(
   window.addEventListener('pointerup', onUp, { once: true });
 }
 
+function attachmentToken(att: ComposerAttachment): string {
+  const payload = {
+    kind: att.kind,
+    path: att.path,
+    name: att.name,
+    ...(att.size != null ? { size: att.size } : {}),
+  };
+  return `[[file:${JSON.stringify(payload)}]]`;
+}
+
 export function App() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [route, setRoute] = useState<ChatRoute>(() => readChatRoute());
@@ -181,7 +191,7 @@ export function App() {
 
   function send(text: string) {
     const finalText = attachments.length
-      ? `${text}\n\n附件 / Attachments:\n${attachments.map((a) => `- ${a.kind === 'local' ? '本地上传' : '远程文件'}: ${a.path}`).join('\n')}`
+      ? `${text}\n\n${attachments.map(attachmentToken).join('\n')}`
       : text;
     navigateChatRoute({ draft: '', threadId: activeThreadId }, 'replace');
     setAttachments([]);
