@@ -31,6 +31,14 @@ test('render_ui rejects missing root / empty components', async () => {
   assert.equal(r.display, undefined);
 });
 
+test('render_ui schema exposes Mermaid as a first-class component', () => {
+  const components = renderUiTool.parameters.properties.components as {
+    items: { properties: { component: { enum: string[] }; code: { description: string } } };
+  };
+  assert.ok(components.items.properties.component.enum.includes('Mermaid'));
+  assert.match(components.items.properties.code.description, /Mermaid/);
+});
+
 test('runTool normalizes render_ui through the policy and keeps the display', async () => {
   const r = await runTool('render_ui', SAMPLE);
   assert.equal(r.display?.type, 'a2ui');

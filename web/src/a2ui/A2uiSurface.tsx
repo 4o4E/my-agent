@@ -4,9 +4,20 @@
 
 import { useMemo, type ReactNode } from 'react';
 import { renderNode, type RenderCtx } from './catalog';
+import { resolveString } from './pointer';
 import type { A2uiComponent, A2uiMessage } from './types';
 
+function surfaceTitle(message: A2uiMessage): string {
+  const data = message.dataModel ?? {};
+  const root = message.components.find((c) => c.id === message.root);
+  const titled = root?.title !== undefined ? root : message.components.find((c) => c.title !== undefined);
+  if (titled?.title !== undefined) return resolveString(titled.title, data);
+  const heading = message.components.find((c) => c.component === 'Heading' && c.text !== undefined);
+  return heading ? resolveString(heading.text, data) : '';
+}
+
 export function A2uiSurface({ message }: { message: A2uiMessage }) {
+  const title = useMemo(() => surfaceTitle(message), [message]);
   const content = useMemo<ReactNode>(() => {
     if (!message || !Array.isArray(message.components)) return null;
     const byId = new Map<string, A2uiComponent>(message.components.map((c) => [c.id, c]));
@@ -30,5 +41,9 @@ export function A2uiSurface({ message }: { message: A2uiMessage }) {
     return ctx.render(message.root, 0);
   }, [message]);
 
-  return <div className="a2ui-surface w-full space-y-2">{content}</div>;
+  return (
+    <div className="a2ui-surface w-full space-y-2" data-toc-scope="render-ui" data-toc-title={title || undefined}>
+      {content}
+    </div>
+  );
 }

@@ -17,6 +17,7 @@ const COMPONENT_TYPES = [
   'Image',
   'CodeBlock',
   'Markdown',
+  'Mermaid',
   'KeyValue',
   'Table',
 ];
@@ -26,10 +27,11 @@ export const renderUiTool: Tool = {
   description:
     'Render a rich, declarative UI surface for the user (read-only display). Provide A2UI ' +
     'components as a flat list referenced by id, with one `root` id, plus an optional `dataModel` ' +
-    'for {"path":"/json/pointer"} bindings. Use for tables, cards, key/value summaries, charts-as-tables. ' +
+    'for {"path":"/json/pointer"} bindings. Use Mermaid for diagrams and charts (flowchart, sequence, pie, xychart, gantt, timeline, sankey), and use tables/cards/key-value summaries for structured data. ' +
     `Allowed component types: ${COMPONENT_TYPES.join(', ')}. ` +
     'Example: {"root":"c","components":[{"id":"c","component":"Card","title":"Files","child":"t"},' +
-    '{"id":"t","component":"Table","columns":["name","lines"],"rows":[["a.ts","12"]]}]}',
+    '{"id":"t","component":"Table","columns":["name","lines"],"rows":[["a.ts","12"]]}]}. ' +
+    'Mermaid example: {"id":"m","component":"Mermaid","code":"pie title Status\\n  \\"ok\\" : 3\\n  \\"fail\\" : 1"}.',
   parameters: {
     type: 'object',
     properties: {
@@ -42,6 +44,8 @@ export const renderUiTool: Tool = {
           properties: {
             id: { type: 'string' },
             component: { type: 'string', enum: COMPONENT_TYPES },
+            code: { type: 'string', description: 'For Mermaid/CodeBlock: Mermaid DSL or source code text.' },
+            text: { description: 'For Text/Markdown/Heading/Mermaid: display text or Mermaid DSL.' },
             child: { type: 'string' },
             children: { type: 'array', items: { type: 'string' } },
           },

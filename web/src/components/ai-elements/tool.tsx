@@ -25,7 +25,7 @@ export type ToolProps = ComponentProps<typeof Collapsible>;
 // 工具调用和思考块保持同一层级：单行触发器 + 柔和展开内容。
 export const Tool = ({ className, ...props }: ToolProps) => (
   <Collapsible
-    className={cn("group/tool not-prose mb-2 w-full", className)}
+    className={cn("group/tool not-prose w-full", className)}
     {...props}
   />
 );
@@ -87,7 +87,7 @@ export const ToolHeader = ({
   return (
     <CollapsibleTrigger
       className={cn(
-        "flex w-full items-center gap-2 text-left text-muted-foreground text-sm transition-colors hover:text-foreground",
+        "flex h-6 w-full items-center gap-2 text-left text-muted-foreground text-sm transition-colors hover:text-foreground",
         className
       )}
       {...props}
@@ -113,7 +113,7 @@ export type ToolContentProps = ComponentProps<typeof CollapsibleContent>;
 export const ToolContent = ({ className, ...props }: ToolContentProps) => (
   <CollapsibleContent
     className={cn(
-      "mt-2 space-y-2 text-muted-foreground text-sm",
+      "mt-1 space-y-2 text-muted-foreground text-sm",
       "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
       className
     )}

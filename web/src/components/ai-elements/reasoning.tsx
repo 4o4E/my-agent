@@ -136,7 +136,7 @@ export const Reasoning = memo(
     return (
       <ReasoningContext.Provider value={contextValue}>
         <Collapsible
-          className={cn("not-prose mb-2 w-fit max-w-full", className)}
+          className={cn("group/reasoning not-prose w-fit max-w-full", className)}
           onOpenChange={handleOpenChange}
           open={isOpen}
           {...props}
@@ -176,7 +176,7 @@ export const ReasoningTrigger = memo(
     return (
       <CollapsibleTrigger
         className={cn(
-          "inline-flex max-w-full items-center gap-2 text-muted-foreground text-sm transition-colors hover:text-foreground",
+          "inline-flex h-6 max-w-full items-center gap-2 text-muted-foreground text-sm transition-colors hover:text-foreground",
           className
         )}
         {...props}
@@ -184,10 +184,10 @@ export const ReasoningTrigger = memo(
         {children ?? (
           <>
             <BrainIcon className="size-4" />
-            <span className="min-w-0 truncate">{getThinkingMessage(isStreaming, duration)}</span>
+            <span className="min-w-0 flex-1 truncate">{getThinkingMessage(isStreaming, duration)}</span>
             <ChevronDownIcon
               className={cn(
-                "size-4 transition-transform",
+                "size-4 shrink-0 transition-transform",
                 isOpen ? "rotate-180" : "rotate-0"
               )}
             />
@@ -210,7 +210,7 @@ export const ReasoningContent = memo(
   ({ className, children, ...props }: ReasoningContentProps) => (
     <CollapsibleContent
       className={cn(
-        "mt-2 text-sm",
+        "mt-1 text-sm",
         "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-muted-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
         className
       )}

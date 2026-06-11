@@ -8,7 +8,9 @@ interface TocItem {
   level: number;
 }
 
-const HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6';
+const MESSAGE_SELECTOR = '[data-toc-message]';
+const RENDER_UI_SCOPE_SELECTOR = '[data-toc-scope="render-ui"]';
+const A2UI_TITLE_SELECTOR = `${RENDER_UI_SCOPE_SELECTOR} [data-a2ui-title]`;
 
 /** Nearest scrollable ancestor — the element the conversation actually scrolls in. */
 function getScrollParent(node: HTMLElement | null): HTMLElement | null {
@@ -24,67 +26,86 @@ function getScrollParent(node: HTMLElement | null): HTMLElement | null {
 }
 
 /**
- * Right-rail navigation built from the markdown headings (h1–h6) rendered inside
- * `contentRef`. Headings are addressed by their ordinal position so the rail keeps
- * working across Streamdown re-renders (which discard any injected ids).
+ * 右侧导航只认对话层级：用户锚点显示用户消息，回复锚点显示 render_ui 标题。
+ * 工具参数、工具结果和思考内容即使包含标题元素，也不会进入目录。
  */
 export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElement | null> }) {
   const [items, setItems] = useState<TocItem[]>([]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
-  // Re-scan headings whenever the conversation DOM changes (incl. streaming).
+  const collectTargets = useCallback((root: HTMLElement) => {
+    const targets: HTMLElement[] = [];
+    const nextItems: TocItem[] = [];
+
+    for (const message of Array.from(root.querySelectorAll<HTMLElement>(MESSAGE_SELECTOR))) {
+      const role = message.dataset.tocMessage;
+      if (role === 'user') {
+        const text = message.dataset.tocTitle || '对话';
+        nextItems.push({ index: targets.length, text, level: 1 });
+        targets.push(message);
+        continue;
+      }
+
+      const titles = Array.from(message.querySelectorAll<HTMLElement>(A2UI_TITLE_SELECTOR))
+        .map((el) => ({ el, text: el.textContent?.trim() ?? '' }))
+        .filter((item) => item.text.length > 0);
+      const surface = message.querySelector<HTMLElement>(RENDER_UI_SCOPE_SELECTOR);
+      const fallbackTitle = surface?.dataset.tocTitle || message.dataset.tocTitle || '回复';
+      const firstTitle = titles[0];
+
+      nextItems.push({ index: targets.length, text: firstTitle?.text || fallbackTitle, level: 1 });
+      targets.push(firstTitle?.el ?? surface ?? message);
+
+      for (const title of titles.slice(1)) {
+        nextItems.push({ index: targets.length, text: title.text, level: 2 });
+        targets.push(title.el);
+      }
+    }
+
+    return { items: nextItems, targets };
+  }, []);
+
+  // 对话 DOM 变化时重新扫描，包含流式输出和 A2UI 分批更新。
   useEffect(() => {
     const root = contentRef.current;
     if (!root) return;
-    const compute = () => {
-      const heads = Array.from(root.querySelectorAll<HTMLHeadingElement>(HEADING_SELECTOR));
-      setItems(
-        heads
-          .map((el, index) => ({
-            index,
-            text: el.textContent?.trim() ?? '',
-            level: Number(el.tagName[1]) || 1,
-          }))
-          .filter((h) => h.text.length > 0),
-      );
-    };
+    const compute = () => setItems(collectTargets(root).items);
     compute();
     const mo = new MutationObserver(compute);
     mo.observe(root, { childList: true, subtree: true, characterData: true });
     return () => mo.disconnect();
-  }, [contentRef]);
+  }, [collectTargets, contentRef]);
 
-  // Scroll-spy: highlight the heading nearest the top of the viewport.
+  // 滚动时高亮最靠近顶部的消息或 A2UI 标题。
   useEffect(() => {
     const root = contentRef.current;
     if (!root || items.length === 0) return;
-    const heads = Array.from(root.querySelectorAll<HTMLHeadingElement>(HEADING_SELECTOR));
+    const { targets } = collectTargets(root);
     const io = new IntersectionObserver(
       (entries) => {
         const hit = entries.find((e) => e.isIntersecting);
         if (hit) {
-          const idx = heads.indexOf(hit.target as HTMLHeadingElement);
+          const idx = targets.indexOf(hit.target as HTMLElement);
           if (idx >= 0) setActiveIndex(idx);
         }
       },
       { root: getScrollParent(root), rootMargin: '0px 0px -70% 0px', threshold: 0 },
     );
-    for (const el of heads) io.observe(el);
+    for (const el of targets) io.observe(el);
     return () => io.disconnect();
-  }, [contentRef, items]);
+  }, [collectTargets, contentRef, items]);
 
   const handleClick = useCallback(
     (index: number) => {
       const root = contentRef.current;
       if (!root) return;
-      const heads = root.querySelectorAll<HTMLHeadingElement>(HEADING_SELECTOR);
-      const el = heads[index];
+      const el = collectTargets(root).targets[index];
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         setActiveIndex(index);
       }
     },
-    [contentRef],
+    [collectTargets, contentRef],
   );
 
   if (items.length === 0) return null;

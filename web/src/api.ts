@@ -53,6 +53,11 @@ export interface FilePreview {
   hasMore: boolean;
 }
 
+export interface RemoteFileInfo {
+  workspaceRoot: string;
+  rootPath: string;
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json() as Promise<T>;
@@ -77,6 +82,8 @@ export const deleteThread = (id: string) =>
 
 export const listRemoteFiles = (path = '.') =>
   fetch(`/api/files/list?path=${encodeURIComponent(path)}`).then(json<RemoteFileList>);
+
+export const getRemoteFileInfo = () => fetch('/api/files/info').then(json<RemoteFileInfo>);
 
 export const previewRemoteFile = (path: string, startLine = 1, limit = 200) =>
   fetch(`/api/files/preview?path=${encodeURIComponent(path)}&startLine=${startLine}&limit=${limit}`).then(json<FilePreview>);

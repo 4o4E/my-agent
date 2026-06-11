@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { deleteThread, getThread, listThreads, uploadLocalFile, type Thread } from './api';
+import { deleteThread, getRemoteFileInfo, getThread, listThreads, uploadLocalFile, type Thread } from './api';
 import { createAiSdkChatTransport, type ChatThreadHandle } from './transport/aiSdkChat';
 import { runsToUiMessages } from './history';
 import { Sidebar } from './components/Sidebar';
@@ -73,6 +73,7 @@ export function App() {
   const [sidebarWidth, setSidebarWidth] = useState(256);
   const [filesPanelWidth, setFilesPanelWidth] = useState(720);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const { theme, toggle: toggleTheme } = useThemeCtx();
   const activeThreadId = route.threadId;
@@ -87,6 +88,10 @@ export function App() {
     listThreads().then(setThreads).catch(() => {});
   }, []);
   useEffect(refreshThreads, [refreshThreads]);
+
+  useEffect(() => {
+    getRemoteFileInfo().then((info) => setWorkspaceRoot(info.workspaceRoot)).catch(() => setWorkspaceRoot(null));
+  }, []);
 
   const navigateChatRoute = useCallback((next: ChatRoute, mode: 'push' | 'replace' = 'push') => {
     const path = buildChatPath(next);
@@ -251,6 +256,7 @@ export function App() {
         busy={busy}
         draft={draft}
         wide={wide}
+        workspaceRoot={workspaceRoot}
         attachments={attachments}
         onDraftChange={changeDraft}
         onSend={send}

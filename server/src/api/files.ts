@@ -43,6 +43,11 @@ function previewLine(line: string): string {
   return `${line.slice(0, MAX_PREVIEW_LINE_CHARS)} ... [预览已截断 ${line.length - MAX_PREVIEW_LINE_CHARS} 个字符]`;
 }
 
+filesApi.get('/info', (_req, res) => {
+  const root = workspaceRoot();
+  res.json({ workspaceRoot: root, rootPath: toRemotePath(root) });
+});
+
 filesApi.get('/list', async (req, res) => {
   try {
     const dir = normalizeRemotePath(req.query.path);

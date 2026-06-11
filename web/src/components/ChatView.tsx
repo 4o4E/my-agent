@@ -9,6 +9,7 @@ interface Props {
   busy: boolean;
   draft: string;
   wide: boolean;
+  workspaceRoot: string | null;
   attachments: ComposerAttachment[];
   onDraftChange: (text: string) => void;
   onSend: (text: string) => void;
@@ -25,6 +26,7 @@ export function ChatView({
   busy,
   draft,
   wide,
+  workspaceRoot,
   attachments,
   onDraftChange,
   onSend,
@@ -44,7 +46,7 @@ export function ChatView({
       </header>
 
       <div className="min-h-0 flex-1">
-        <Conversation messages={messages} busy={busy} wide={wide} onOpenRemoteFile={onOpenRemoteFile} />
+        <Conversation messages={messages} busy={busy} wide={wide} workspaceRoot={workspaceRoot} onOpenRemoteFile={onOpenRemoteFile} />
       </div>
 
       <Composer

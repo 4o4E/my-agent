@@ -7,7 +7,7 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation';
-import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from '@/components/ai-elements/message';
+import { Message, MessageAction, MessageActions, MessageContent } from '@/components/ai-elements/message';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai-elements/reasoning';
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from '@/components/ai-elements/tool';
 import type { ToolUIPart } from 'ai';
@@ -21,8 +21,13 @@ type Part = UIMessage['parts'][number];
 type Timing = { startedAt?: string; endedAt?: string; durationMs?: number };
 type ActivityEntry = { part: Part; index: number };
 type FileToken = { kind?: string; path: string; name?: string; size?: number };
+type TextSegment = { type: 'text'; text: string } | { type: 'path'; text: string; path: string };
 
-const PATH_RE = /(?:\/[A-Za-z0-9._~+/@:-]+|(?:\.{1,2}\/)?(?:server|web|docs|src|uploads|tests)\/[A-Za-z0-9._~+/@:-]+)/g;
+const RELATIVE_PATH_RE = /(?:\.{1,2}\/)?(?:server|web|docs|src|uploads|tests)\/[A-Za-z0-9._~+/@:-]+/g;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 function isToolPart(p: Part): boolean {
   return p.type === 'dynamic-tool' || p.type.startsWith('tool-');
@@ -104,35 +109,59 @@ function timingForPart(part: Part, maps: ReturnType<typeof buildTimingMaps>): Ti
   return undefined;
 }
 
-function detectedPaths(text: string): string[] {
-  const found = new Set<string>();
-  for (const match of text.matchAll(PATH_RE)) {
-    const path = match[0].replace(/[),.;\]]+$/, '');
-    if (!path.includes('://')) found.add(path);
-  }
-  return [...found].slice(0, 12);
+function trimPathToken(value: string): { text: string; path: string } {
+  let text = value.replace(/[),.;\]]+$/, '');
+  text = text.replace(/(?::\d+){1,2}$/, '');
+  return { text: value, path: text };
 }
 
-function PathAwareResponse({ text, onOpenRemoteFile }: { text: string; onOpenRemoteFile: (path: string) => void }) {
-  const paths = detectedPaths(text);
+function pathRegex(workspaceRoot: string | null): RegExp {
+  const relative = RELATIVE_PATH_RE.source;
+  const root = workspaceRoot ? `${escapeRegExp(workspaceRoot.replace(/\/+$/, ''))}/[A-Za-z0-9._~+/@:-]+` : '';
+  return new RegExp(root ? `${root}|${relative}` : relative, 'g');
+}
+
+function pathSegments(text: string, workspaceRoot: string | null): TextSegment[] {
+  const segments: TextSegment[] = [];
+  const re = pathRegex(workspaceRoot);
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(re)) {
+    const start = match.index ?? 0;
+    const raw = match[0];
+    const { path } = trimPathToken(raw);
+    if (start > lastIndex) segments.push({ type: 'text', text: text.slice(lastIndex, start) });
+    segments.push({ type: 'path', text: raw, path });
+    lastIndex = start + raw.length;
+  }
+  if (lastIndex < text.length) segments.push({ type: 'text', text: text.slice(lastIndex) });
+  return segments;
+}
+
+function PathButton({ label, path, onOpenRemoteFile }: { label: string; path: string; onOpenRemoteFile: (path: string) => void }) {
   return (
-    <div className="space-y-2">
-      <MessageResponse>{text}</MessageResponse>
-      {paths.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {paths.map((path) => (
-            <button
-              key={path}
-              type="button"
-              onClick={() => onOpenRemoteFile(path)}
-              className="inline-flex max-w-full items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-              title={path}
-            >
-              <FileText className="size-3" />
-              <span className="truncate">{path}</span>
-            </button>
-          ))}
-        </div>
+    <button
+      type="button"
+      onClick={() => onOpenRemoteFile(path)}
+      className="mx-0.5 inline-flex max-w-full items-center gap-1 rounded border bg-background px-1.5 py-0.5 align-baseline text-xs text-muted-foreground hover:text-foreground"
+      title={path}
+    >
+      <FileText className="size-3" />
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+function PathAwareResponse({ text, workspaceRoot, onOpenRemoteFile }: { text: string; workspaceRoot: string | null; onOpenRemoteFile: (path: string) => void }) {
+  const segments = pathSegments(text, workspaceRoot);
+  return (
+    <div className="whitespace-pre-wrap text-sm leading-relaxed">
+      {segments.map((segment, index) =>
+        segment.type === 'path' ? (
+          <PathButton key={`${segment.path}:${index}`} label={segment.text} path={segment.path} onOpenRemoteFile={onOpenRemoteFile} />
+        ) : (
+          <span key={index}>{segment.text}</span>
+        ),
       )}
     </div>
   );
@@ -179,14 +208,16 @@ function AssistantPart({
   part,
   toolActive,
   timingMaps,
+  workspaceRoot,
   onOpenRemoteFile,
 }: {
   part: Part;
   toolActive: boolean;
   timingMaps: ReturnType<typeof buildTimingMaps>;
+  workspaceRoot: string | null;
   onOpenRemoteFile: (path: string) => void;
 }) {
-  if (part.type === 'text') return part.text ? <PathAwareResponse text={part.text} onOpenRemoteFile={onOpenRemoteFile} /> : null;
+  if (part.type === 'text') return part.text ? <PathAwareResponse text={part.text} workspaceRoot={workspaceRoot} onOpenRemoteFile={onOpenRemoteFile} /> : null;
   if (part.type === 'reasoning') {
     const duration = durationFromTiming(timingForPart(part, timingMaps));
     return part.text ? (
@@ -209,6 +240,7 @@ function ActivityGroup({
   lastToolKey,
   messageId,
   timingMaps,
+  workspaceRoot,
   onOpenRemoteFile,
 }: {
   entries: ActivityEntry[];
@@ -216,6 +248,7 @@ function ActivityGroup({
   lastToolKey: string | null;
   messageId: string;
   timingMaps: ReturnType<typeof buildTimingMaps>;
+  workspaceRoot: string | null;
   onOpenRemoteFile: (path: string) => void;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
@@ -229,20 +262,21 @@ function ActivityGroup({
   const open = override ?? active;
   const totalMs = groupDuration(entries, timingMaps);
   return (
-    <Collapsible open={open} onOpenChange={setOverride} className="not-prose my-1 w-full">
-      <CollapsibleTrigger className="inline-flex max-w-full items-center gap-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
+    <Collapsible open={open} onOpenChange={setOverride} className="not-prose w-full">
+      <CollapsibleTrigger className="flex h-6 w-full items-center gap-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
         <Workflow className="size-4 shrink-0" />
         <span className="min-w-0 truncate">过程 · {entries.length} 项</span>
         {totalMs !== undefined && <span className="shrink-0 text-xs font-normal">{formatDuration(totalMs)}</span>}
         <ChevronDown className={cn('size-4 shrink-0 transition-transform', open && 'rotate-180')} />
       </CollapsibleTrigger>
-      <CollapsibleContent className="mt-2 flex w-full min-w-0 flex-col gap-1">
+      <CollapsibleContent className="mt-1 flex w-full min-w-0 flex-col gap-1">
         {entries.map(({ part, index }) => (
           <AssistantPart
             key={index}
             part={part}
             toolActive={`${messageId}:${index}` === lastToolKey}
             timingMaps={timingMaps}
+            workspaceRoot={workspaceRoot}
             onOpenRemoteFile={onOpenRemoteFile}
           />
         ))}
@@ -302,6 +336,16 @@ function parseFileTokens(text: string): { text: string; files: FileToken[] } {
   return { text: clean.replace(/\n{3,}/g, '\n\n').trimEnd(), files };
 }
 
+function compactTocText(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  return compact.length > 80 ? `${compact.slice(0, 80)}...` : compact;
+}
+
+function userTocTitle(message: UIMessage): string {
+  const parsed = parseFileTokens(userText(message));
+  return compactTocText(parsed.text || parsed.files[0]?.name || parsed.files[0]?.path || '对话');
+}
+
 function UserMessageText({ message, onOpenRemoteFile }: { message: UIMessage; onOpenRemoteFile: (path: string) => void }) {
   const parsed = parseFileTokens(userText(message));
   return (
@@ -346,11 +390,13 @@ function AssistantMessage({
   message,
   lastToolKey,
   lastActivityKey,
+  workspaceRoot,
   onOpenRemoteFile,
 }: {
   message: UIMessage;
   lastToolKey: string | null;
   lastActivityKey: string | null;
+  workspaceRoot: string | null;
   onOpenRemoteFile: (path: string) => void;
 }) {
   const timingMaps = buildTimingMaps(message.parts);
@@ -368,6 +414,7 @@ function AssistantMessage({
         lastToolKey={lastToolKey}
         messageId={message.id}
         timingMaps={timingMaps}
+        workspaceRoot={workspaceRoot}
         onOpenRemoteFile={onOpenRemoteFile}
       />,
     );
@@ -392,6 +439,7 @@ function AssistantMessage({
         part={part}
         toolActive={`${message.id}:${i}` === lastToolKey}
         timingMaps={timingMaps}
+        workspaceRoot={workspaceRoot}
         onOpenRemoteFile={onOpenRemoteFile}
       />,
     );
@@ -404,6 +452,7 @@ function AssistantMessage({
         part={part}
         toolActive={false}
         timingMaps={timingMaps}
+        workspaceRoot={workspaceRoot}
         onOpenRemoteFile={onOpenRemoteFile}
       />,
     );
@@ -415,11 +464,13 @@ export function Conversation({
   messages,
   busy,
   wide,
+  workspaceRoot,
   onOpenRemoteFile,
 }: {
   messages: UIMessage[];
   busy: boolean;
   wide: boolean;
+  workspaceRoot: string | null;
   onOpenRemoteFile: (path: string) => void;
 }) {
   const contentRef = useRef<HTMLDivElement>(null);
@@ -451,7 +502,12 @@ export function Conversation({
               />
             ) : (
               messages.map((m, index) => (
-                <Message from={m.role} key={m.id}>
+                <Message
+                  from={m.role}
+                  key={m.id}
+                  data-toc-message={m.role}
+                  data-toc-title={m.role === 'user' ? userTocTitle(m) : '回复'}
+                >
                   {m.role === 'user' ? (
                     <>
                       <MessageContent>
@@ -461,7 +517,13 @@ export function Conversation({
                     </>
                   ) : (
                     <MessageContent>
-                      <AssistantMessage message={m} lastToolKey={lastToolKey} lastActivityKey={lastActivityKey} onOpenRemoteFile={onOpenRemoteFile} />
+                      <AssistantMessage
+                        message={m}
+                        lastToolKey={lastToolKey}
+                        lastActivityKey={lastActivityKey}
+                        workspaceRoot={workspaceRoot}
+                        onOpenRemoteFile={onOpenRemoteFile}
+                      />
                     </MessageContent>
                   )}
                 </Message>

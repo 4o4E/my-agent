@@ -51,7 +51,9 @@ export function renderNode(node: A2uiComponent, ctx: RenderCtx): ReactNode {
         <Card>
           {title ? (
             <CardHeader className="py-3">
-              <CardTitle className="text-sm">{title}</CardTitle>
+              <CardTitle className="text-sm" data-a2ui-title>
+                {title}
+              </CardTitle>
             </CardHeader>
           ) : null}
           <CardContent className={cn('space-y-2', title ? 'pt-0' : 'pt-4')}>{renderChildren(node, ctx)}</CardContent>
@@ -72,7 +74,11 @@ export function renderNode(node: A2uiComponent, ctx: RenderCtx): ReactNode {
       const text = resolveString(node.text, data);
       const level = Number(node.level ?? 2);
       const size = level <= 1 ? 'text-lg' : level === 2 ? 'text-base' : 'text-sm';
-      return <div className={cn('font-semibold', size)}>{text}</div>;
+      return (
+        <div className={cn('font-semibold', size)} data-a2ui-title>
+          {text}
+        </div>
+      );
     }
     case 'Badge': {
       const variant = (['default', 'secondary', 'destructive', 'outline'] as const).includes(
@@ -96,6 +102,10 @@ export function renderNode(node: A2uiComponent, ctx: RenderCtx): ReactNode {
     }
     case 'Markdown':
       return <MarkdownContent text={resolveString(node.text, data)} />;
+    case 'Mermaid': {
+      const code = resolveString(node.code ?? node.text, data);
+      return <MarkdownContent text={'```mermaid\n' + code + '\n```'} />;
+    }
     case 'KeyValue': {
       const items = (resolveValue(node.items as A2uiValue, data) as Array<Record<string, unknown>>) ?? [];
       return (
