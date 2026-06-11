@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentEvent, RunStatus } from '../agent/types.js';
 import type { LlmMessage } from '../llm/types.js';
 import { maskPlaceholder } from '../agent/compaction.js';
+import type { GoalState } from '../agent/goal.js';
 import type { RunRow, Store, StepRow, ThreadMessage, ThreadRow } from './types.js';
 
 interface StoredMsg {
@@ -44,6 +45,7 @@ export class MemoryStore implements Store {
       input,
       output: null,
       error: null,
+      goal_state: null,
       created_at: this.now(),
       updated_at: this.now(),
     };
@@ -64,6 +66,13 @@ export class MemoryStore implements Store {
     if (fields.error !== undefined) run.error = fields.error;
     run.updated_at = this.now();
   }
+  async setGoalState(runId: string, goal: GoalState) {
+    const run = this.runs.get(runId);
+    if (run) {
+      run.goal_state = goal;
+      run.updated_at = this.now();
+    }
+  }
 
   async createStep(runId: string, idx: number): Promise<StepRow> {
     const row: StepRow = { id: randomUUID(), run_id: runId, idx, created_at: this.now() };
@@ -78,7 +87,7 @@ export class MemoryStore implements Store {
       .map((m) => ({
         id: m.seq,
         role: m.role,
-        content: m.collapsed === 'masked' ? maskPlaceholder((m.content ?? '').length) : m.content,
+        content: m.collapsed === 'masked' ? maskPlaceholder(m.content ?? '') : m.content,
         toolCalls: m.toolCalls,
         toolCallId: m.toolCallId,
         collapsed: m.collapsed,

@@ -78,8 +78,10 @@ export const config = {
       : ['rm\\s+-rf\\s+/', 'mkfs', ':\\(\\)\\s*\\{', 'Format-Volume', 'Remove-Item.*-Recurse.*[CD]:\\\\'],
     webEnabled: (process.env.WEB_ENABLED ?? 'true') !== 'false',
     webAllowHosts: list(process.env.WEB_ALLOW_HOSTS), // if non-empty, ONLY these hosts
-    // Hard cap on a single tool result (chars). Always applied. Guards memory/logs.
-    maxOutput: Number(process.env.TOOL_MAX_OUTPUT ?? 100000),
+    // Hard cap on a single tool result (chars). Always applied — the L0 first line
+    // of context defense, so one huge observation (a recursive dir listing, a big
+    // file) can't blow up the window. Kept tight; capOutput keeps head + tail.
+    maxOutput: Number(process.env.TOOL_MAX_OUTPUT ?? 40000),
   },
   // OpenTelemetry GenAI tracing (Phase 4). Disabled by default → zero overhead.
   //   OTEL_ENABLED=true                          turn it on

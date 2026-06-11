@@ -12,6 +12,9 @@ Guidelines:
 - Prefer tools to act on the world (run commands, read/write files, search the web).
 - Call one or more tools when they help; otherwise answer directly.
 - When you have enough information, stop calling tools and write the final answer.
+- For any task that takes more than a few steps, call update_plan early to lay out
+  your plan, and refresh it (mark steps done, record key decisions, set the next
+  action) as you go — it keeps you on track even after older context is compacted.
 - Be concise. State assumptions you made instead of asking when possible.
 - For structured results the user would benefit from seeing as a rich UI (tables,
   key/value summaries, cards), call the render_ui tool with an A2UI component
@@ -48,13 +51,18 @@ interface WorkingMessage {
  */
 export class ContextManager {
   private items: WorkingMessage[] = [];
+  /** The goal-anchor system message, held by reference so it can be refreshed in
+   *  place each step. Kept in the leading system block so compaction never drops it. */
+  private goalItem: WorkingMessage;
   /** Tokens-per-char ratio, calibrated from real provider usage when available. */
   private tokensPerChar = 0.25;
   /** Chars actually sent on the last LLM call, used to calibrate the ratio. */
   private lastSentChars = 0;
 
-  constructor(priorMessages: ThreadMessage[], userInput: string) {
+  constructor(priorMessages: ThreadMessage[], userInput: string, initialGoal = '') {
     this.items.push({ msg: { role: 'system', content: SYSTEM_PROMPT }, dbId: null });
+    this.goalItem = { msg: { role: 'system', content: initialGoal }, dbId: null };
+    this.items.push(this.goalItem);
     for (const p of priorMessages) {
       this.items.push({
         msg: { role: p.role, content: p.content, toolCalls: p.toolCalls, toolCallId: p.toolCallId, collapsed: p.collapsed },
@@ -62,6 +70,11 @@ export class ContextManager {
       });
     }
     this.items.push({ msg: { role: 'user', content: userInput }, dbId: null });
+  }
+
+  /** Refresh the goal-anchor system message (re-injected every step, drift defense). */
+  setGoal(rendered: string): void {
+    this.goalItem.msg = { role: 'system', content: rendered };
   }
 
   /** The clean LLM-facing message list (no DB ids leak to providers). */

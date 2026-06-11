@@ -32,7 +32,8 @@ test('maskOldToolResults elides old large tool outputs but keeps pairing', () =>
   // c1 tool result masked, structure & toolCallId intact.
   const t1 = messages.find((m) => m.toolCallId === 'c1')!;
   assert.equal(t1.collapsed, 'masked');
-  assert.match(t1.content ?? '', /tool output elided · 3000 chars/);
+  assert.match(t1.content ?? '', /chars elided/); // head hint + elision marker
+  assert.ok((t1.content ?? '').length < 3000); // much smaller than the original
   // c2 (recent) untouched.
   const t2 = messages.find((m) => m.toolCallId === 'c2')!;
   assert.equal(t2.collapsed, undefined);

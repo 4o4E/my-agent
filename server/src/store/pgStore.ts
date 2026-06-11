@@ -3,6 +3,7 @@ import { query } from '../db/pool.js';
 import type { AgentEvent, RunStatus } from '../agent/types.js';
 import type { LlmMessage } from '../llm/types.js';
 import { maskPlaceholder } from '../agent/compaction.js';
+import type { GoalState } from '../agent/goal.js';
 import type { RunRow, Store, StepRow, ThreadMessage, ThreadRow } from './types.js';
 
 export class PgStore implements Store {
@@ -58,6 +59,10 @@ export class PgStore implements Store {
     );
   }
 
+  async setGoalState(runId: string, goal: GoalState): Promise<void> {
+    await query(`UPDATE runs SET goal_state = $2, updated_at = now() WHERE id = $1`, [runId, JSON.stringify(goal)]);
+  }
+
   async createStep(runId: string, idx: number): Promise<StepRow> {
     const id = randomUUID();
     const { rows } = await query<StepRow>(
@@ -86,7 +91,7 @@ export class PgStore implements Store {
       .map((r) => ({
         id: Number(r.id),
         role: r.role,
-        content: r.collapsed === 'masked' ? maskPlaceholder((r.content ?? '').length) : r.content,
+        content: r.collapsed === 'masked' ? maskPlaceholder(r.content ?? '') : r.content,
         toolCalls: r.tool_calls ?? undefined,
         toolCallId: r.tool_call_id ?? undefined,
         collapsed: r.collapsed ?? undefined,

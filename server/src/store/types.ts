@@ -1,4 +1,5 @@
 import type { AgentEvent, RunStatus } from '../agent/types.js';
+import type { GoalState } from '../agent/goal.js';
 import type { LlmMessage } from '../llm/types.js';
 
 export interface ThreadRow {
@@ -15,6 +16,7 @@ export interface RunRow {
   input: string;
   output: string | null;
   error: string | null;
+  goal_state: GoalState | null;
   created_at: string;
   updated_at: string;
 }
@@ -52,6 +54,8 @@ export interface Store {
   getRun(id: string): Promise<RunRow | null>;
   listRuns(threadId: string): Promise<RunRow[]>;
   setRunStatus(id: string, status: RunStatus, fields?: { output?: string; error?: string }): Promise<void>;
+  /** Persist the run's goal anchor (so it's inspectable and survives a restart). */
+  setGoalState(runId: string, goal: GoalState): Promise<void>;
 
   createStep(runId: string, idx: number): Promise<StepRow>;
 

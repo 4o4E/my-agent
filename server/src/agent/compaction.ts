@@ -30,11 +30,16 @@ export function estimateTokens(messages: LlmMessage[], tokensPerChar = 0.25): nu
 }
 
 const MASK_MIN_CHARS = 200; // don't bother masking already-small tool results
+const MASK_HEAD_CHARS = 140; // how much of the original to keep as a recall hint
 
-/** The placeholder a masked tool result shows the model. Derived purely from the
- *  original length, so the store can recompute it on load without storing it. */
-export function maskPlaceholder(originalChars: number): string {
-  return `[tool output elided · ${originalChars} chars]`;
+/** The placeholder a masked tool result shows the model: a short head hint plus an
+ *  elision marker. Derived purely from the original content, so the store recomputes
+ *  the exact same string on load (the original is retained — nothing is stored). The
+ *  head lets the model recall what that call found instead of re-running it. */
+export function maskPlaceholder(original: string): string {
+  if (original.length <= MASK_HEAD_CHARS) return original;
+  const head = original.slice(0, MASK_HEAD_CHARS).replace(/\s+/g, ' ').trimEnd();
+  return `${head}\n…[+${original.length - head.length} chars elided]`;
 }
 
 export interface MaskOptions {
@@ -59,7 +64,7 @@ export function maskOldToolResults(
     const chars = m.content?.length ?? 0;
     if (chars < MASK_MIN_CHARS) return m;
     masked += 1;
-    return { ...m, content: maskPlaceholder(chars), collapsed: 'masked' as const };
+    return { ...m, content: maskPlaceholder(m.content ?? ''), collapsed: 'masked' as const };
   });
   return { messages: out, masked };
 }

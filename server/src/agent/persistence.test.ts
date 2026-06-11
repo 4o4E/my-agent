@@ -26,7 +26,7 @@ test('maybeCompact reports the DB ids of newly-masked tool results', () => {
     assert.ok(res.info.masked >= 1);
     // The working view now shows the placeholder for that tool message.
     const view = ctx.all();
-    assert.ok(view.some((m) => m.content === maskPlaceholder(4000)));
+    assert.ok(view.some((m) => m.content === maskPlaceholder('x'.repeat(4000))));
   } finally {
     config.agent.contextBudget = contextBudget;
     config.agent.keepRecentMessages = keepRecentMessages;
@@ -59,12 +59,12 @@ test('store persists collapsed flag and returns the masked view on reload', asyn
   assert.deepEqual(reloaded.map((m) => m.role), ['user', 'assistant', 'tool']);
   const toolMsg = reloaded.find((m) => m.role === 'tool')!;
   assert.equal(toolMsg.collapsed, 'masked');
-  assert.equal(toolMsg.content, maskPlaceholder(3000));
+  assert.equal(toolMsg.content, maskPlaceholder('y'.repeat(3000)));
   assert.equal(toolMsg.toolCallId, 'c1');
 
   // A ContextManager rebuilt from the reloaded view does NOT re-mask the placeholder.
   const ctx = new ContextManager(reloaded, 'next');
-  assert.ok(ctx.all().some((m) => m.content === maskPlaceholder(3000)));
+  assert.ok(ctx.all().some((m) => m.content === maskPlaceholder('y'.repeat(3000))));
 });
 
 test('summarized rows are omitted from the reloaded view', async () => {

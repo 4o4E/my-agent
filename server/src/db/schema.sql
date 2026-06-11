@@ -16,9 +16,13 @@ CREATE TABLE IF NOT EXISTS runs (
   input       TEXT NOT NULL,
   output      TEXT,
   error       TEXT,
+  goal_state  JSONB,                             -- structured goal anchor (intent/plan/decisions/next)
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Goal anchor (long-task design §3.2). Idempotent for existing DBs.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS goal_state JSONB;
 
 -- One step = one iteration of the agent loop (one LLM turn + its tool calls)
 CREATE TABLE IF NOT EXISTS steps (

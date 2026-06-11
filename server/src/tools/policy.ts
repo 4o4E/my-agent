@@ -52,6 +52,7 @@ const META: Record<string, ToolMeta> = {
   web_search: { kind: 'net' },
   ask_user: { kind: 'safe' },
   render_ui: { kind: 'safe' },
+  update_plan: { kind: 'safe' },
 };
 
 /** True when `target` resolves to a location at or under `root`. */
@@ -126,7 +127,11 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
   function capOutput(output: string): string {
     if (output.length <= cfg.maxOutput) return output;
     const dropped = output.length - cfg.maxOutput;
-    return `${output.slice(0, cfg.maxOutput)}\n…[truncated ${dropped} chars by tool policy]`;
+    // Keep both ends — the head holds the start (e.g. a listing's first entries),
+    // the tail often holds the conclusion (error summary, final lines).
+    const head = Math.floor(cfg.maxOutput * 0.7);
+    const tail = cfg.maxOutput - head;
+    return `${output.slice(0, head)}\n…[truncated ${dropped} chars by tool policy]…\n${output.slice(output.length - tail)}`;
   }
 
   return { config: cfg, check, capOutput };

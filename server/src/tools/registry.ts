@@ -12,6 +12,7 @@ import { webFetchTool } from './webFetch.js';
 import { webSearchTool } from './webSearch.js';
 import { askUserTool } from './askUser.js';
 import { renderUiTool } from './renderUi.js';
+import { updatePlanTool } from './updatePlan.js';
 
 const TOOLS: Tool[] = [
   shellTool,
@@ -24,6 +25,7 @@ const TOOLS: Tool[] = [
   webSearchTool,
   askUserTool,
   renderUiTool,
+  updatePlanTool,
 ];
 
 const byName = new Map(TOOLS.map((t) => [t.name, t]));

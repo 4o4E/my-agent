@@ -3,6 +3,7 @@ import { getProvider } from '../llm/index.js';
 import type { Provider } from '../llm/types.js';
 import { runTool, toolSchemas } from '../tools/registry.js';
 import { ContextManager } from './context.js';
+import { initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
 import { runBus } from './bus.js';
 import type { AgentEvent } from './types.js';
 import { store as defaultStore } from '../store/index.js';
@@ -67,7 +68,10 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
   // the AI SDK chat / execute_tool spans nest underneath.
   async function runLoop(): Promise<void> {
     const prior = await store.loadThreadMessages(threadId);
-    const ctx = new ContextManager(prior, userInput);
+    // Goal anchor: re-injected into the context every step so it survives compaction.
+    let goal = initGoal(userInput);
+    await store.setGoalState(runId, goal);
+    const ctx = new ContextManager(prior, userInput, renderGoal(goal));
     // Persist the user turn (no step yet).
     await store.addMessage(threadId, runId, null, { role: 'user', content: userInput });
 
@@ -178,6 +182,13 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         const toolMsg = { role: 'tool' as const, content: result.text, toolCallId: call.id };
         ctx.add(toolMsg);
         ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, toolMsg));
+
+        // update_plan refreshes the persisted goal anchor; re-render it into context.
+        if (call.name === 'update_plan') {
+          goal = mergeGoal(goal, parseGoalPatch(args));
+          await store.setGoalState(runId, goal);
+          ctx.setGoal(renderGoal(goal));
+        }
       }
     }
 
