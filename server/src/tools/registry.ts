@@ -1,6 +1,7 @@
 import type { Tool } from './types.js';
 import { toLlmTool } from './types.js';
 import type { LlmTool } from '../llm/types.js';
+import { policy } from './policy.js';
 import { shellTool } from './shell.js';
 import { fileReadTool } from './fileRead.js';
 import { fileWriteTool } from './fileWrite.js';
@@ -36,8 +37,11 @@ export function getTool(name: string): Tool | undefined {
 export async function runTool(name: string, args: Record<string, unknown>): Promise<string> {
   const tool = byName.get(name);
   if (!tool) return `Unknown tool: ${name}`;
+  // Every tool call passes through the sandbox/permission policy first.
+  const decision = policy.check(name, args);
+  if (!decision.ok) return `Blocked by tool policy: ${decision.reason}`;
   try {
-    return await tool.run(args);
+    return policy.capOutput(await tool.run(args));
   } catch (err) {
     return `Tool ${name} threw: ${(err as Error).message}`;
   }

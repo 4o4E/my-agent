@@ -5,6 +5,24 @@ import { resolve } from 'node:path';
 dotenv.config({ path: resolve(process.cwd(), '../.env') });
 dotenv.config(); // also allow server/.env
 
+/** Parse a comma/space separated env list into a trimmed, non-empty array.
+ *  For tokens that never contain spaces (tool names, hosts). */
+function list(v: string | undefined): string[] {
+  return (v ?? '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Like list() but splits on commas/newlines only, so entries may contain
+ *  spaces (e.g. regex patterns like "rm -rf /"). */
+function patterns(v: string | undefined): string[] {
+  return (v ?? '')
+    .split(/[,\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 const DEFAULT_DATABASE_URL = 'postgres://postgres:postgres@localhost:5432/my_agent';
 
 export const config = {
@@ -29,6 +47,27 @@ export const config = {
   },
   agent: {
     maxSteps: Number(process.env.AGENT_MAX_STEPS ?? 25),
+  },
+  // Tool sandbox / permission policy (Phase 6). The product is a general-purpose
+  // OS agent, so confinement is OPT-IN: TOOL_SANDBOX=enforce turns on path
+  // confinement, shell/web gating and host allowlists. `deny`/`allow` lists and
+  // the output cap apply in any mode. Default 'off' preserves current behavior.
+  tools: {
+    sandbox: ((process.env.TOOL_SANDBOX ?? 'off') === 'enforce' ? 'enforce' : 'off') as 'off' | 'enforce',
+    // Filesystem tools are confined under this root in enforce mode (default: repo root).
+    workspaceRoot: resolve(process.env.TOOL_WORKSPACE_ROOT ?? resolve(process.cwd(), '..')),
+    allow: list(process.env.TOOL_ALLOW), // if non-empty, ONLY these tools may run
+    deny: list(process.env.TOOL_DENY), // these tools are always blocked
+    shellEnabled: (process.env.SHELL_ENABLED ?? 'true') !== 'false',
+    // Command patterns blocked in enforce mode (regex, case-insensitive).
+    // Override via SHELL_DENY (comma/newline separated, so patterns may contain spaces).
+    shellDeny: patterns(process.env.SHELL_DENY).length
+      ? patterns(process.env.SHELL_DENY)
+      : ['rm\\s+-rf\\s+/', 'mkfs', ':\\(\\)\\s*\\{', 'Format-Volume', 'Remove-Item.*-Recurse.*[CD]:\\\\'],
+    webEnabled: (process.env.WEB_ENABLED ?? 'true') !== 'false',
+    webAllowHosts: list(process.env.WEB_ALLOW_HOSTS), // if non-empty, ONLY these hosts
+    // Hard cap on a single tool result (chars). Always applied. Guards memory/logs.
+    maxOutput: Number(process.env.TOOL_MAX_OUTPUT ?? 100000),
   },
   // OpenTelemetry GenAI tracing (Phase 4). Disabled by default → zero overhead.
   //   OTEL_ENABLED=true                          turn it on
