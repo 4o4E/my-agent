@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AgentEvent } from '../api';
+import type { UiEvent } from '../transport/types';
 import { MarkdownContent } from './MarkdownContent';
 
 export interface Turn {
   input: string;
-  events: AgentEvent[];
+  events: UiEvent[];
   running: boolean;
 }
 
@@ -83,7 +83,7 @@ type Block =
   | ToolBlock
   | { kind: 'error'; message: string };
 
-function buildBlocks(events: AgentEvent[]): Block[] {
+function buildBlocks(events: UiEvent[]): Block[] {
   const blocks: Block[] = [];
   const toolById = new Map<string, ToolBlock>();
   let textBuf = '';
@@ -105,34 +105,40 @@ function buildBlocks(events: AgentEvent[]): Block[] {
   };
 
   for (const e of events) {
-    switch (e.type) {
+    switch (e.kind) {
       case 'step_start':
         break;
       case 'reasoning':
         flushText();
-        reasonBuf += e.text;
+        reasonBuf += e.delta;
         break;
-      case 'llm_delta':
+      case 'text':
         flushReason();
-        textBuf += e.text;
+        textBuf += e.delta;
         break;
-      case 'tool_call': {
-        flushReason();
-        flushText();
-        const block: ToolBlock = { kind: 'tool', id: e.id, name: e.name, args: e.args };
-        toolById.set(e.id, block);
-        blocks.push(block); // result is attached in place when it arrives
+      case 'tool': {
+        // A `tool` event carries `input` (the call) and/or `output` (the result);
+        // both arrive under the same id and are merged into one block in place.
+        let block = toolById.get(e.id);
+        if (!block) {
+          if (e.input !== undefined) {
+            flushReason();
+            flushText();
+          }
+          block = { kind: 'tool', id: e.id, name: e.name, args: e.input };
+          toolById.set(e.id, block);
+          blocks.push(block);
+        }
+        if (e.input !== undefined) block.args = e.input;
+        if (e.output !== undefined) block.result = e.output as string;
         break;
       }
-      case 'tool_result': {
-        const block = toolById.get(e.id);
-        if (block) block.result = e.result;
-        else blocks.push({ kind: 'tool', id: e.id, name: e.name, args: undefined, result: e.result });
+      case 'a2ui':
+        // Declarative-UI part (Phase 5) — no renderer yet; ignored for now.
         break;
-      }
       case 'final':
         flushReason();
-        if (textBuf || hasAssistant) flushText(); // already shown via llm_delta
+        if (textBuf || hasAssistant) flushText(); // already shown via text deltas
         else blocks.push({ kind: 'assistant', text: e.output, final: true });
         break;
       case 'error':
@@ -182,7 +188,7 @@ function StepGroup({
   onToggle,
 }: {
   step: number;
-  events: AgentEvent[];
+  events: UiEvent[];
   open: boolean;
   onToggle: () => void;
 }) {
@@ -210,7 +216,7 @@ function StepGroup({
 }
 
 function TurnView({ turn }: { turn: Turn }) {
-  const groups = new Map<number, AgentEvent[]>();
+  const groups = new Map<number, UiEvent[]>();
   for (const e of turn.events) {
     const arr = groups.get(e.step) ?? [];
     arr.push(e);

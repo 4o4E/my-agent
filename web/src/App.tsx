@@ -3,21 +3,24 @@ import {
   createThread,
   getThread,
   listThreads,
-  startRun,
-  subscribeRun,
-  type AgentEvent,
   type RunWithEvents,
   type Thread,
 } from './api';
+import { legacyTransport, toUiEvent } from './transport/legacy';
+import type { UiEvent } from './transport/types';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import type { Turn } from './components/MessageList';
 import { useThemeCtx } from './theme';
 
+// The active transport. Swapping this (→ AiSdkTransport / AgUiTransport) is the
+// only change needed to move to a different wire protocol; nothing below cares.
+const transport = legacyTransport;
+
 function runsToTurns(runs: RunWithEvents[]): Turn[] {
   return runs.map((r) => ({
     input: r.input,
-    events: r.events,
+    events: r.events.map(toUiEvent),
     running: r.status === 'running' || r.status === 'pending',
   }));
 }
@@ -55,7 +58,7 @@ export function App() {
     }
   }
 
-  function appendEvent(e: AgentEvent) {
+  function appendEvent(e: UiEvent) {
     setTurns((prev) => {
       if (prev.length === 0) return prev;
       const next = [...prev];
@@ -87,10 +90,10 @@ export function App() {
         setActiveThreadId(threadId);
         refreshThreads();
       }
-      const { id } = await startRun(threadId, text);
-      unsubRef.current = subscribeRun(id, appendEvent, finishLastTurn);
+      const { runId } = await transport.send(threadId, { text });
+      unsubRef.current = transport.subscribe(runId, appendEvent, finishLastTurn);
     } catch (err) {
-      appendEvent({ type: 'error', step: 0, message: (err as Error).message });
+      appendEvent({ kind: 'error', step: 0, message: (err as Error).message });
       finishLastTurn();
     }
   }
