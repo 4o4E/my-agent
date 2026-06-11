@@ -30,6 +30,7 @@ export interface ComposerAttachment {
 
 interface Props {
   disabled: boolean;
+  waitingQuestion: string | null;
   draft: string;
   wide: boolean;
   attachments: ComposerAttachment[];
@@ -51,6 +52,7 @@ function formatSize(size?: number): string {
 
 export function Composer({
   disabled,
+  waitingQuestion,
   draft,
   wide,
   attachments,
@@ -140,11 +142,17 @@ export function Composer({
                 ))}
               </div>
             )}
+            {waitingQuestion && (
+              <div className="mb-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+                <div className="font-medium">等待你的回答</div>
+                <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{waitingQuestion}</div>
+              </div>
+            )}
             <PromptInput onSubmit={handleSubmit}>
               <PromptInputBody>
                 <PromptInputTextarea
                   onChange={(event) => onDraftChange(event.currentTarget.value)}
-                  placeholder="描述一个任务…（Enter 发送，Shift+Enter 换行）"
+                  placeholder={waitingQuestion ? '输入回答后继续…（Enter 发送，Shift+Enter 换行）' : '描述一个任务…（Enter 发送，Shift+Enter 换行）'}
                   value={draft}
                 />
               </PromptInputBody>

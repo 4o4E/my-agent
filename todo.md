@@ -4,15 +4,16 @@
 
 优先级按当前提交节奏调整：明天 10 点前不优先做队列/worker、per-run 沙箱和资源配额这类平台级重构；这些能力正确但复杂度高，临近提交强行引入风险大。当前优先补齐能提升演示可信度、长任务稳定性和代码闭环质量的中小改动。
 
-## P0：提交前优先完成
+## P0：提交前优先完成（已实现）
 
 ### 1. 支持 run 暂停、等待用户回答、恢复执行
 
 现状：
 
-- `ask_user` 工具只是返回“已向用户提问”，不会真正暂停 run 等用户输入。
+- 已支持 `waiting_for_user` 状态，`ask_user` 会暂停 run，前端可回答后恢复同一个 run。
+- 空回答会按默认假设继续；等待期间也可以取消 run。
 
-要做：
+已做：
 
 - 新增 run 状态，例如 `waiting_for_user`。
 - `ask_user` 触发事件后暂停 executor。
@@ -29,14 +30,15 @@
 现状：
 
 - 事件、消息、run 状态会落库。
-- server 重启后不会自动恢复正在执行的 run。
+- server 启动会扫描 `pending/running` run 并从最近持久化消息续跑。
+- 如果进程中断在工具调用期间，会补一条“工具调用中断”的 tool result，避免恢复时破坏 `tool_call ↔ tool_result` 配对。
 
-要做：
+已做：
 
-- executor 每个 step 后记录可恢复检查点。
-- worker 启动时扫描异常中断 run。
-- 支持从最近完整 step 重建上下文并继续。
-- 对正在执行的工具调用，按超时或 worker lease 失效处理。
+- 每个 step 的消息和事件持续落库，作为可恢复检查点。
+- server 启动时扫描异常中断 run。
+- 从最近持久化消息重建上下文并继续。
+- 对恢复时缺失结果的工具调用补中断结果，避免上下文配对损坏。
 
 为什么：
 
@@ -46,10 +48,10 @@
 
 现状：
 
-- `hardStepCap` 只作为兜底。
-- 没有检测重复工具调用、重复失败、空转 reasoning 或无有效状态变化。
+- `hardStepCap` 仍作为兜底。
+- 已检测连续重复工具调用、连续重复工具失败、连续无工具/无 finish 的空转 step；触发后进入 `waiting_for_user`。
 
-要做：
+已做：
 
 - 记录最近 N 次 tool name + args + result 摘要。
 - 检测重复调用、重复报错、空内容循环。
@@ -64,11 +66,11 @@
 现状：
 
 - 已有 Goal 锚点、L1 observation masking、L2 sliding window。
-- `summarized` 标记已预留，但尚未真正生成 L3 摘要。
+- 已实现 L3 锚定摘要：L1 后仍超过硬阈值时调用 LLM 生成摘要，写入摘要消息并把旧消息标记为 `summarized`。
 
-要做：
+已做：
 
-- 当 masking 和 sliding window 仍不足时，调用 LLM 生成锚定摘要。
+- 当 masking 后仍超过硬阈值时，调用 LLM 生成锚定摘要；若仍不足，再用 sliding window 兜底。
 - 摘要必须保留 intent、plan、decisions、next、关键文件路径、错误信息和已完成动作。
 - 原始 messages 保留，LLM 视图使用 summary 替换旧区间。
 
@@ -80,10 +82,10 @@
 
 现状：
 
-- 通过 `LLM_CONTEXT_BUDGET` 和估算比例控制上下文。
-- 未按不同模型自动适配窗口大小。
+- 通过 `LLM_CONTEXT_BUDGET` 和估算比例控制上下文；未配置 env 时会按常用模型窗口推导保守预算。
+- `compaction` event 会展示压缩前后估算、mask/summarize/drop 数量和预算来源。
 
-要做：
+已做：
 
 - 为常用模型配置上下文窗口和建议预算。
 - 根据 provider usage 校准 token 估算。

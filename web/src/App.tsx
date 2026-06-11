@@ -1,14 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { cancelRun, deleteThread, getRemoteFileInfo, getThread, listThreads, uploadLocalFile, type Thread } from './api';
+import type { UIMessage } from 'ai';
+import {
+  answerRun,
+  cancelRun,
+  deleteThread,
+  getRemoteFileInfo,
+  getThread,
+  listThreads,
+  subscribeRun,
+  uploadLocalFile,
+  type AskUserAnswer,
+  type AskUserSpec,
+  type AgentEvent,
+  type RunWithEvents,
+  type Thread,
+} from './api';
 import { createAiSdkChatTransport, type ChatThreadHandle } from './transport/aiSdkChat';
-import { runsToUiMessages } from './history';
+import { foldUiEventsToParts, runsToUiMessages } from './history';
+import { toUiEvent } from './transport/legacy';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { RemoteFilesPanel } from './components/RemoteFilesPanel';
 import { SettingsView } from './components/SettingsView';
 import type { ComposerAttachment } from './components/Composer';
+import type { AskUserDraft } from './components/AskUserCard';
 import { buildChatPath, currentBrowserPath, readChatRoute, type ChatRoute } from './router';
 import { useThemeCtx } from './theme';
 
@@ -65,6 +82,31 @@ function attachmentToken(att: ComposerAttachment): string {
   return `[[file:${JSON.stringify(payload)}]]`;
 }
 
+function defaultAskSpec(question: string): AskUserSpec {
+  return { question, mode: 'text', options: [], allowCustom: false };
+}
+
+function waitingRunFrom(runs: RunWithEvents[]): { id: string; spec: AskUserSpec } | null {
+  const run = [...runs].reverse().find((r) => r.status === 'waiting_for_user');
+  if (!run) return null;
+  const event = [...run.events].reverse().find((e) => e.type === 'user_question');
+  const question = event?.question ?? '请补充信息后继续。';
+  return { id: run.id, spec: event?.spec ?? defaultAskSpec(question) };
+}
+
+function assistantMessageFromEvents(runId: string, events: AgentEvent[]): UIMessage {
+  const parts = foldUiEventsToParts(events.map(toUiEvent).filter((e): e is NonNullable<ReturnType<typeof toUiEvent>> => e !== null));
+  parts.unshift({ type: 'data-run-id', id: runId, data: { runId } } as unknown as UIMessage['parts'][number]);
+  return { id: `${runId}:a`, role: 'assistant', parts };
+}
+
+function replaceAssistantMessage(messages: UIMessage[], runId: string, events: AgentEvent[]): UIMessage[] {
+  const assistant = assistantMessageFromEvents(runId, events);
+  const index = messages.findIndex((m) => m.id === assistant.id);
+  if (index >= 0) return messages.map((m, i) => (i === index ? assistant : m));
+  return [...messages, assistant];
+}
+
 export function App() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [route, setRoute] = useState<ChatRoute>(() => readChatRoute());
@@ -80,6 +122,9 @@ export function App() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [waitingRun, setWaitingRun] = useState<{ id: string; spec: AskUserSpec } | null>(null);
+  const [resumingRunId, setResumingRunId] = useState<string | null>(null);
+  const [askUserDrafts, setAskUserDrafts] = useState<Record<string, AskUserDraft>>({});
   const { theme, toggle: toggleTheme } = useThemeCtx();
   const activeThreadId = route.threadId;
 
@@ -131,11 +176,25 @@ export function App() {
   const transport = useMemo(() => createAiSdkChatTransport(handle), [handle]);
 
   const { messages, sendMessage, status, stop, setMessages } = useChat({ transport });
-  const busy = status === 'submitted' || status === 'streaming';
+  const busy = status === 'submitted' || status === 'streaming' || !!resumingRunId;
 
   useEffect(() => {
     if (!busy) setActiveRunId(null);
   }, [busy]);
+
+  useEffect(() => {
+    if (busy || !activeThreadId) return;
+    let canceled = false;
+    getThread(activeThreadId)
+      .then(({ runs }) => {
+        if (canceled) return;
+        setWaitingRun(waitingRunFrom(runs));
+      })
+      .catch(() => {});
+    return () => {
+      canceled = true;
+    };
+  }, [busy, activeThreadId]);
 
   useEffect(() => {
     const path = buildChatPath(route);
@@ -179,7 +238,10 @@ export function App() {
 
     getThread(activeThreadId)
       .then(({ runs }) => {
-        if (!canceled) setMessages(runsToUiMessages(runs));
+        if (!canceled) {
+          setMessages(runsToUiMessages(runs));
+          setWaitingRun(waitingRunFrom(runs));
+        }
       })
       .catch(() => {
         if (!canceled) setMessages([]);
@@ -224,12 +286,66 @@ export function App() {
     navigateChatRoute({ draft: text, threadId: activeThreadId }, 'replace');
   }
 
+  const refreshActiveThread = useCallback(() => {
+    if (!activeThreadId) return;
+    void getThread(activeThreadId).then(({ runs }) => {
+      setMessages(runsToUiMessages(runs));
+      setWaitingRun(waitingRunFrom(runs));
+    });
+  }, [activeThreadId, setMessages]);
+
+  const resumeWithAnswer = useCallback((runId: string, answer: AskUserAnswer) => {
+    setWaitingRun(null);
+    setResumingRunId(runId);
+    setActiveRunId(runId);
+    void answerRun(runId, answer)
+      .then(() => {
+        let unsubscribe = () => {};
+        const events: AgentEvent[] = [];
+        unsubscribe = subscribeRun(
+          runId,
+          (event) => {
+            events.push(event);
+            setMessages((current) => replaceAssistantMessage(current, runId, events));
+          },
+          () => {
+            unsubscribe();
+            refreshActiveThread();
+            setResumingRunId(null);
+            setActiveRunId(null);
+            setAskUserDrafts((current) => {
+              const next = { ...current };
+              delete next[runId];
+              return next;
+            });
+            refreshThreads();
+          },
+        );
+      })
+      .catch((err) => {
+        console.error('answer run failed', err);
+        setResumingRunId(null);
+        setActiveRunId(null);
+      });
+  }, [refreshActiveThread, refreshThreads]);
+
   function send(text: string) {
     const finalText = attachments.length
       ? `${text}\n\n${attachments.map(attachmentToken).join('\n')}`
       : text;
     navigateChatRoute({ draft: '', threadId: activeThreadId }, 'replace');
     setAttachments([]);
+    if (waitingRun) {
+      resumeWithAnswer(waitingRun.id, {
+        mode: waitingRun.spec.mode,
+        selected: [],
+        customOptions: [],
+        text: waitingRun.spec.mode === 'text' ? finalText : '',
+        note: waitingRun.spec.mode === 'text' ? '' : finalText,
+        usedRecommended: false,
+      });
+      return;
+    }
     void sendMessage({ text: finalText });
   }
 
@@ -301,9 +417,11 @@ export function App() {
           title={title}
           messages={messages}
           busy={busy}
+          waitingQuestion={waitingRun?.spec.question ?? null}
           draft={draft}
           wide={wide}
           workspaceRoot={workspaceRoot}
+          askUserDrafts={askUserDrafts}
           attachments={attachments}
           onDraftChange={changeDraft}
           onSend={send}
@@ -321,6 +439,8 @@ export function App() {
           }}
           onUploadLocal={uploadLocalAttachment}
           onOpenRemoteFile={openRemoteFile}
+          onAskUserDraftChange={(runId, next) => setAskUserDrafts((current) => ({ ...current, [runId]: next }))}
+          onAskUserSubmit={resumeWithAnswer}
         />
       )}
       {activeView === 'chat' && rightPanelOpen && (

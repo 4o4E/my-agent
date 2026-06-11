@@ -84,6 +84,27 @@ export function uiEventStreamToChunks(
             closeReason();
             safe({ type: `data-a2ui`, id: e.surfaceId, data: e.message });
             break;
+          case 'notice': {
+            closeReason();
+            const id = `t-${e.step}`;
+            if (openText !== id) {
+              closeText();
+              safe({ type: 'text-start', id });
+              openText = id;
+            }
+            safe({ type: 'text-delta', id, delta: e.message });
+            break;
+          }
+          case 'ask_user_question':
+            closeText();
+            closeReason();
+            safe({ type: 'data-ask-user-question', id: `ask-${e.step}`, data: e.spec } as unknown as UIMessageChunk);
+            break;
+          case 'ask_user_answer':
+            closeText();
+            closeReason();
+            safe({ type: 'data-ask-user-answer', id: `answer-${e.step}`, data: e.answer } as unknown as UIMessageChunk);
+            break;
           case 'reasoning': {
             closeText();
             const id = `r-${e.step}`;

@@ -57,6 +57,15 @@ export class PgStore implements Store {
     return rows;
   }
 
+  async listRunsByStatus(statuses: RunStatus[]): Promise<RunRow[]> {
+    if (!statuses.length) return [];
+    const { rows } = await query<RunRow>(
+      `SELECT * FROM runs WHERE status = ANY($1::text[]) ORDER BY updated_at, created_at`,
+      [statuses],
+    );
+    return rows;
+  }
+
   async setRunStatus(id: string, status: RunStatus, fields: { output?: string; error?: string } = {}): Promise<void> {
     await query(
       `UPDATE runs SET status = $2, output = COALESCE($3, output), error = COALESCE($4, error), updated_at = now() WHERE id = $1`,
@@ -77,6 +86,11 @@ export class PgStore implements Store {
     return rows[0];
   }
 
+  async getLastStepIndex(runId: string): Promise<number> {
+    const { rows } = await query<{ idx: number | null }>(`SELECT max(idx) AS idx FROM steps WHERE run_id = $1`, [runId]);
+    return rows[0]?.idx ?? 0;
+  }
+
   async loadThreadMessages(threadId: string): Promise<ThreadMessage[]> {
     const { rows } = await query<{
       id: string;
@@ -85,14 +99,16 @@ export class PgStore implements Store {
       tool_calls: LlmMessage['toolCalls'] | null;
       tool_call_id: string | null;
       collapsed: 'masked' | 'summarized' | null;
+      summary_of: string[] | null;
     }>(
-      `SELECT id, role, content, tool_calls, tool_call_id, collapsed FROM messages WHERE thread_id = $1 ORDER BY id`,
+      `SELECT id, role, content, tool_calls, tool_call_id, collapsed, summary_of FROM messages WHERE thread_id = $1 ORDER BY id`,
       [threadId],
     );
     // Build the compacted LLM-facing view. The original content stays in the DB;
     // masked rows render their placeholder, 'summarized' rows are folded out.
     return rows
       .filter((r) => r.collapsed !== 'summarized')
+      .sort((a, b) => Number(a.summary_of?.[0] ?? a.id) - Number(b.summary_of?.[0] ?? b.id))
       .map((r) => ({
         id: Number(r.id),
         role: r.role,
@@ -115,6 +131,35 @@ export class PgStore implements Store {
         msg.content,
         msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
         msg.toolCallId ?? null,
+      ],
+    );
+    return Number(rows[0].id);
+  }
+
+  async countRunMessages(runId: string): Promise<number> {
+    const { rows } = await query<{ count: string }>(`SELECT count(*)::text AS count FROM messages WHERE run_id = $1`, [runId]);
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  async addSummaryMessage(
+    threadId: string,
+    runId: string,
+    stepId: string | null,
+    msg: LlmMessage,
+    summaryOf: number[],
+  ): Promise<number> {
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO messages (thread_id, run_id, step_id, role, content, tool_calls, tool_call_id, summary_of)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::bigint[]) RETURNING id`,
+      [
+        threadId,
+        runId,
+        stepId,
+        msg.role,
+        msg.content,
+        msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
+        msg.toolCallId ?? null,
+        summaryOf,
       ],
     );
     return Number(rows[0].id);

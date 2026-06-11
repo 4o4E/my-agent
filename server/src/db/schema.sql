@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS threads (
 CREATE TABLE IF NOT EXISTS runs (
   id          TEXT PRIMARY KEY,
   thread_id   TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  status      TEXT NOT NULL DEFAULT 'pending',   -- pending | running | done | error | canceling | canceled
+  status      TEXT NOT NULL DEFAULT 'pending',   -- pending | running | waiting_for_user | done | error | canceling | canceled
   input       TEXT NOT NULL,
   output      TEXT,
   error       TEXT,
@@ -42,12 +42,14 @@ CREATE TABLE IF NOT EXISTS messages (
   tool_calls  JSONB,                             -- assistant tool call requests
   tool_call_id TEXT,                             -- for role=tool
   collapsed   TEXT,                              -- null | 'masked' | 'summarized' (context compaction, durable)
+  summary_of  BIGINT[],                          -- summary message folds these original message ids
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Durable context compaction (long-task design §4). Idempotent so re-running
 -- migrate() on an existing DB adds the column without touching data.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS collapsed TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS summary_of BIGINT[];
 
 CREATE TABLE IF NOT EXISTS events (
   id          BIGSERIAL PRIMARY KEY,

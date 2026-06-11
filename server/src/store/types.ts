@@ -54,17 +54,28 @@ export interface Store {
   createRun(threadId: string, input: string): Promise<RunRow>;
   getRun(id: string): Promise<RunRow | null>;
   listRuns(threadId: string): Promise<RunRow[]>;
+  listRunsByStatus(statuses: RunStatus[]): Promise<RunRow[]>;
   setRunStatus(id: string, status: RunStatus, fields?: { output?: string; error?: string }): Promise<void>;
   /** Persist the run's goal anchor (so it's inspectable and survives a restart). */
   setGoalState(runId: string, goal: GoalState): Promise<void>;
 
   createStep(runId: string, idx: number): Promise<StepRow>;
+  getLastStepIndex(runId: string): Promise<number>;
 
   /** Conversation history for a thread, in order, as the compacted LLM-facing view:
    *  masked tool results return their placeholder, 'summarized' rows are omitted. */
   loadThreadMessages(threadId: string): Promise<ThreadMessage[]>;
+  countRunMessages(runId: string): Promise<number>;
   /** Append a message; returns its DB id so compaction can reference it later. */
   addMessage(threadId: string, runId: string, stepId: string | null, msg: LlmMessage): Promise<number>;
+  /** Append an L3 summary message and remember which original rows it replaces. */
+  addSummaryMessage(
+    threadId: string,
+    runId: string,
+    stepId: string | null,
+    msg: LlmMessage,
+    summaryOf: number[],
+  ): Promise<number>;
   /** Durably mark messages collapsed (context compaction). Originals are retained. */
   markMessagesCollapsed(ids: number[], kind: 'masked' | 'summarized'): Promise<void>;
 

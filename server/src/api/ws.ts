@@ -32,7 +32,7 @@ export function attachWebSocket(server: Server): void {
 
     const unsubscribe = runBus.subscribe(runId, (event) => {
       send(event);
-      if (event.type === 'final' || event.type === 'error') {
+      if (event.type === 'final' || event.type === 'error' || event.type === 'user_question') {
         socket.close(1000, 'run complete');
       }
     });

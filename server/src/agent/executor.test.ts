@@ -166,6 +166,79 @@ test('executeRun: cancels cooperatively at a step boundary', async () => {
   assert.equal(finished?.status, 'canceled');
 });
 
+test('executeRun: ask_user pauses the run and keeps tool pairing intact', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'needs clarification');
+  const published: AgentEvent[] = [];
+
+  await executeRun(run.id, {
+    store,
+    provider: {
+      name: 'asker',
+      async complete() {
+        return {
+          content: null,
+          toolCalls: [
+            {
+              id: 'ask_1',
+              name: 'ask_user',
+              arguments:
+                '{"question":"继续吗？","mode":"single","allowCustom":true,"options":[{"id":"yes","label":"继续","recommended":true},{"id":"no","label":"暂停"}]}',
+            },
+          ],
+        };
+      },
+    },
+    publish: (_id, e) => published.push(e),
+    hardStepCap: 3,
+  });
+
+  const paused = await store.getRun(run.id);
+  assert.equal(paused?.status, 'waiting_for_user');
+  assert.ok(published.some((e) => e.type === 'user_question' && e.question === '继续吗？'));
+  const question = published.find((e) => e.type === 'user_question');
+  assert.equal(question?.type === 'user_question' ? question.spec?.mode : undefined, 'single');
+  assert.equal(question?.type === 'user_question' ? question.spec?.allowCustom : undefined, true);
+  assert.equal(question?.type === 'user_question' ? question.spec?.options[0]?.recommended : undefined, true);
+
+  const msgs = await store.loadThreadMessages(thread.id);
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool']);
+  assert.equal(msgs[2].toolCallId, 'ask_1');
+});
+
+test('executeRun: resumes the same run after a user answer without duplicating input', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'needs answer');
+  let turn = 0;
+  const provider: Provider = {
+    name: 'resume',
+    async complete() {
+      turn += 1;
+      if (turn === 1) {
+        return {
+          content: null,
+          toolCalls: [{ id: 'ask_1', name: 'ask_user', arguments: '{"question":"选 A 还是 B？"}' }],
+        };
+      }
+      return { content: 'ok', toolCalls: [finishCall('finish_1', 'used answer')] };
+    },
+  };
+
+  await executeRun(run.id, { store, provider, publish: () => {}, hardStepCap: 3 });
+  await store.addMessage(thread.id, run.id, null, { role: 'user', content: '用户回答 / User answer:\nA' });
+  await store.setRunStatus(run.id, 'pending');
+  await executeRun(run.id, { store, provider, publish: () => {}, hardStepCap: 3, resume: true });
+
+  const finished = await store.getRun(run.id);
+  assert.equal(finished?.status, 'done');
+  assert.equal(finished?.output, 'used answer');
+  const msgs = await store.loadThreadMessages(thread.id);
+  assert.equal(msgs.filter((m) => m.role === 'user' && m.content === 'needs answer').length, 1);
+  assert.ok(msgs.some((m) => m.role === 'user' && m.content?.includes('User answer')));
+});
+
 test('memory store: deleteThread removes dependent run data', async () => {
   const store = new MemoryStore();
   const thread = await store.createThread();

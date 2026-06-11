@@ -3,6 +3,7 @@ import { executeRun } from '../agent/executor.js';
 import { store } from '../store/index.js';
 import { filesApi } from './files.js';
 import { settingsApi } from './settings.js';
+import type { AskUserAnswer } from '../agent/types.js';
 
 export const api = Router();
 
@@ -69,9 +70,65 @@ api.get('/runs/:id', async (req, res) => {
 api.post('/runs/:id/cancel', async (req, res) => {
   const run = await store.getRun(req.params.id);
   if (!run) return res.status(404).json({ error: 'run not found' });
-  if (run.status === 'pending' || run.status === 'running') {
+  if (run.status === 'pending' || run.status === 'running' || run.status === 'waiting_for_user') {
     await store.setRunStatus(run.id, 'canceling');
     return res.json({ id: run.id, status: 'canceling' });
   }
   res.json({ id: run.id, status: run.status });
 });
+
+// 回答暂停中的 run，并恢复同一个 run。空回答表示“按默认假设继续”。
+api.post('/runs/:id/answer', async (req, res) => {
+  const run = await store.getRun(req.params.id);
+  if (!run) return res.status(404).json({ error: 'run not found' });
+  if (run.status !== 'waiting_for_user') return res.status(409).json({ error: `run is ${run.status}, not waiting_for_user` });
+
+  const answer = normalizeAnswer(req.body?.answer);
+  await store.addMessage(run.thread_id, run.id, null, {
+    role: 'user',
+    content: `用户回答 / User answer:\n${formatAnswerForModel(answer)}`,
+  });
+  await store.addEvent(run.id, null, { type: 'user_answer', step: (await store.getLastStepIndex(run.id)) + 1, answer });
+  await store.setRunStatus(run.id, 'pending');
+  void executeRun(run.id, { resume: true });
+  res.json({ id: run.id, threadId: run.thread_id, status: 'running' });
+});
+
+function normalizeAnswer(value: unknown): AskUserAnswer {
+  if (!value || typeof value !== 'object') {
+    const text = String(value ?? '').trim();
+    return {
+      mode: 'text',
+      selected: [],
+      customOptions: [],
+      text,
+      note: text || '按默认假设继续。 / Continue with the default assumption.',
+      usedRecommended: !text,
+    };
+  }
+  const raw = value as Record<string, unknown>;
+  const selected = Array.isArray(raw.selected)
+    ? raw.selected
+        .map((item) => (item && typeof item === 'object' ? item as Record<string, unknown> : null))
+        .filter((item): item is Record<string, unknown> => !!item)
+        .map((item) => ({
+          id: String(item.id ?? item.label ?? '').trim(),
+          label: String(item.label ?? item.id ?? '').trim(),
+          description: typeof item.description === 'string' ? item.description : undefined,
+          recommended: item.recommended === true,
+        }))
+        .filter((item) => item.label)
+    : [];
+  return {
+    mode: raw.mode === 'single' || raw.mode === 'multiple' || raw.mode === 'text' ? raw.mode : 'text',
+    selected,
+    customOptions: Array.isArray(raw.customOptions) ? raw.customOptions.map((x) => String(x).trim()).filter(Boolean) : [],
+    text: typeof raw.text === 'string' ? raw.text.trim() : '',
+    note: typeof raw.note === 'string' ? raw.note.trim() : '',
+    usedRecommended: raw.usedRecommended === true,
+  };
+}
+
+function formatAnswerForModel(answer: AskUserAnswer): string {
+  return JSON.stringify(answer, null, 2);
+}

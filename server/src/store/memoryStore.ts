@@ -7,11 +7,14 @@ import { newId } from '../id.js';
 
 interface StoredMsg {
   thread_id: string;
+  run_id: string;
+  step_id: string | null;
   role: LlmMessage['role'];
   content: string | null;
   toolCalls?: LlmMessage['toolCalls'];
   toolCallId?: string;
   collapsed?: 'masked' | 'summarized';
+  summaryOf?: number[];
   seq: number;
 }
 
@@ -70,6 +73,10 @@ export class MemoryStore implements Store {
   async listRuns(threadId: string) {
     return [...this.runs.values()].filter((r) => r.thread_id === threadId);
   }
+  async listRunsByStatus(statuses: RunStatus[]) {
+    const set = new Set(statuses);
+    return [...this.runs.values()].filter((r) => set.has(r.status));
+  }
   async setRunStatus(id: string, status: RunStatus, fields: { output?: string; error?: string } = {}) {
     const run = this.runs.get(id);
     if (!run) return;
@@ -91,11 +98,14 @@ export class MemoryStore implements Store {
     this.steps.push(row);
     return row;
   }
+  async getLastStepIndex(runId: string): Promise<number> {
+    return this.steps.filter((s) => s.run_id === runId).reduce((max, s) => Math.max(max, s.idx), 0);
+  }
 
   async loadThreadMessages(threadId: string): Promise<ThreadMessage[]> {
     return this.messages
       .filter((m) => m.thread_id === threadId && m.collapsed !== 'summarized')
-      .sort((a, b) => a.seq - b.seq)
+      .sort((a, b) => (a.summaryOf?.[0] ?? a.seq) - (b.summaryOf?.[0] ?? b.seq))
       .map((m) => ({
         id: m.seq,
         role: m.role,
@@ -105,10 +115,15 @@ export class MemoryStore implements Store {
         collapsed: m.collapsed,
       }));
   }
-  async addMessage(threadId: string, _runId: string, _stepId: string | null, msg: LlmMessage): Promise<number> {
+  async countRunMessages(runId: string): Promise<number> {
+    return this.messages.filter((m) => m.run_id === runId).length;
+  }
+  async addMessage(threadId: string, runId: string, stepId: string | null, msg: LlmMessage): Promise<number> {
     const seq = this.seq++;
     this.messages.push({
       thread_id: threadId,
+      run_id: runId,
+      step_id: stepId,
       role: msg.role,
       content: msg.content,
       toolCalls: msg.toolCalls,
@@ -116,6 +131,18 @@ export class MemoryStore implements Store {
       seq,
     });
     return seq;
+  }
+  async addSummaryMessage(
+    threadId: string,
+    runId: string,
+    stepId: string | null,
+    msg: LlmMessage,
+    summaryOf: number[],
+  ): Promise<number> {
+    const id = await this.addMessage(threadId, runId, stepId, msg);
+    const row = this.messages.find((m) => m.seq === id);
+    if (row) row.summaryOf = summaryOf;
+    return id;
   }
 
   async markMessagesCollapsed(ids: number[], kind: 'masked' | 'summarized'): Promise<void> {

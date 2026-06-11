@@ -33,6 +33,21 @@ function networkMode(v: string | undefined): 'enabled' | 'disabled' {
   return 'disabled';
 }
 
+function modelContextWindow(model: string): number {
+  const m = model.toLowerCase();
+  if (m.includes('gpt-4.1') || m.includes('gpt-5')) return 1_000_000;
+  if (m.includes('claude-3-7') || m.includes('claude-3.7') || m.includes('claude-sonnet-4')) return 200_000;
+  if (m.includes('claude') || m.includes('gemini') || m.includes('deepseek')) return 128_000;
+  if (m.includes('gpt-4o') || m.includes('o3') || m.includes('o4')) return 128_000;
+  if (m.includes('gpt-3.5')) return 16_000;
+  return 128_000;
+}
+
+function contextBudget(model: string): number {
+  if (process.env.LLM_CONTEXT_BUDGET) return Number(process.env.LLM_CONTEXT_BUDGET);
+  return Math.floor(modelContextWindow(model) * 0.5);
+}
+
 const DEFAULT_DATABASE_URL = 'postgres://postgres:postgres@localhost:5432/my_agent';
 const DEFAULT_SHELL_ALLOW_COMMANDS = [
   'cat',
@@ -84,7 +99,9 @@ export const config = {
     hardStepCap: Number(process.env.AGENT_HARD_STEP_CAP ?? 1000),
     // Context budget in estimated tokens. Kept conservatively below the model window
     // to avoid context rot. Compaction (mask → window) keeps the working set under it.
-    contextBudget: Number(process.env.LLM_CONTEXT_BUDGET ?? 120000),
+    modelContextWindow: modelContextWindow(process.env.LLM_MODEL ?? 'gpt-4o-mini'),
+    contextBudget: contextBudget(process.env.LLM_MODEL ?? 'gpt-4o-mini'),
+    contextBudgetSource: process.env.LLM_CONTEXT_BUDGET ? 'env' : 'model-default',
     // Fraction of budget that triggers L1 observation masking of old tool results.
     compactWarnRatio: Number(process.env.AGENT_COMPACT_WARN_RATIO ?? 0.75),
     // Fraction of budget that additionally triggers L2 sliding-window truncation.

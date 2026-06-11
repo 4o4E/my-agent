@@ -9,7 +9,7 @@ import type { ThreadMessage } from '../store/types.js';
 // Durable compaction (long-task design §4): masking decisions are persisted and the
 // store returns the compacted view on reload, so a restart loses no data.
 
-test('maybeCompact reports the DB ids of newly-masked tool results', () => {
+test('maybeCompact reports the DB ids of newly-masked tool results', async () => {
   const { contextBudget, keepRecentMessages } = config.agent;
   config.agent.contextBudget = 100; // tiny budget → force compaction
   config.agent.keepRecentMessages = 1;
@@ -19,7 +19,7 @@ test('maybeCompact reports the DB ids of newly-masked tool results', () => {
       { id: 11, role: 'tool', content: 'x'.repeat(4000), toolCallId: 'c1' },
     ];
     const ctx = new ContextManager(prior, 'continue');
-    const res = ctx.maybeCompact();
+    const res = await ctx.maybeCompact();
 
     assert.ok(res, 'expected compaction to run');
     assert.deepEqual(res.collapsedIds, [11]); // the big tool result's DB id
@@ -78,4 +78,18 @@ test('summarized rows are omitted from the reloaded view', async () => {
 
   const reloaded = await store.loadThreadMessages(thread.id);
   assert.deepEqual(reloaded.map((m) => m.content), ['kept']);
+});
+
+test('summary messages reload at the position of the folded rows', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'task');
+
+  const old = await store.addMessage(thread.id, run.id, null, { role: 'assistant', content: 'old detail' });
+  await store.addMessage(thread.id, run.id, null, { role: 'assistant', content: 'recent detail' });
+  await store.addSummaryMessage(thread.id, run.id, null, { role: 'system', content: 'summary of old detail' }, [old]);
+  await store.markMessagesCollapsed([old], 'summarized');
+
+  const reloaded = await store.loadThreadMessages(thread.id);
+  assert.deepEqual(reloaded.map((m) => m.content), ['summary of old detail', 'recent detail']);
 });

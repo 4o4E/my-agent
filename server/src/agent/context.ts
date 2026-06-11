@@ -1,7 +1,16 @@
 import type { LlmMessage, LlmUsage } from '../llm/types.js';
 import type { ThreadMessage } from '../store/types.js';
 import { config } from '../config.js';
-import { estimateTokens, maskOldToolResults, slidingWindow, totalChars } from './compaction.js';
+import {
+  estimateTokens,
+  maskOldToolResults,
+  renderSummaryPrompt,
+  slidingWindow,
+  summaryCandidate,
+  summaryMessage,
+  totalChars,
+} from './compaction.js';
+import type { Provider } from '../llm/types.js';
 
 const SYSTEM_PROMPT = `You are my-agent, a general-purpose autonomous assistant.
 
@@ -38,7 +47,9 @@ export interface CompactionInfo {
   estBefore: number;
   estAfter: number;
   masked: number;
+  summarized?: number;
   dropped: number;
+  reason?: string;
 }
 
 export interface CompactionResult {
@@ -46,6 +57,8 @@ export interface CompactionResult {
   /** DB ids newly masked this pass — the executor persists these so the decision
    *  survives a restart. (Window drops are in-memory only and never persisted.) */
   collapsedIds: number[];
+  summarizedIds: number[];
+  summaryMessage?: LlmMessage;
 }
 
 /** A message in the working set plus the DB row it came from (null = not yet
@@ -72,7 +85,8 @@ export class ContextManager {
   /** Chars actually sent on the last LLM call, used to calibrate the ratio. */
   private lastSentChars = 0;
 
-  constructor(priorMessages: ThreadMessage[], userInput: string, initialGoal = '') {
+  constructor(priorMessages: ThreadMessage[], userInput: string, initialGoal = '', opts: { appendUserInput?: boolean } = {}) {
+    const appendUserInput = opts.appendUserInput ?? true;
     this.items.push({ msg: { role: 'system', content: SYSTEM_PROMPT }, dbId: null });
     this.goalItem = { msg: { role: 'system', content: initialGoal }, dbId: null };
     this.items.push(this.goalItem);
@@ -82,7 +96,7 @@ export class ContextManager {
         dbId: p.id,
       });
     }
-    this.items.push({ msg: { role: 'user', content: userInput }, dbId: null });
+    if (appendUserInput) this.items.push({ msg: { role: 'user', content: userInput }, dbId: null });
   }
 
   /** Refresh the goal-anchor system message (re-injected every step, drift defense). */
@@ -105,6 +119,12 @@ export class ContextManager {
     if (this.items.length) this.items[this.items.length - 1].dbId = dbId;
   }
 
+  /** L3 摘要是 splice 进工作上下文的，不一定是最后一条，所以按对象引用回填 DB id。 */
+  setSummaryDbId(message: LlmMessage, dbId: number): void {
+    const item = this.items.find((it) => it.msg === message);
+    if (item) item.dbId = dbId;
+  }
+
   /** Feed back real token usage so the next estimate is calibrated to this model. */
   recordUsage(usage?: LlmUsage): void {
     if (usage?.inputTokens && this.lastSentChars > 0) {
@@ -124,8 +144,9 @@ export class ContextManager {
    * Mutates the working list in place. Returns what it did (with the DB ids newly
    * masked), or null if untouched. Always records the post-compaction size.
    */
-  maybeCompact(): CompactionResult | null {
-    const { contextBudget, compactWarnRatio, compactHardRatio, keepRecentMessages } = config.agent;
+  async maybeCompact(provider?: Provider): Promise<CompactionResult | null> {
+    const { contextBudget, compactWarnRatio, compactHardRatio, keepRecentMessages, contextBudgetSource, modelContextWindow } =
+      config.agent;
     const estBefore = this.estTokens();
 
     if (estBefore < contextBudget * compactWarnRatio) {
@@ -134,8 +155,11 @@ export class ContextManager {
     }
 
     const collapsedIds: number[] = [];
+    const summarizedIds: number[] = [];
     let masked = 0;
+    let summarized = 0;
     let dropped = 0;
+    const reason = `${contextBudgetSource}: budget=${contextBudget}, modelWindow=${modelContextWindow}`;
 
     // L1 — observation masking of old tool results. maskOldToolResults is 1:1 by
     // index, so a newly-masked slot maps straight back to its WorkingMessage/dbId.
@@ -148,7 +172,23 @@ export class ContextManager {
       }
     }
 
-    // L2 — sliding window, only if masking left us over the hard ratio. This is an
+    let l3Summary: LlmMessage | undefined;
+    // L3 — 锚定摘要。只有 L1 后仍超过硬阈值才调用模型，摘要替换旧区间，原文只打标不删除。
+    if (provider && estimateTokens(this.all(), this.tokensPerChar) >= contextBudget * compactHardRatio) {
+      const candidate = summaryCandidate(this.all(), { keepRecent: keepRecentMessages });
+      if (candidate) {
+        const ids = this.items.slice(candidate.start, candidate.end).map((it) => it.dbId).filter((id): id is number => id != null);
+        if (ids.length) {
+          const summary = await provider.complete(renderSummaryPrompt(candidate.messages, this.goalItem.msg.content ?? ''), []);
+          l3Summary = summaryMessage(summary.content || 'Earlier context was summarized, but the model returned an empty summary.');
+          this.items.splice(candidate.start, candidate.end - candidate.start, { msg: l3Summary, dbId: null });
+          summarizedIds.push(...ids);
+          summarized = ids.length;
+        }
+      }
+    }
+
+    // L2 — sliding window, only if masking/L3 left us over the hard ratio. This is an
     // in-memory safety valve: it drops rounds but never persists the loss (the full
     // history stays in the DB and is re-derived on the next load).
     if (estimateTokens(this.all(), this.tokensPerChar) >= contextBudget * compactHardRatio) {
@@ -162,7 +202,12 @@ export class ContextManager {
     }
 
     this.lastSentChars = totalChars(this.all());
-    return { info: { estBefore, estAfter: this.estTokens(), masked, dropped }, collapsedIds };
+    return {
+      info: { estBefore, estAfter: this.estTokens(), masked, summarized, dropped, reason },
+      collapsedIds,
+      summarizedIds,
+      summaryMessage: l3Summary,
+    };
   }
 }
 

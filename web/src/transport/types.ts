@@ -26,6 +26,9 @@ export type UiEvent =
   | { kind: 'text'; step: number; delta: string }
   | { kind: 'tool'; step: number; id: string; name: string; input?: unknown; output?: unknown; startedAt?: string; endedAt?: string; durationMs?: number }
   | { kind: 'a2ui'; step: number; surfaceId: string; message: unknown }
+  | { kind: 'notice'; step: number; message: string }
+  | { kind: 'ask_user_question'; step: number; runId?: string; spec: AskUserSpec }
+  | { kind: 'ask_user_answer'; step: number; answer: AskUserAnswer }
   | { kind: 'final'; step: number; output: string }
   | { kind: 'error'; step: number; message: string };
 
@@ -40,3 +43,4 @@ export interface UiTransport {
   /** Stream live `UiEvent`s for a run. Returns an unsubscribe function. */
   subscribe(runId: string, onEvent: (e: UiEvent) => void, onClose?: () => void): () => void;
 }
+import type { AskUserAnswer, AskUserSpec } from '@/api';

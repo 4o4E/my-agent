@@ -7,7 +7,11 @@ export type AgentEvent =
   | { type: 'tool_call'; step: number; name: string; args: unknown; id: string; startedAt: string }
   | { type: 'tool_result'; step: number; id: string; name: string; result: string; startedAt: string; endedAt: string; durationMs: number }
   | { type: 'a2ui'; step: number; surfaceId: string; message: unknown }
-  | { type: 'compaction'; step: number; estBefore: number; estAfter: number; masked: number; dropped: number }
+  | { type: 'compaction'; step: number; estBefore: number; estAfter: number; masked: number; summarized?: number; dropped: number; reason?: string }
+  | { type: 'user_question'; step: number; question: string; toolCallId?: string; spec?: AskUserSpec }
+  | { type: 'user_answer'; step: number; answer: AskUserAnswer }
+  | { type: 'progress_stalled'; step: number; reason: string; question?: string }
+  | { type: 'recovery'; step: number; message: string }
   | { type: 'final'; step: number; output: string }
   | { type: 'error'; step: number; message: string };
 
@@ -18,10 +22,35 @@ export interface Thread {
   updated_at: string;
 }
 
+export type AskUserMode = 'single' | 'multiple' | 'text';
+
+export interface AskUserOption {
+  id: string;
+  label: string;
+  description?: string;
+  recommended?: boolean;
+}
+
+export interface AskUserSpec {
+  question: string;
+  mode: AskUserMode;
+  options: AskUserOption[];
+  allowCustom: boolean;
+}
+
+export interface AskUserAnswer {
+  mode: AskUserMode;
+  selected: AskUserOption[];
+  customOptions: string[];
+  text: string;
+  note: string;
+  usedRecommended: boolean;
+}
+
 export interface RunWithEvents {
   id: string;
   thread_id: string;
-  status: 'pending' | 'running' | 'done' | 'error' | 'canceling' | 'canceled';
+  status: 'pending' | 'running' | 'waiting_for_user' | 'done' | 'error' | 'canceling' | 'canceled';
   input: string;
   output: string | null;
   error: string | null;
@@ -126,6 +155,13 @@ export const startRun = (threadId: string, input: string) =>
 
 export const cancelRun = (runId: string) =>
   fetch(`/api/runs/${runId}/cancel`, { method: 'POST' }).then(json<{ id: string; status: 'canceling' }>);
+
+export const answerRun = (runId: string, answer: AskUserAnswer) =>
+  fetch(`/api/runs/${runId}/answer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer }),
+  }).then(json<{ id: string; threadId: string; status: 'running' }>);
 
 /** Subscribe to a run's live event stream over WebSocket. */
 export function subscribeRun(

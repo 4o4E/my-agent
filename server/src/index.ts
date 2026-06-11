@@ -13,6 +13,7 @@ import { api } from './api/http.js';
 import { attachWebSocket } from './api/ws.js';
 import { describeShellSandbox } from './tools/sandbox.js';
 import { getToolSettings } from './settings.js';
+import { recoverInterruptedRuns } from './agent/recovery.js';
 
 const app = express();
 app.use(cors());
@@ -42,5 +43,8 @@ server.listen(config.port, config.host, () => {
             })})`
           : ''),
     );
+  });
+  void recoverInterruptedRuns().then((count) => {
+    if (count > 0) console.log(`   Recovered interrupted runs: ${count}`);
   });
 });

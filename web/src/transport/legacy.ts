@@ -5,7 +5,12 @@
 // solely on `UiEvent`.
 
 import { startRun, subscribeRun, type AgentEvent } from '../api';
+import type { AskUserSpec } from '../api';
 import type { UiEvent, UiTransport, UserInput } from './types';
+
+function defaultAskSpec(question: string): AskUserSpec {
+  return { question, mode: 'text', options: [], allowCustom: false };
+}
 
 /** Map one wire `AgentEvent` onto the normalized `UiEvent` model, or `null` for
  *  events with nothing to render (e.g. `compaction` telemetry) and any future
@@ -51,6 +56,14 @@ export function toUiEvent(e: AgentEvent): UiEvent | null {
       };
     case 'a2ui':
       return { kind: 'a2ui', step: e.step, surfaceId: e.surfaceId, message: e.message };
+    case 'user_question':
+      return { kind: 'ask_user_question', step: e.step, spec: e.spec ?? defaultAskSpec(e.question) };
+    case 'user_answer':
+      return { kind: 'ask_user_answer', step: e.step, answer: e.answer };
+    case 'progress_stalled':
+      return { kind: 'notice', step: e.step, message: e.question ? `${e.reason}\n${e.question}` : e.reason };
+    case 'recovery':
+      return { kind: 'notice', step: e.step, message: e.message };
     case 'final':
       return { kind: 'final', step: e.step, output: e.output };
     case 'error':

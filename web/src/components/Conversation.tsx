@@ -18,6 +18,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { cn } from '@/lib/utils';
 import { MarkdownContent } from './MarkdownContent';
 import type { StreamdownProps } from 'streamdown';
+import { AskUserQuestionCard, emptyAskUserDraft, type AskUserDraft } from './AskUserCard';
+import type { AskUserAnswer, AskUserSpec } from '@/api';
 
 type Part = UIMessage['parts'][number];
 type Timing = { startedAt?: string; endedAt?: string; durationMs?: number };
@@ -235,16 +237,26 @@ function ToolBlock({
 
 function AssistantPart({
   part,
+  answer,
   toolActive,
   timingMaps,
   workspaceRoot,
   onOpenRemoteFile,
+  runId,
+  askUserDrafts,
+  onAskUserDraftChange,
+  onAskUserSubmit,
 }: {
   part: Part;
+  answer?: AskUserAnswer;
   toolActive: boolean;
   timingMaps: ReturnType<typeof buildTimingMaps>;
   workspaceRoot: string | null;
   onOpenRemoteFile: (path: string) => void;
+  runId: string | null;
+  askUserDrafts: Record<string, AskUserDraft>;
+  onAskUserDraftChange: (runId: string, draft: AskUserDraft) => void;
+  onAskUserSubmit: (runId: string, answer: AskUserAnswer) => void;
 }) {
   if (part.type === 'text') return part.text ? <PathAwareResponse text={part.text} workspaceRoot={workspaceRoot} onOpenRemoteFile={onOpenRemoteFile} /> : null;
   if (part.type === 'reasoning') {
@@ -258,6 +270,23 @@ function AssistantPart({
   }
   if (part.type === 'data-a2ui') {
     return <A2uiSurface message={(part as { data: A2uiMessage }).data} />;
+  }
+  if (part.type === 'data-ask-user-question') {
+    const spec = (part as { data: AskUserSpec }).data;
+    const draft = runId ? askUserDrafts[runId] ?? emptyAskUserDraft(spec) : emptyAskUserDraft(spec);
+    return (
+      <AskUserQuestionCard
+        spec={spec}
+        draft={draft}
+        answer={answer}
+        disabled={!runId}
+        onDraftChange={(next) => runId && onAskUserDraftChange(runId, next)}
+        onSubmit={(answer) => runId && onAskUserSubmit(runId, answer)}
+      />
+    );
+  }
+  if (part.type === 'data-ask-user-answer') {
+    return null;
   }
   if (isToolPart(part)) {
     return (
@@ -273,6 +302,15 @@ function AssistantPart({
   return null;
 }
 
+function answerForQuestion(parts: Part[], index: number): AskUserAnswer | undefined {
+  for (let i = index + 1; i < parts.length; i++) {
+    const part = parts[i];
+    if (part.type === 'data-ask-user-question') return undefined;
+    if (part.type === 'data-ask-user-answer') return (part as { data: AskUserAnswer }).data;
+  }
+  return undefined;
+}
+
 function ActivityGroup({
   entries,
   active,
@@ -281,6 +319,10 @@ function ActivityGroup({
   timingMaps,
   workspaceRoot,
   onOpenRemoteFile,
+  runId,
+  askUserDrafts,
+  onAskUserDraftChange,
+  onAskUserSubmit,
 }: {
   entries: ActivityEntry[];
   active: boolean;
@@ -289,6 +331,10 @@ function ActivityGroup({
   timingMaps: ReturnType<typeof buildTimingMaps>;
   workspaceRoot: string | null;
   onOpenRemoteFile: (path: string) => void;
+  runId: string | null;
+  askUserDrafts: Record<string, AskUserDraft>;
+  onAskUserDraftChange: (runId: string, draft: AskUserDraft) => void;
+  onAskUserSubmit: (runId: string, answer: AskUserAnswer) => void;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
   const prevActive = useRef(active);
@@ -313,10 +359,15 @@ function ActivityGroup({
           <AssistantPart
             key={index}
             part={part}
+            answer={answerForQuestion(entries.map((entry) => entry.part), entries.findIndex((entry) => entry.index === index))}
             toolActive={`${messageId}:${index}` === lastToolKey}
             timingMaps={timingMaps}
             workspaceRoot={workspaceRoot}
             onOpenRemoteFile={onOpenRemoteFile}
+            runId={runId}
+            askUserDrafts={askUserDrafts}
+            onAskUserDraftChange={onAskUserDraftChange}
+            onAskUserSubmit={onAskUserSubmit}
           />
         ))}
       </CollapsibleContent>
@@ -431,14 +482,21 @@ function AssistantMessage({
   lastActivityKey,
   workspaceRoot,
   onOpenRemoteFile,
+  askUserDrafts,
+  onAskUserDraftChange,
+  onAskUserSubmit,
 }: {
   message: UIMessage;
   lastToolKey: string | null;
   lastActivityKey: string | null;
   workspaceRoot: string | null;
   onOpenRemoteFile: (path: string) => void;
+  askUserDrafts: Record<string, AskUserDraft>;
+  onAskUserDraftChange: (runId: string, draft: AskUserDraft) => void;
+  onAskUserSubmit: (runId: string, answer: AskUserAnswer) => void;
 }) {
   const timingMaps = buildTimingMaps(message.parts);
+  const runId = runIdFromAssistant(message);
   const nodes: JSX.Element[] = [];
   const a2uiParts: Array<{ part: Part; index: number }> = [];
   let group: { entries: ActivityEntry[]; start: number } | null = null;
@@ -455,6 +513,10 @@ function AssistantMessage({
         timingMaps={timingMaps}
         workspaceRoot={workspaceRoot}
         onOpenRemoteFile={onOpenRemoteFile}
+        runId={runId}
+        askUserDrafts={askUserDrafts}
+        onAskUserDraftChange={onAskUserDraftChange}
+        onAskUserSubmit={onAskUserSubmit}
       />,
     );
     group = null;
@@ -476,10 +538,15 @@ function AssistantMessage({
       <AssistantPart
         key={i}
         part={part}
+        answer={answerForQuestion(message.parts, i)}
         toolActive={`${message.id}:${i}` === lastToolKey}
         timingMaps={timingMaps}
         workspaceRoot={workspaceRoot}
         onOpenRemoteFile={onOpenRemoteFile}
+        runId={runId}
+        askUserDrafts={askUserDrafts}
+        onAskUserDraftChange={onAskUserDraftChange}
+        onAskUserSubmit={onAskUserSubmit}
       />,
     );
   });
@@ -489,10 +556,15 @@ function AssistantMessage({
       <AssistantPart
         key={`a2ui-${index}`}
         part={part}
+        answer={undefined}
         toolActive={false}
         timingMaps={timingMaps}
         workspaceRoot={workspaceRoot}
         onOpenRemoteFile={onOpenRemoteFile}
+        runId={runId}
+        askUserDrafts={askUserDrafts}
+        onAskUserDraftChange={onAskUserDraftChange}
+        onAskUserSubmit={onAskUserSubmit}
       />,
     );
   }
@@ -505,12 +577,18 @@ export function Conversation({
   wide,
   workspaceRoot,
   onOpenRemoteFile,
+  askUserDrafts,
+  onAskUserDraftChange,
+  onAskUserSubmit,
 }: {
   messages: UIMessage[];
   busy: boolean;
   wide: boolean;
   workspaceRoot: string | null;
   onOpenRemoteFile: (path: string) => void;
+  askUserDrafts: Record<string, AskUserDraft>;
+  onAskUserDraftChange: (runId: string, draft: AskUserDraft) => void;
+  onAskUserSubmit: (runId: string, answer: AskUserAnswer) => void;
 }) {
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -561,6 +639,9 @@ export function Conversation({
                         lastActivityKey={lastActivityKey}
                         workspaceRoot={workspaceRoot}
                         onOpenRemoteFile={onOpenRemoteFile}
+                        askUserDrafts={askUserDrafts}
+                        onAskUserDraftChange={onAskUserDraftChange}
+                        onAskUserSubmit={onAskUserSubmit}
                       />
                     </MessageContent>
                   )}
