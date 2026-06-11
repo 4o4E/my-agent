@@ -13,22 +13,117 @@
 
 当前实现是 Node.js/TypeScript 后端 + React/Vite 前端的单体原型。它已经能完成端到端 agent 执行闭环，并支持服务启动后恢复中断 run；但还不是完整多 worker 云平台，队列调度、跨 worker 接管、多租户鉴权、资源配额等平台能力仍在路线图中。
 
-## 快速开始
+## 从 0 部署指南
 
 前置条件：
 
 - Node.js >= 20
 - pnpm 11.x
 - PostgreSQL，或直接使用 `docker compose up -d`
+- Linux 环境如需强制 bwrap 沙箱，需要提前安装 bubblewrap（常见包名为 `bubblewrap`）
 
-启动：
+### 1. 安装依赖
 
 ```bash
 pnpm install
+```
+
+### 2. 准备数据库
+
+推荐本地从 0 部署时直接使用仓库内 PostgreSQL：
+
+```bash
 docker compose up -d
+```
+
+这种方式对应的连接串是：
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/my_agent
+```
+
+如果接入已有 PostgreSQL，也可以使用同类连接串：
+
+```bash
+DATABASE_URL=postgres://<user>:<password>@localhost:5432/my_agent
+```
+
+已有库需要提前创建好用户和数据库，例如：
+
+```bash
+createdb my_agent
+```
+
+迁移会创建这些表：`threads`、`runs`、`steps`、`messages`、`events`、`app_settings`。其中 `app_settings` 保存运行时工具配置；保存过设置后，数据库里的值会优先于 env 默认值。
+
+### 3. 配置 `.env`
+
+```bash
 cp .env.example .env
+```
+
+`.env` 必须是标准 `KEY=value` 或 `# 注释`，不要出现 `2# ...` 这类非注释前缀，否则用 shell 加载环境变量时会报错。
+
+最小可运行配置：
+
+```bash
+PORT=8080
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/my_agent
+
+LLM_PROVIDER=aisdk
+LLM_AISDK_FLAVOR=openai-compatible
+LLM_REASONING_TAG=think
+LLM_BASE_URL=https://tokenhub.tencentmaas.com/v1
+LLM_API_KEY=<your-api-key>
+LLM_MODEL=deepseek-v4-pro-202606
+LLM_MAX_TOKENS=4096
+LLM_TIMEOUT_MS=120000
+
+AGENT_HARD_STEP_CAP=1000
+
+TOOL_SANDBOX=enforce
+TOOL_SANDBOX_BACKEND=bwrap
+TOOL_WORKSPACE_ROOT=/absolute/path/to/my-agent/workspace
+TOOL_NETWORK=disabled
+TOOL_MAX_OUTPUT=40000
+```
+
+当前开发和真实链路调试主要使用 DeepSeek V4 Pro，也就是 `LLM_MODEL=deepseek-v4-pro-202606`。代码保留 OpenAI、Anthropic、mock 等 provider 兼容路径，但本轮没有针对其他模型做专门提示词、参数或行为调优。
+
+注意：旧配置 `AGENT_MAX_STEPS` 已不是当前代码读取项，请使用 `AGENT_HARD_STEP_CAP`。`TOOL_MAX_OUTPUT` 当前建议为 `40000`；即使数据库里旧值是 `100000`，运行时也会被代码限制到 40000。
+
+### 4. 初始化数据库
+
+```bash
 pnpm db:migrate
+```
+
+如需确认表已创建：
+
+```bash
+psql "$DATABASE_URL" -c "\dt"
+```
+
+首次启动后，服务会把 env 中的工具默认配置补进 `app_settings`。当前开发库里这些 key 已存在：`tools.sandbox`、`tools.sandboxBackend`、`tools.workspaceRoot`、`tools.network`、`tools.maxOutput` 等；保存过设置后，数据库值会覆盖 env 默认值。如果要复现当前开发机的强沙箱配置，可在前端设置页保存 `sandbox=enforce`、`sandboxBackend=bwrap`、`workspaceRoot=<repo>/workspace`，并按任务需要决定是否开启网络。
+
+```bash
+psql "$DATABASE_URL" -c "select key, value from app_settings order by key;"
+```
+
+### 5. 启动服务
+
+开发模式：
+
+```bash
 pnpm dev
+```
+
+Linux 开发机也可用脚本管理前后端进程：
+
+```bash
+pnpm run start
+pnpm run stop
+pnpm run restart
 ```
 
 访问入口：
@@ -36,6 +131,8 @@ pnpm dev
 - Web 控制台：`http://localhost:3000`
 - 后端 API：`http://localhost:8080`
 - WebSocket：`ws://localhost:8080/ws?runId=<id>`
+
+### 6. 验证链路
 
 推荐验收任务：
 
@@ -51,7 +148,7 @@ pnpm dev
 - 数据库中能查到对应 run、step、message 和 event。
 - 人为降低 `LLM_CONTEXT_BUDGET` 时，可以观察到 `compaction` 事件。
 
-离线运行：
+离线运行可用于验证 API 和事件流，不代表真实模型效果：
 
 ```bash
 cd server
@@ -63,14 +160,6 @@ STORE=memory LLM_PROVIDER=mock node --import tsx src/index.ts
 ```bash
 pnpm --filter server test
 pnpm --filter server typecheck
-```
-
-Linux 开发机可用脚本管理前后端进程：
-
-```bash
-pnpm run start
-pnpm run stop
-pnpm run restart
 ```
 
 ## 文档导航
