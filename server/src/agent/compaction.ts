@@ -1,10 +1,11 @@
-import type { LlmMessage } from '../llm/types.js';
+import type { LlmMessage, LlmToolCall } from '../llm/types.js';
 
 // Context compaction primitives (long-task design §3.3). Pure functions over the
 // neutral message list so they're unit-testable without a provider or store.
 //
 // The cascade, cheapest first:
 //   L1 maskOldToolResults  — replace old tool outputs with placeholders (structure kept)
+//   L1 maskOldAssistantToolCalls — replace old large tool-call args with summaries
 //   L2 slidingWindow       — drop the oldest complete rounds when masking isn't enough
 //
 // Hard invariant: never break tool_call ↔ tool_result pairing. Masking changes
@@ -31,6 +32,8 @@ export function estimateTokens(messages: LlmMessage[], tokensPerChar = 0.25): nu
 
 const MASK_MIN_CHARS = 200; // don't bother masking already-small tool results
 const MASK_HEAD_CHARS = 140; // how much of the original to keep as a recall hint
+const TOOL_ARGS_MASK_MIN_CHARS = 1000; // small args are useful enough to keep verbatim
+const TOOL_ARGS_HEAD_CHARS = 240;
 
 /** The placeholder a masked tool result shows the model: a short head hint plus an
  *  elision marker. Derived purely from the original content, so the store recomputes
@@ -40,6 +43,26 @@ export function maskPlaceholder(original: string): string {
   if (original.length <= MASK_HEAD_CHARS) return original;
   const head = original.slice(0, MASK_HEAD_CHARS).replace(/\s+/g, ' ').trimEnd();
   return `${head}\n…[+${original.length - head.length} chars elided]`;
+}
+
+/** 压缩旧 assistant tool call 的大参数。保留 id/name 和参数开头，避免破坏
+ *  provider 需要的 tool_call ↔ tool_result 结构，同时不把大 JSON 继续喂给模型。 */
+export function maskToolCallArguments(calls: LlmToolCall[]): { calls: LlmToolCall[]; changed: boolean } {
+  let changed = false;
+  const out = calls.map((call) => {
+    if (call.arguments.length < TOOL_ARGS_MASK_MIN_CHARS) return call;
+    changed = true;
+    const head = call.arguments.slice(0, TOOL_ARGS_HEAD_CHARS).replace(/\s+/g, ' ').trimEnd();
+    return {
+      ...call,
+      arguments: JSON.stringify({
+        context_elided: true,
+        original_chars: call.arguments.length,
+        head,
+      }),
+    };
+  });
+  return { calls: out, changed };
 }
 
 export interface MaskOptions {
@@ -65,6 +88,26 @@ export function maskOldToolResults(
     if (chars < MASK_MIN_CHARS) return m;
     masked += 1;
     return { ...m, content: maskPlaceholder(m.content ?? ''), collapsed: 'masked' as const };
+  });
+  return { messages: out, masked };
+}
+
+/** L1 — Tool-call argument masking. Older assistant messages can carry huge
+ *  arguments (for example render_ui payloads). The result message remains paired by
+ *  call id, so old arguments can be summarized without losing conversation shape. */
+export function maskOldAssistantToolCalls(
+  messages: LlmMessage[],
+  opts: MaskOptions,
+): { messages: LlmMessage[]; masked: number } {
+  const cutoff = messages.length - Math.max(0, opts.keepRecent);
+  let masked = 0;
+  const out = messages.map((m, i) => {
+    if (i >= cutoff) return m;
+    if (m.role !== 'assistant' || m.collapsed || !m.toolCalls?.length) return m;
+    const result = maskToolCallArguments(m.toolCalls);
+    if (!result.changed) return m;
+    masked += 1;
+    return { ...m, toolCalls: result.calls, collapsed: 'masked' as const };
   });
   return { messages: out, masked };
 }

@@ -33,6 +33,28 @@ test('maybeCompact reports the DB ids of newly-masked tool results', async () =>
   }
 });
 
+test('compactForHistory masks old bulky payloads even below live threshold', () => {
+  const { keepRecentMessages } = config.agent;
+  config.agent.keepRecentMessages = 2;
+  try {
+    const bigArgs = JSON.stringify({ components: 'z'.repeat(3000) });
+    const prior: ThreadMessage[] = [
+      { id: 20, role: 'assistant', content: null, toolCalls: [{ id: 'ui1', name: 'render_ui', arguments: bigArgs }] },
+      { id: 21, role: 'tool', content: 'x'.repeat(4000), toolCallId: 'ui1' },
+      { id: 22, role: 'assistant', content: null, toolCalls: [{ id: 'f1', name: 'finish_conversation', arguments: '{}' }] },
+    ];
+    const ctx = new ContextManager(prior, 'continue');
+    const res = ctx.compactForHistory();
+
+    assert.ok(res, 'expected history compaction to mask old payloads');
+    assert.deepEqual(res.collapsedIds, [20, 21]);
+    assert.equal(res.info.reason, 'post-run-history');
+    assert.ok(res.info.estAfter < res.info.estBefore);
+  } finally {
+    config.agent.keepRecentMessages = keepRecentMessages;
+  }
+});
+
 test('store persists collapsed flag and returns the masked view on reload', async () => {
   const store = new MemoryStore();
   const thread = await store.createThread();
@@ -65,6 +87,29 @@ test('store persists collapsed flag and returns the masked view on reload', asyn
   // A ContextManager rebuilt from the reloaded view does NOT re-mask the placeholder.
   const ctx = new ContextManager(reloaded, 'next');
   assert.ok(ctx.all().some((m) => m.content === maskPlaceholder('y'.repeat(3000))));
+});
+
+test('store returns masked assistant tool-call args on reload', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'task');
+  const args = JSON.stringify({ components: 'u'.repeat(3000) });
+
+  const assistantId = await store.addMessage(thread.id, run.id, null, {
+    role: 'assistant',
+    content: null,
+    toolCalls: [{ id: 'ui1', name: 'render_ui', arguments: args }],
+  });
+  await store.addMessage(thread.id, run.id, null, { role: 'tool', content: 'UI rendered.', toolCallId: 'ui1' });
+  await store.markMessagesCollapsed([assistantId], 'masked');
+
+  const reloaded = await store.loadThreadMessages(thread.id);
+  const call = reloaded[0].toolCalls?.[0];
+  assert.equal(reloaded[0].collapsed, 'masked');
+  assert.equal(call?.id, 'ui1');
+  assert.equal(call?.name, 'render_ui');
+  assert.ok((call?.arguments.length ?? 0) < args.length);
+  assert.equal(JSON.parse(call?.arguments ?? '{}').context_elided, true);
 });
 
 test('summarized rows are omitted from the reloaded view', async () => {

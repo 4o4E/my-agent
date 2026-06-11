@@ -3,6 +3,7 @@ import type { ThreadMessage } from '../store/types.js';
 import { config } from '../config.js';
 import {
   estimateTokens,
+  maskOldAssistantToolCalls,
   maskOldToolResults,
   renderSummaryPrompt,
   slidingWindow,
@@ -144,6 +145,37 @@ export class ContextManager {
     return estimateTokens(this.all(), this.tokensPerChar);
   }
 
+  /** Apply cheap L1 masking and return newly collapsed DB ids. */
+  private maskOldPayloads(keepRecent: number): { collapsedIds: number[]; masked: number } {
+    const collapsedIds: number[] = [];
+    let masked = 0;
+    const m1 = maskOldToolResults(this.all(), { keepRecent });
+    const m2 = maskOldAssistantToolCalls(m1.messages, { keepRecent });
+    for (let i = 0; i < this.items.length; i++) {
+      if (m2.messages[i].collapsed === 'masked' && this.items[i].msg.collapsed !== 'masked') {
+        this.items[i].msg = m2.messages[i];
+        masked += 1;
+        if (this.items[i].dbId != null) collapsedIds.push(this.items[i].dbId as number);
+      }
+    }
+    return { collapsedIds, masked };
+  }
+
+  /** Run-end cleanup: shrink old bulky payloads for future turns even when this
+   *  run stayed below the live compaction threshold. */
+  compactForHistory(reason = 'post-run-history'): CompactionResult | null {
+    const { keepRecentMessages } = config.agent;
+    const estBefore = this.estTokens();
+    const { collapsedIds, masked } = this.maskOldPayloads(keepRecentMessages);
+    this.lastSentChars = totalChars(this.all());
+    if (!masked) return null;
+    return {
+      info: { estBefore, estAfter: this.estTokens(), masked, dropped: 0, reason },
+      collapsedIds,
+      summarizedIds: [],
+    };
+  }
+
   /**
    * Run the compaction cascade if the working set is over the warn threshold.
    * Mutates the working list in place. Returns what it did (with the DB ids newly
@@ -159,23 +191,14 @@ export class ContextManager {
       return null;
     }
 
-    const collapsedIds: number[] = [];
     const summarizedIds: number[] = [];
-    let masked = 0;
     let summarized = 0;
     let dropped = 0;
     const reason = `${contextBudgetSource}: budget=${contextBudget}, modelWindow=${modelContextWindow}`;
 
-    // L1 — observation masking of old tool results. maskOldToolResults is 1:1 by
-    // index, so a newly-masked slot maps straight back to its WorkingMessage/dbId.
-    const m1 = maskOldToolResults(this.all(), { keepRecent: keepRecentMessages });
-    for (let i = 0; i < this.items.length; i++) {
-      if (m1.messages[i].collapsed === 'masked' && this.items[i].msg.collapsed !== 'masked') {
-        this.items[i].msg = m1.messages[i];
-        masked += 1;
-        if (this.items[i].dbId != null) collapsedIds.push(this.items[i].dbId as number);
-      }
-    }
+    // L1 — mask old bulky tool results and assistant tool-call arguments. Both
+    // keep message structure intact, so persisted history can be compact but valid.
+    const { collapsedIds, masked } = this.maskOldPayloads(keepRecentMessages);
 
     let l3Summary: LlmMessage | undefined;
     // L3 — 锚定摘要。只有 L1 后仍超过硬阈值才调用模型，摘要替换旧区间，原文只打标不删除。

@@ -4,6 +4,8 @@ import { executeRun } from './executor.js';
 import { MemoryStore } from '../store/memoryStore.js';
 import type { Provider } from '../llm/types.js';
 import type { AgentEvent } from './types.js';
+import { config } from '../config.js';
+import { maskPlaceholder } from './compaction.js';
 
 function finishCall(id: string, progress: string, completed = true) {
   return {
@@ -93,6 +95,42 @@ test('executeRun: keeps multi-turn memory within a thread', async () => {
 
   // prior: user(first) + assistant(finish call) + tool(finish result) + new user(second) = 4
   assert.equal(seenPriorCount, 4);
+});
+
+test('executeRun: compacts bulky old history when finishing a run', async () => {
+  const { keepRecentMessages } = config.agent;
+  config.agent.keepRecentMessages = 2;
+  try {
+    const store = new MemoryStore();
+    const thread = await store.createThread();
+    const oldRun = await store.createRun(thread.id, 'old');
+    const bigArgs = JSON.stringify({ components: 'r'.repeat(3000) });
+    await store.addMessage(thread.id, oldRun.id, null, {
+      role: 'assistant',
+      content: null,
+      toolCalls: [{ id: 'ui-old', name: 'render_ui', arguments: bigArgs }],
+    });
+    await store.addMessage(thread.id, oldRun.id, null, { role: 'tool', content: 'x'.repeat(4000), toolCallId: 'ui-old' });
+
+    const run = await store.createRun(thread.id, 'new');
+    const published: AgentEvent[] = [];
+    await executeRun(run.id, {
+      store,
+      provider: { name: 's', async complete() { return { content: 'ok', toolCalls: [finishCall('f1', 'ok')] }; } },
+      publish: (_id, e) => published.push(e),
+      hardStepCap: 3,
+    });
+
+    const msgs = await store.loadThreadMessages(thread.id);
+    const oldAssistant = msgs.find((m) => m.toolCalls?.[0]?.id === 'ui-old');
+    const oldTool = msgs.find((m) => m.toolCallId === 'ui-old');
+    assert.equal(oldAssistant?.collapsed, 'masked');
+    assert.equal(JSON.parse(oldAssistant?.toolCalls?.[0]?.arguments ?? '{}').context_elided, true);
+    assert.equal(oldTool?.content, maskPlaceholder('x'.repeat(4000)));
+    assert.ok(published.some((e) => e.type === 'compaction' && e.reason === 'post-run-history'));
+  } finally {
+    config.agent.keepRecentMessages = keepRecentMessages;
+  }
 });
 
 test('executeRun: text without finish_conversation is not completion', async () => {

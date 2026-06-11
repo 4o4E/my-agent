@@ -1,7 +1,7 @@
 import { query } from '../db/pool.js';
 import type { AgentEvent, RunStatus } from '../agent/types.js';
 import type { LlmMessage } from '../llm/types.js';
-import { maskPlaceholder } from '../agent/compaction.js';
+import { maskPlaceholder, maskToolCallArguments } from '../agent/compaction.js';
 import type { GoalState } from '../agent/goal.js';
 import type { RunRow, Store, StepRow, ThreadMessage, ThreadRow } from './types.js';
 import { newId } from '../id.js';
@@ -104,16 +104,19 @@ export class PgStore implements Store {
       `SELECT id, role, content, tool_calls, tool_call_id, collapsed, summary_of FROM messages WHERE thread_id = $1 ORDER BY id`,
       [threadId],
     );
-    // Build the compacted LLM-facing view. The original content stays in the DB;
-    // masked rows render their placeholder, 'summarized' rows are folded out.
+    // Build the compacted LLM-facing view. The original content/tool args stay in
+    // the DB; masked rows render placeholders, summarized rows are folded out.
     return rows
       .filter((r) => r.collapsed !== 'summarized')
       .sort((a, b) => Number(a.summary_of?.[0] ?? a.id) - Number(b.summary_of?.[0] ?? b.id))
       .map((r) => ({
         id: Number(r.id),
         role: r.role,
-        content: r.collapsed === 'masked' ? maskPlaceholder(r.content ?? '') : r.content,
-        toolCalls: r.tool_calls ?? undefined,
+        content: r.collapsed === 'masked' && r.role === 'tool' ? maskPlaceholder(r.content ?? '') : r.content,
+        toolCalls:
+          r.collapsed === 'masked' && r.role === 'assistant' && r.tool_calls
+            ? maskToolCallArguments(r.tool_calls).calls
+            : (r.tool_calls ?? undefined),
         toolCallId: r.tool_call_id ?? undefined,
         collapsed: r.collapsed ?? undefined,
       }));

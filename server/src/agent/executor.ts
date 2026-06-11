@@ -4,7 +4,7 @@ import type { Provider } from '../llm/types.js';
 import type { LlmMessage } from '../llm/types.js';
 import { runTool, toolSchemas } from '../tools/registry.js';
 import { ContextManager } from './context.js';
-import { initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
+import { finishGoal, initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
 import { runBus } from './bus.js';
 import type { AgentEvent } from './types.js';
 import { store as defaultStore } from '../store/index.js';
@@ -191,6 +191,29 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     await store.addEvent(runId, stepId, event);
   };
 
+  const persistCompaction = async (stepId: string | null, compaction: Awaited<ReturnType<ContextManager['maybeCompact']>>) => {
+    if (!compaction) return;
+    if (compaction.summaryMessage && compaction.summarizedIds.length) {
+      const summaryId = await store.addSummaryMessage(
+        threadId,
+        runId,
+        stepId,
+        compaction.summaryMessage,
+        compaction.summarizedIds,
+      );
+      // L3 摘要在工作上下文中不是最后一条，需要按对象引用回填 DB id。
+      currentCtx?.setSummaryDbId(compaction.summaryMessage, summaryId);
+      await store.markMessagesCollapsed(compaction.summarizedIds, 'summarized');
+    }
+    if (compaction.collapsedIds.length) {
+      await store.markMessagesCollapsed(compaction.collapsedIds, 'masked');
+    }
+    await emit(stepId, { type: 'compaction', step: currentStepIdx, ...compaction.info });
+  };
+
+  let currentCtx: ContextManager | null = null;
+  let currentStepIdx = 0;
+
   await store.setRunStatus(runId, 'running');
 
   try {
@@ -231,6 +254,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     let goal = initialRun.goal_state ?? initGoal(userInput);
     if (!initialRun.goal_state) await store.setGoalState(runId, goal);
     const ctx = new ContextManager(prior, userInput, renderGoal(goal), { appendUserInput: !isResume });
+    currentCtx = ctx;
     if (!isResume) {
       // 新 run 只在首次执行时写入用户输入；恢复时历史里已经有这条消息。
       await store.addMessage(threadId, runId, null, { role: 'user', content: userInput });
@@ -244,6 +268,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     // Long tasks are bounded by completion / cancellation / context budget, not a
     // fixed step count. hardStepCap is only a runaway-loop backstop.
     for (let stepIdx = nextStepIdx; stepIdx < nextStepIdx + hardStepCap; stepIdx++) {
+      currentStepIdx = stepIdx;
       // Cooperative cancellation: the cancel endpoint flips status to 'canceling';
       // we observe it at the top of each step and stop cleanly.
       const current = await store.getRun(runId);
@@ -259,23 +284,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       // Keep the working context under budget before spending a model call. Masking
       // decisions are persisted so they survive a restart (window drops are not).
       const compaction = await ctx.maybeCompact(provider);
-      if (compaction) {
-        if (compaction.summaryMessage && compaction.summarizedIds.length) {
-          const summaryId = await store.addSummaryMessage(
-            threadId,
-            runId,
-            step.id,
-            compaction.summaryMessage,
-            compaction.summarizedIds,
-          );
-          ctx.setSummaryDbId(compaction.summaryMessage, summaryId);
-          await store.markMessagesCollapsed(compaction.summarizedIds, 'summarized');
-        }
-        if (compaction.collapsedIds.length) {
-          await store.markMessagesCollapsed(compaction.collapsedIds, 'masked');
-        }
-        await emit(step.id, { type: 'compaction', step: stepIdx, ...compaction.info });
-      }
+      await persistCompaction(step.id, compaction);
 
       // Stream when supported: publish incremental deltas live (bus only); the
       // consolidated text is persisted once at the end so replay stays compact.
@@ -457,6 +466,10 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       }
 
       if (completedOutput) {
+        goal = finishGoal(goal);
+        await store.setGoalState(runId, goal);
+        ctx.setGoal(renderGoal(goal));
+        await persistCompaction(step.id, ctx.compactForHistory());
         await emit(step.id, { type: 'final', step: stepIdx, output: completedOutput });
         await store.setRunStatus(runId, 'done', { output: completedOutput });
         return;

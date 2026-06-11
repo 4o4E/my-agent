@@ -40,6 +40,16 @@ export function mergeGoal(goal: GoalState, patch: GoalPatch): GoalState {
   };
 }
 
+/** Run 已确认完成时收敛目标锚点，避免后续上下文继续注入过期的 doing/next。 */
+export function finishGoal(goal: GoalState): GoalState {
+  return {
+    intent: goal.intent,
+    plan: goal.plan.map((p) => ({ ...p, status: 'done' as const })),
+    decisions: goal.decisions,
+    next: '已完成',
+  };
+}
+
 const BOX: Record<PlanItem['status'], string> = { done: 'x', doing: '~', todo: ' ' };
 
 /** Render the goal as a compact system message kept at the top of the context. */

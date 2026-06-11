@@ -9,6 +9,7 @@ import { fileWriteTool } from './fileWrite.js';
 import { fileEditTool } from './fileEdit.js';
 import { globTool } from './glob.js';
 import { grepTool } from './grep.js';
+import { truncateFetchText } from './webFetch.js';
 import { getTool, runTool, toolSchemas } from './registry.js';
 import type { ToolResult } from './types.js';
 
@@ -86,4 +87,15 @@ test('glob matches by pattern', async () => {
 test('grep finds matching lines with file:line', async () => {
   const out = text(await grepTool.run({ pattern: 'TODO', path: dir }));
   assert.match(out, /a\.ts:2/);
+});
+
+test('web_fetch truncation is visible to the model', () => {
+  const out = truncateFetchText('a'.repeat(2000), 200);
+  assert.ok(out.length <= 200);
+  assert.match(out, /truncated \d+ chars by web_fetch max_chars/);
+});
+
+test('web_fetch truncation respects very small limits', () => {
+  const out = truncateFetchText('a'.repeat(2000), 12);
+  assert.ok(out.length <= 12);
 });

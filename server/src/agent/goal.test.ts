@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
+import { finishGoal, initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
 import { executeRun } from './executor.js';
 import { MemoryStore } from '../store/memoryStore.js';
 import type { Provider } from '../llm/types.js';
@@ -39,6 +39,19 @@ test('parseGoalPatch: coerces messy args, drops invalid', () => {
   assert.deepEqual(patch.plan, [{ text: 'a', status: 'doing' }]); // empty/invalid dropped
   assert.deepEqual(patch.decisions, ['d1']);
   assert.equal(patch.next, 'go');
+});
+
+test('finishGoal: completed runs no longer keep doing state in the anchor', () => {
+  const goal = finishGoal({
+    intent: 'ship it',
+    plan: [{ text: 'build', status: 'doing' }, { text: 'verify', status: 'todo' }],
+    decisions: ['keep tests'],
+    next: 'verify',
+  });
+
+  assert.deepEqual(goal.plan.map((p) => p.status), ['done', 'done']);
+  assert.equal(goal.next, '已完成');
+  assert.deepEqual(goal.decisions, ['keep tests']);
 });
 
 test('executeRun: update_plan persists the goal anchor on the run', async () => {
@@ -83,7 +96,7 @@ test('executeRun: update_plan persists the goal anchor on the run', async () => 
   const goal = finished?.goal_state;
   assert.ok(goal, 'goal_state should be persisted');
   assert.equal(goal!.intent, 'analyze the project');
-  assert.deepEqual(goal!.plan, [{ text: 'read files', status: 'doing' }]);
+  assert.deepEqual(goal!.plan, [{ text: 'read files', status: 'done' }]);
   assert.deepEqual(goal!.decisions, ['focus on server/']);
-  assert.equal(goal!.next, 'read executor.ts');
+  assert.equal(goal!.next, '已完成');
 });

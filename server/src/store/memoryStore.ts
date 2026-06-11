@@ -1,6 +1,6 @@
 import type { AgentEvent, RunStatus } from '../agent/types.js';
 import type { LlmMessage } from '../llm/types.js';
-import { maskPlaceholder } from '../agent/compaction.js';
+import { maskPlaceholder, maskToolCallArguments } from '../agent/compaction.js';
 import type { GoalState } from '../agent/goal.js';
 import type { RunRow, Store, StepRow, ThreadMessage, ThreadRow } from './types.js';
 import { newId } from '../id.js';
@@ -109,8 +109,11 @@ export class MemoryStore implements Store {
       .map((m) => ({
         id: m.seq,
         role: m.role,
-        content: m.collapsed === 'masked' ? maskPlaceholder(m.content ?? '') : m.content,
-        toolCalls: m.toolCalls,
+        content: m.collapsed === 'masked' && m.role === 'tool' ? maskPlaceholder(m.content ?? '') : m.content,
+        toolCalls:
+          m.collapsed === 'masked' && m.role === 'assistant' && m.toolCalls
+            ? maskToolCallArguments(m.toolCalls).calls
+            : m.toolCalls,
         toolCallId: m.toolCallId,
         collapsed: m.collapsed,
       }));

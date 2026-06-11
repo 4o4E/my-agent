@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { estimateTokens, maskOldToolResults, slidingWindow, totalChars } from './compaction.js';
+import { estimateTokens, maskOldAssistantToolCalls, maskOldToolResults, slidingWindow, totalChars } from './compaction.js';
 import type { LlmMessage } from '../llm/types.js';
 
 const big = (n: number) => 'x'.repeat(n);
@@ -48,6 +48,27 @@ test('maskOldToolResults leaves small tool outputs alone', () => {
   const msgs: LlmMessage[] = [{ role: 'user', content: 'q' }, ...round('c1', 50), ...round('c2', 3000)];
   const { masked } = maskOldToolResults(msgs, { keepRecent: 0 });
   assert.equal(masked, 1); // only the 3000-char one
+});
+
+test('maskOldAssistantToolCalls elides old large tool arguments but keeps ids', () => {
+  const hugeArgs = JSON.stringify({ surfaceId: 'report', components: big(3000) });
+  const msgs: LlmMessage[] = [
+    { role: 'user', content: 'render' },
+    { role: 'assistant', content: null, toolCalls: [{ id: 'ui1', name: 'render_ui', arguments: hugeArgs }] },
+    { role: 'tool', content: 'UI rendered.', toolCallId: 'ui1' },
+    { role: 'assistant', content: null, toolCalls: [{ id: 'f1', name: 'finish_conversation', arguments: '{}' }] },
+  ];
+
+  const { messages, masked } = maskOldAssistantToolCalls(msgs, { keepRecent: 1 });
+
+  assert.equal(masked, 1);
+  const call = messages[1].toolCalls?.[0];
+  assert.equal(messages[1].collapsed, 'masked');
+  assert.equal(call?.id, 'ui1');
+  assert.equal(call?.name, 'render_ui');
+  assert.ok((call?.arguments.length ?? 0) < hugeArgs.length);
+  assert.equal(JSON.parse(call?.arguments ?? '{}').context_elided, true);
+  assert.ok(messages.some((m) => m.role === 'tool' && m.toolCallId === call?.id));
 });
 
 test('slidingWindow keeps system + first user anchor and cuts on a safe boundary', () => {
