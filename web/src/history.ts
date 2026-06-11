@@ -68,8 +68,12 @@ export function foldUiEventsToParts(events: UiEvent[]): Part[] {
         flushText();
         parts.push({ type: 'text', text: `⚠️ ${e.message}`, state: 'done' });
         break;
-      case 'step_start':
       case 'a2ui':
+        flushReason();
+        flushText();
+        parts.push({ type: 'data-a2ui', id: e.surfaceId, data: e.message } as unknown as Part);
+        break;
+      case 'step_start':
         break;
     }
   }

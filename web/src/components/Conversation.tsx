@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import type { UIMessage } from 'ai';
 import { Bot, ChevronRight, Wrench } from 'lucide-react';
 import { MarkdownContent } from './MarkdownContent';
+import { A2uiSurface } from '@/a2ui/A2uiSurface';
+import type { A2uiMessage } from '@/a2ui/types';
 import { Card } from '@/components/ui/card';
 
 type Part = UIMessage['parts'][number];
@@ -84,6 +86,9 @@ function AssistantBubble({ text }: { text: string }) {
 function PartView({ part }: { part: Part }) {
   if (part.type === 'text') return part.text ? <AssistantBubble text={part.text} /> : null;
   if (part.type === 'reasoning') return part.text ? <ReasoningCard text={part.text} /> : null;
+  if (part.type === 'data-a2ui') {
+    return <A2uiSurface message={(part as { data: A2uiMessage }).data} />;
+  }
   if (isToolPart(part)) return <ToolCard part={part} />;
   return null;
 }

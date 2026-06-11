@@ -74,7 +74,13 @@ export function uiEventStreamToChunks(
       const onEvent = (e: UiEvent) => {
         switch (e.kind) {
           case 'step_start':
+            break;
           case 'a2ui':
+            // Declarative UI surface → an in-place-reconciling data part keyed by
+            // surfaceId; rendered by the A2UI catalog in Conversation.
+            closeText();
+            closeReason();
+            safe({ type: `data-a2ui`, id: e.surfaceId, data: e.message });
             break;
           case 'reasoning': {
             closeText();
