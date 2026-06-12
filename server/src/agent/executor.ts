@@ -372,9 +372,10 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       const llmStartedAt = new Date().toISOString();
       let reasoningStartedAt: string | null = null;
       let llmStage: StreamStage = 'llm_waiting';
+      let llmActiveTool: StreamStats['activeTool'];
       const streamedToolInputChars = new Map<string, number>();
       const streamedToolNames = new Map<string, string>();
-      const stopLlmHeartbeat = streamStats.startHeartbeat(stepIdx, () => llmStage);
+      const stopLlmHeartbeat = streamStats.startHeartbeat(stepIdx, () => llmStage, () => llmActiveTool);
       try {
         if (stream && provider.completeStream) {
           try {
@@ -382,6 +383,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
               publishedDelta = true;
               if (d.toolInputStart) {
                 llmStage = 'tool_call';
+                llmActiveTool = d.toolInputStart;
                 streamedToolNames.set(d.toolInputStart.id, d.toolInputStart.name);
                 streamStats.mark(stepIdx, 'tool_call', d.toolInputStart, true);
               }
@@ -389,34 +391,35 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
                 llmStage = 'tool_call';
                 if (d.toolInputDelta.name) streamedToolNames.set(d.toolInputDelta.id, d.toolInputDelta.name);
                 const name = streamedToolNames.get(d.toolInputDelta.id) ?? d.toolInputDelta.name ?? 'tool';
+                llmActiveTool = { id: d.toolInputDelta.id, name };
                 const chars = charCount(d.toolInputDelta.delta);
                 streamedToolInputChars.set(d.toolInputDelta.id, (streamedToolInputChars.get(d.toolInputDelta.id) ?? 0) + chars);
-                streamStats.add(stepIdx, 'tool_call', 'toolInputChars', chars, { id: d.toolInputDelta.id, name });
+                streamStats.add(stepIdx, 'tool_call', 'toolInputChars', chars, llmActiveTool);
               }
               if (d.toolInputAvailable) {
                 llmStage = 'tool_call';
+                llmActiveTool = { id: d.toolInputAvailable.id, name: d.toolInputAvailable.name };
                 streamedToolNames.set(d.toolInputAvailable.id, d.toolInputAvailable.name);
                 const chars = charCount(d.toolInputAvailable.input);
                 const counted = streamedToolInputChars.get(d.toolInputAvailable.id) ?? 0;
                 const remaining = Math.max(0, chars - counted);
                 if (remaining) {
                   streamedToolInputChars.set(d.toolInputAvailable.id, counted + remaining);
-                  streamStats.add(stepIdx, 'tool_call', 'toolInputChars', remaining, {
-                    id: d.toolInputAvailable.id,
-                    name: d.toolInputAvailable.name,
-                  });
+                  streamStats.add(stepIdx, 'tool_call', 'toolInputChars', remaining, llmActiveTool);
                 } else {
-                  streamStats.mark(stepIdx, 'tool_call', { id: d.toolInputAvailable.id, name: d.toolInputAvailable.name }, true);
+                  streamStats.mark(stepIdx, 'tool_call', llmActiveTool, true);
                 }
               }
               if (d.reasoning) {
                 llmStage = 'reasoning';
+                llmActiveTool = undefined;
                 reasoningStartedAt ??= new Date().toISOString();
                 streamStats.add(stepIdx, 'reasoning', 'reasoningChars', charCount(d.reasoning));
                 publish(runId, { type: 'reasoning', step: stepIdx, text: d.reasoning, startedAt: reasoningStartedAt });
               }
               if (d.content) {
                 llmStage = 'output';
+                llmActiveTool = undefined;
                 streamStats.add(stepIdx, 'output', 'outputChars', charCount(d.content));
                 publish(runId, { type: 'llm_delta', step: stepIdx, text: d.content });
               }
