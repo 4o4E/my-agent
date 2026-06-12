@@ -21,6 +21,7 @@ export interface UserInput {
  */
 export type UiEvent =
   | { kind: 'step_start'; step: number }
+  | { kind: 'stream_stats'; step: number; stats: StreamStats }
   | { kind: 'reasoning'; step: number; delta: string; startedAt?: string; endedAt?: string; durationMs?: number }
   | { kind: 'reasoning_timing'; step: number; startedAt: string; endedAt: string; durationMs: number }
   | { kind: 'text'; step: number; delta: string }
@@ -45,3 +46,4 @@ export interface UiTransport {
   subscribe(runId: string, onEvent: (e: UiEvent) => void, onClose?: () => void): () => void;
 }
 import type { AskUserAnswer, AskUserSpec } from '@/api';
+import type { StreamStats } from '@/api';

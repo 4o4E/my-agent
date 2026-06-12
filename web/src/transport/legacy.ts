@@ -22,6 +22,10 @@ export function toUiEvent(e: AgentEvent): UiEvent | null {
   switch (e.type) {
     case 'step_start':
       return { kind: 'step_start', step: e.step };
+    case 'stream_stats': {
+      const { type: _type, step: _step, ...stats } = e;
+      return { kind: 'stream_stats', step: e.step, stats };
+    }
     case 'reasoning':
       return {
         kind: 'reasoning',

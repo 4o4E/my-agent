@@ -75,7 +75,7 @@ interface StreamChunk {
 /** Pure: fold one streamed chunk into accumulators, returning the user-visible delta. */
 export function applyStreamChunk(
   chunk: StreamChunk,
-  acc: { content: string; reasoning: string; toolCalls: { id: string; name: string; arguments: string }[] },
+  acc: { content: string; reasoning: string; toolCalls: { id: string; name: string; arguments: string; started?: boolean }[] },
 ): LlmDelta {
   const delta = chunk.choices?.[0]?.delta;
   if (!delta) return {};
@@ -93,7 +93,15 @@ export function applyStreamChunk(
     const slot = (acc.toolCalls[tc.index] ??= { id: '', name: '', arguments: '' });
     if (tc.id) slot.id = tc.id;
     if (tc.function?.name) slot.name += tc.function.name;
-    if (tc.function?.arguments) slot.arguments += tc.function.arguments;
+    const id = slot.id || `tool-index-${tc.index}`;
+    if (!slot.started && (slot.id || slot.name)) {
+      slot.started = true;
+      out.toolInputStart = { id, name: slot.name || 'tool' };
+    }
+    if (tc.function?.arguments) {
+      slot.arguments += tc.function.arguments;
+      out.toolInputDelta = { id, name: slot.name || undefined, delta: tc.function.arguments };
+    }
   }
   return out;
 }
@@ -111,7 +119,7 @@ export function createOpenAIChatProvider(cfg: LlmConfig): Provider {
       return parseChatResponse(data as ChatData);
     },
     async completeStream(messages, tools, onDelta) {
-      const acc = { content: '', reasoning: '', toolCalls: [] as { id: string; name: string; arguments: string }[] };
+      const acc = { content: '', reasoning: '', toolCalls: [] as { id: string; name: string; arguments: string; started?: boolean }[] };
       await streamPost(
         url,
         auth,

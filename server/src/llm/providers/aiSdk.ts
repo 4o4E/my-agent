@@ -175,6 +175,9 @@ export function createAiSdkProvider(cfg: LlmConfig, opts: AiSdkOptions): Provide
       for await (const part of r.fullStream) {
         if (part.type === 'text-delta') onDelta({ content: part.text });
         else if (part.type === 'reasoning-delta') onDelta({ reasoning: part.text });
+        else if (part.type === 'tool-input-start') onDelta({ toolInputStart: { id: part.id, name: part.toolName } });
+        else if (part.type === 'tool-input-delta') onDelta({ toolInputDelta: { id: part.id, delta: part.delta } });
+        else if (part.type === 'tool-call') onDelta({ toolInputAvailable: { id: part.toolCallId, name: part.toolName, input: part.input } });
         else if (part.type === 'error') throw part.error;
       }
       const [text, reasoningText, toolCalls, usage] = await Promise.all([

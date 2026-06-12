@@ -82,6 +82,9 @@ test('openai-chat: streaming chunks accumulate content, reasoning, and tool call
   assert.equal(acc.toolCalls[0].name, 'echo'); // name fragments joined
   assert.equal(acc.toolCalls[0].arguments, '{"a":1}'); // arg fragments joined
   assert.equal(deltas[1].content, 'Hel'); // per-chunk delta returned for live streaming
+  assert.deepEqual(deltas[3].toolInputStart, { id: 'c1', name: 'ec' });
+  assert.deepEqual(deltas[3].toolInputDelta, { id: 'c1', name: 'ec', delta: '{"a"' });
+  assert.deepEqual(deltas[4].toolInputDelta, { id: 'c1', name: 'echo', delta: ':1}' });
 });
 
 test('anthropic: system field + tool_use / tool_result blocks', () => {

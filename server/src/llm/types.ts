@@ -56,6 +56,9 @@ export interface LlmConfig {
 export interface LlmDelta {
   content?: string;
   reasoning?: string;
+  toolInputStart?: { id: string; name: string };
+  toolInputDelta?: { id: string; name?: string; delta: string };
+  toolInputAvailable?: { id: string; name: string; input: unknown };
 }
 
 /** A pluggable LLM backend. */

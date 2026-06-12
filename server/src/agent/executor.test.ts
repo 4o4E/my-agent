@@ -6,6 +6,20 @@ import type { Provider } from '../llm/types.js';
 import type { AgentEvent } from './types.js';
 import { config } from '../config.js';
 import { maskPlaceholder } from './compaction.js';
+import type { ToolSettings } from '../settings.js';
+
+const TEST_TOOL_SETTINGS: ToolSettings = {
+  sandbox: 'enforce',
+  sandboxBackend: 'bwrap',
+  workspaceRoot: '/workspace/agent',
+  allow: [],
+  deny: [],
+  shellEnabled: true,
+  shellAllowCommands: ['git', 'ls'],
+  network: 'enabled',
+  shellDeny: [],
+  maxOutput: 40000,
+};
 
 function finishCall(id: string, progress: string, completed = true) {
   return {
@@ -48,7 +62,7 @@ test('executeRun: runs the loop across steps and finalizes', async () => {
   assert.equal(finished?.output, 'all done');
 
   // Two steps: step 1 (tool call), step 2 (explicit finish tool).
-  const types = published.map((e) => `${e.step}:${e.type}`);
+  const types = published.filter((e) => e.type !== 'stream_stats').map((e) => `${e.step}:${e.type}`);
   assert.deepEqual(types, [
     '1:step_start',
     '1:tool_call',
@@ -59,10 +73,71 @@ test('executeRun: runs the loop across steps and finalizes', async () => {
     '2:tool_result',
     '2:final',
   ]);
+  const stats = published.filter((e): e is Extract<AgentEvent, { type: 'stream_stats' }> => e.type === 'stream_stats');
+  assert.ok(stats.some((e) => e.totals.outputChars >= 'all done'.length));
+  assert.ok(stats.some((e) => e.totals.toolInputChars > 0));
+  assert.ok(stats.some((e) => e.totals.toolOutputChars > 0));
 
   // Conversation persisted as user + assistant/tool for glob + assistant/tool for finish.
   const msgs = await store.loadThreadMessages(thread.id);
   assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant', 'tool']);
+});
+
+test('executeRun: injects the current workspace root into the LLM context', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'clone a repo');
+  let systemText = '';
+
+  await executeRun(run.id, {
+    store,
+    provider: {
+      name: 'capture-context',
+      async complete(messages) {
+        systemText = messages.filter((m) => m.role === 'system').map((m) => m.content ?? '').join('\n');
+        return { content: null, toolCalls: [finishCall('finish_1', 'done')] };
+      },
+    },
+    publish: () => {},
+    hardStepCap: 3,
+    toolSettings: TEST_TOOL_SETTINGS,
+  });
+
+  assert.match(systemText, /Persistent workspace root/);
+  assert.match(systemText, /\/workspace\/agent/);
+  assert.match(systemText, /\/home\/user/);
+  assert.match(systemText, /\/tmp/);
+  assert.match(systemText, /当前可用目录/);
+});
+
+test('executeRun: streams tool input stats without double counting final tool args', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'finish via streamed tool args');
+  const args = JSON.stringify({ progress: 'done', completed: true });
+  const published: AgentEvent[] = [];
+
+  await executeRun(run.id, {
+    store,
+    provider: {
+      name: 'stream-tool-input',
+      async complete() {
+        throw new Error('complete should not be used');
+      },
+      async completeStream(_messages, _tools, onDelta) {
+        onDelta({ toolInputStart: { id: 'finish_1', name: 'finish_conversation' } });
+        onDelta({ toolInputDelta: { id: 'finish_1', name: 'finish_conversation', delta: args.slice(0, 12) } });
+        onDelta({ toolInputDelta: { id: 'finish_1', name: 'finish_conversation', delta: args.slice(12) } });
+        return { content: null, toolCalls: [finishCall('finish_1', 'done')] };
+      },
+    },
+    publish: (_id, e) => published.push(e),
+    hardStepCap: 3,
+  });
+
+  const stats = published.filter((e): e is Extract<AgentEvent, { type: 'stream_stats' }> => e.type === 'stream_stats');
+  const maxToolInputChars = Math.max(...stats.map((e) => e.totals.toolInputChars));
+  assert.equal(maxToolInputChars, Array.from(args).length);
 });
 
 test('executeRun: keeps multi-turn memory within a thread', async () => {

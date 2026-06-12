@@ -77,6 +77,9 @@ export function uiEventStreamToChunks(
         switch (e.kind) {
           case 'step_start':
             break;
+          case 'stream_stats':
+            safe({ type: 'data-stream-stats', id: `stats-${runId}`, data: e.stats } as unknown as UIMessageChunk);
+            break;
           case 'a2ui':
             // Declarative UI surface → an in-place-reconciling data part keyed by
             // surfaceId; rendered by the A2UI catalog in Conversation.

@@ -48,6 +48,23 @@ Guidelines:
      completed=true and a clear progress summary / 只有任务完成后，调用
      finish_conversation，设置 completed=true，并写清楚工作进度。`;
 
+export interface RuntimeContextInfo {
+  workspaceRoot: string;
+  sandbox: 'off' | 'enforce';
+  sandboxBackend: string;
+  network: 'enabled' | 'disabled';
+}
+
+export function renderRuntimeContext(info: RuntimeContextInfo): string {
+  return `Runtime filesystem context / 运行时文件系统上下文:
+- Persistent workspace root / 持久工作区根目录: ${info.workspaceRoot}
+- Treat this directory as the current available directory for this run. Clone repositories, create reports, and write any persistent files under this directory.
+- 请把这个目录视为本次 run 当前可用目录。clone 仓库、创建报告、写入任何需要保留的文件，都必须放在这个目录下。
+- Do not write persistent files to /home/user, /tmp, the app repo root, or any path outside the workspace root unless the user explicitly asks and the tool policy allows it.
+- 不要把需要保留的文件写到 /home/user、/tmp、应用仓库根目录或 workspace 之外的路径，除非用户明确要求且工具策略允许。
+- Tool sandbox / 工具沙箱: ${info.sandbox}; shell backend / shell 后端: ${info.sandboxBackend}; network / 网络: ${info.network}.`;
+}
+
 /** What a compaction pass did, surfaced for events/telemetry. */
 export interface CompactionInfo {
   estBefore: number;
@@ -74,6 +91,11 @@ interface WorkingMessage {
   dbId: number | null;
 }
 
+interface ContextOptions {
+  appendUserInput?: boolean;
+  runtimeContext?: string;
+}
+
 /**
  * Holds the working message list for a single run and keeps it under the context
  * budget. A fresh system prompt, the prior thread history (multi-turn memory, already
@@ -92,9 +114,10 @@ export class ContextManager {
   /** Chars actually sent on the last LLM call, used to calibrate the ratio. */
   private lastSentChars = 0;
 
-  constructor(priorMessages: ThreadMessage[], userInput: string, initialGoal = '', opts: { appendUserInput?: boolean } = {}) {
+  constructor(priorMessages: ThreadMessage[], userInput: string, initialGoal = '', opts: ContextOptions = {}) {
     const appendUserInput = opts.appendUserInput ?? true;
     this.items.push({ msg: { role: 'system', content: SYSTEM_PROMPT }, dbId: null });
+    if (opts.runtimeContext) this.items.push({ msg: { role: 'system', content: opts.runtimeContext }, dbId: null });
     this.goalItem = { msg: { role: 'system', content: initialGoal }, dbId: null };
     this.items.push(this.goalItem);
     for (const p of priorMessages) {

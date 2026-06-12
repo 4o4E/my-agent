@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import { Bot, ChevronDown, Copy, Fingerprint, FileText, Workflow } from 'lucide-react';
+import { Activity, Bot, ChevronDown, Copy, Fingerprint, FileText, Workflow } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import {
   Conversation as AIConversation,
@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 import { MarkdownContent } from './MarkdownContent';
 import type { StreamdownProps } from 'streamdown';
 import { AskUserQuestionCard, emptyAskUserDraft, type AskUserDraft } from './AskUserCard';
-import type { AskUserAnswer, AskUserSpec } from '@/api';
+import type { AskUserAnswer, AskUserSpec, StreamStats } from '@/api';
 
 type Part = UIMessage['parts'][number];
 type Timing = { startedAt?: string; endedAt?: string; durationMs?: number };
@@ -28,6 +28,7 @@ type FileToken = { kind?: string; path: string; name?: string; size?: number };
 
 const RELATIVE_PATH_RE = /(?:\.{1,2}\/)?(?:server|web|docs|src|uploads|tests)\/[A-Za-z0-9._~+/@:-]+/g;
 const FILE_LINK_PREFIX = 'my-agent-file://';
+const STREAM_STATS_POINTS = 24;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -46,7 +47,7 @@ function isActivityPart(p: Part): boolean {
 }
 
 function isHiddenDataPart(p: Part): boolean {
-  return p.type === 'data-run-id' || p.type === 'data-tool-timing' || p.type === 'data-reasoning-timing';
+  return p.type === 'data-run-id' || p.type === 'data-tool-timing' || p.type === 'data-reasoning-timing' || p.type === 'data-stream-stats';
 }
 
 function durationFromTiming(t?: Timing): number | undefined {
@@ -55,6 +56,85 @@ function durationFromTiming(t?: Timing): number | undefined {
     return Math.max(0, new Date(t.endedAt).getTime() - new Date(t.startedAt).getTime());
   }
   return t.durationMs;
+}
+
+function MiniSparkline({ values }: { values: number[] }) {
+  const width = 92;
+  const height = 24;
+  const samples = values.length ? values : [0];
+  const max = Math.max(1, ...samples);
+  const points = samples
+    .map((value, index) => {
+      const x = samples.length === 1 ? width : (index / (samples.length - 1)) * width;
+      const y = height - (value / max) * (height - 4) - 2;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+
+  return (
+    <svg className="h-6 w-[92px] overflow-visible" viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function ProcessingDots() {
+  return (
+    <span className="flex items-end gap-0.5" aria-hidden="true">
+      <span className="size-1 animate-pulse rounded-full bg-current [animation-delay:-240ms]" />
+      <span className="size-1 animate-pulse rounded-full bg-current [animation-delay:-120ms]" />
+      <span className="size-1 animate-pulse rounded-full bg-current" />
+    </span>
+  );
+}
+
+function StreamStatusBar({ parts, active }: { parts: Part[]; active: boolean }) {
+  const stats = latestStreamStats(parts);
+  if (!stats) return null;
+  const running = active && stats.stage !== 'done' && stats.stage !== 'error';
+  const toolChars = stats.totals.toolInputChars + stats.totals.toolOutputChars;
+
+  return (
+    <div className="not-prose mt-3 flex min-h-8 w-full flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 pt-2 text-xs text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5">
+        <Activity className={cn('size-3.5', running && 'animate-pulse text-primary')} />
+        <span>{streamStageLabel(stats)}</span>
+        {running && <ProcessingDots />}
+      </span>
+      <span className="tabular-nums">累计 {stats.totals.totalChars.toLocaleString()} 字符</span>
+      <span className="tabular-nums">正文 {stats.totals.outputChars.toLocaleString()}</span>
+      <span className="tabular-nums">思考 {stats.totals.reasoningChars.toLocaleString()}</span>
+      <span className="tabular-nums">工具 {toolChars.toLocaleString()}</span>
+      {running && (
+        <>
+          <span className="tabular-nums">{Math.round(stats.rate.charsPerSecond).toLocaleString()} 字/秒</span>
+          <span className="text-primary/80">
+            <MiniSparkline values={stats.rate.history.slice(-STREAM_STATS_POINTS)} />
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function latestStreamStats(parts: Part[]): StreamStats | null {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i] as { type: string; data?: StreamStats };
+    if (part.type === 'data-stream-stats' && part.data) return part.data;
+  }
+  return null;
+}
+
+function streamStageLabel(stats: StreamStats): string {
+  const tool = stats.activeTool?.name ? ` · ${stats.activeTool.name}` : '';
+  if (stats.stage === 'llm_waiting') return '等待模型';
+  if (stats.stage === 'reasoning') return '思考中';
+  if (stats.stage === 'output') return '输出中';
+  if (stats.stage === 'tool_call') return `准备调用工具${tool}`;
+  if (stats.stage === 'tool_running') return `工具执行中${tool}`;
+  if (stats.stage === 'tool_result') return `工具已返回${tool}`;
+  if (stats.stage === 'error') return '运行出错';
+  return '输出完成';
 }
 
 function formatDuration(ms?: number): string | undefined {
@@ -495,6 +575,7 @@ function UserMessageActions({ message, runId }: { message: UIMessage; runId: str
 
 function AssistantMessage({
   message,
+  active,
   lastToolKey,
   lastActivityKey,
   workspaceRoot,
@@ -505,6 +586,7 @@ function AssistantMessage({
   onAskUserCancel,
 }: {
   message: UIMessage;
+  active: boolean;
   lastToolKey: string | null;
   lastActivityKey: string | null;
   workspaceRoot: string | null;
@@ -593,7 +675,12 @@ function AssistantMessage({
       />,
     );
   }
-  return <>{nodes}</>;
+  return (
+    <>
+      {nodes}
+      <StreamStatusBar parts={message.parts} active={active} />
+    </>
+  );
 }
 
 export function Conversation({
@@ -622,9 +709,11 @@ export function Conversation({
   // 记录整段对话里最后一个工具调用，只保持它展开，其余默认折叠。
   let lastToolKey: string | null = null;
   let lastActivityKey: string | null = null;
+  let activeAssistantId: string | null = null;
   if (busy) {
     for (const m of messages) {
       if (m.role === 'user') continue;
+      activeAssistantId = m.id;
       m.parts.forEach((part, i) => {
         if (isToolPart(part)) lastToolKey = `${m.id}:${i}`;
         if (isActivityPart(part)) lastActivityKey = `${m.id}:${i}`;
@@ -662,6 +751,7 @@ export function Conversation({
                     <MessageContent>
                       <AssistantMessage
                         message={m}
+                        active={busy && m.id === activeAssistantId}
                         lastToolKey={lastToolKey}
                         lastActivityKey={lastActivityKey}
                         workspaceRoot={workspaceRoot}

@@ -391,7 +391,7 @@ export function App() {
   const title = activeThread?.title ?? (activeThreadId ? '会话' : '新会话');
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
       <Sidebar
         threads={threads}
         activeId={activeThreadId}

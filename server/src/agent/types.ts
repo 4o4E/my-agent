@@ -44,12 +44,40 @@ export interface TimedEventFields {
   durationMs?: number;
 }
 
+export type StreamStage =
+  | 'llm_waiting'
+  | 'reasoning'
+  | 'output'
+  | 'tool_call'
+  | 'tool_running'
+  | 'tool_result'
+  | 'done'
+  | 'error';
+
+export interface StreamStats {
+  stage: StreamStage;
+  updatedAt: string;
+  activeTool?: { id: string; name: string };
+  totals: {
+    outputChars: number;
+    reasoningChars: number;
+    toolInputChars: number;
+    toolOutputChars: number;
+    totalChars: number;
+  };
+  rate: {
+    charsPerSecond: number;
+    history: number[];
+  };
+}
+
 /**
  * Events streamed to the client and persisted. `step` is the 1-based step index
  * within a run (one LLM turn + its tool calls).
  */
 export type AgentEvent =
   | { type: 'step_start'; step: number }
+  | ({ type: 'stream_stats'; step: number } & StreamStats)
   | ({ type: 'reasoning'; step: number; text: string } & Partial<TimedEventFields>)
   | ({ type: 'reasoning_timing'; step: number } & TimedEventFields)
   | { type: 'llm_delta'; step: number; text: string }

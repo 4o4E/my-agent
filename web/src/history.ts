@@ -47,6 +47,8 @@ export function foldUiEventsToParts(events: UiEvent[]): Part[] {
 
   for (const e of events) {
     switch (e.kind) {
+      case 'stream_stats':
+        break;
       case 'reasoning':
         flushText();
         reasonStep = e.step;

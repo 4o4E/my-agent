@@ -1,6 +1,7 @@
 // Mirror of the server's AgentEvent union (kept in sync manually for the skeleton).
 export type AgentEvent =
   | { type: 'step_start'; step: number }
+  | ({ type: 'stream_stats'; step: number } & StreamStats)
   | { type: 'reasoning'; step: number; text: string; startedAt?: string; endedAt?: string; durationMs?: number }
   | { type: 'reasoning_timing'; step: number; startedAt: string; endedAt: string; durationMs: number }
   | { type: 'llm_delta'; step: number; text: string }
@@ -15,6 +16,33 @@ export type AgentEvent =
   | { type: 'recovery'; step: number; message: string }
   | { type: 'final'; step: number; output: string }
   | { type: 'error'; step: number; message: string };
+
+export type StreamStage =
+  | 'llm_waiting'
+  | 'reasoning'
+  | 'output'
+  | 'tool_call'
+  | 'tool_running'
+  | 'tool_result'
+  | 'done'
+  | 'error';
+
+export interface StreamStats {
+  stage: StreamStage;
+  updatedAt: string;
+  activeTool?: { id: string; name: string };
+  totals: {
+    outputChars: number;
+    reasoningChars: number;
+    toolInputChars: number;
+    toolOutputChars: number;
+    totalChars: number;
+  };
+  rate: {
+    charsPerSecond: number;
+    history: number[];
+  };
+}
 
 export interface Thread {
   id: string;

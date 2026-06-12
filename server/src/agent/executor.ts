@@ -9,12 +9,17 @@ import { runBus } from './bus.js';
 import type { AgentEvent } from './types.js';
 import { store as defaultStore } from '../store/index.js';
 import type { Store } from '../store/types.js';
+import { getToolSettings } from '../settings.js';
+import type { ToolSettings } from '../settings.js';
 import { withSpan } from '../telemetry.js';
 import type { A2uiMessage } from './a2ui.js';
-import type { AskUserAnswer, AskUserMode, AskUserOption, AskUserSpec } from './types.js';
+import type { AskUserAnswer, AskUserMode, AskUserOption, AskUserSpec, StreamStage, StreamStats } from './types.js';
+import { renderRuntimeContext } from './context.js';
 
 const FINISH_TOOL_NAME = 'finish_conversation';
 const ASK_USER_TOOL_NAME = 'ask_user';
+const STREAM_STATS_POINTS = 24;
+const STREAM_STATS_MIN_INTERVAL_MS = 250;
 
 export interface ExecutorDeps {
   provider: Provider;
@@ -24,6 +29,7 @@ export interface ExecutorDeps {
   hardStepCap: number;
   stream: boolean;
   resume: boolean;
+  toolSettings?: ToolSettings;
 }
 
 interface ToolTrace {
@@ -43,6 +49,70 @@ interface LoopGuardHit {
 
 function durationMs(startedAt: string, endedAt: string): number {
   return Math.max(0, new Date(endedAt).getTime() - new Date(startedAt).getTime());
+}
+
+function charCount(value: unknown): number {
+  if (value == null) return 0;
+  return Array.from(typeof value === 'string' ? value : JSON.stringify(value)).length;
+}
+
+class StreamStatsTracker {
+  private totals = { outputChars: 0, reasoningChars: 0, toolInputChars: 0, toolOutputChars: 0, totalChars: 0 };
+  private bucket = { second: Math.floor(Date.now() / 1000), chars: 0 };
+  private history: number[] = [];
+  private lastPublishMs = 0;
+
+  constructor(
+    private readonly runId: string,
+    private readonly publish: (runId: string, event: AgentEvent) => void,
+  ) {}
+
+  add(step: number, stage: StreamStage, kind: keyof Omit<StreamStats['totals'], 'totalChars'>, chars: number, activeTool?: StreamStats['activeTool']) {
+    if (chars <= 0) return;
+    this.roll();
+    this.totals[kind] += chars;
+    this.totals.totalChars += chars;
+    this.bucket.chars += chars;
+    this.publishStats(step, stage, activeTool);
+  }
+
+  mark(step: number, stage: StreamStage, activeTool?: StreamStats['activeTool'], force = false) {
+    this.roll();
+    this.publishStats(step, stage, activeTool, force);
+  }
+
+  startHeartbeat(step: number, stage: () => StreamStage, activeTool?: () => StreamStats['activeTool']): () => void {
+    const timer = setInterval(() => this.mark(step, stage(), activeTool?.(), true), 1000);
+    return () => clearInterval(timer);
+  }
+
+  private roll() {
+    const nowSecond = Math.floor(Date.now() / 1000);
+    if (nowSecond <= this.bucket.second) return;
+    this.history = [...this.history, this.bucket.chars].slice(-STREAM_STATS_POINTS);
+    for (let second = this.bucket.second + 1; second < nowSecond; second++) {
+      this.history = [...this.history, 0].slice(-STREAM_STATS_POINTS);
+    }
+    this.bucket = { second: nowSecond, chars: 0 };
+  }
+
+  private publishStats(step: number, stage: StreamStage, activeTool?: StreamStats['activeTool'], force = false) {
+    const now = Date.now();
+    if (!force && now - this.lastPublishMs < STREAM_STATS_MIN_INTERVAL_MS) return;
+    this.lastPublishMs = now;
+    this.publish(this.runId, {
+      type: 'stream_stats',
+      step,
+      stage,
+      updatedAt: new Date(now).toISOString(),
+      activeTool,
+      totals: { ...this.totals },
+      rate: {
+        charsPerSecond: this.bucket.chars,
+        history: [...this.history, this.bucket.chars].slice(-STREAM_STATS_POINTS),
+      },
+    });
+  }
 }
 
 function withToolData(message: A2uiMessage, toolCalls: ToolTrace[]): A2uiMessage {
@@ -255,7 +325,11 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     // Goal 锚点每步重新注入；恢复时优先使用已落库状态，避免目标回退。
     let goal = initialRun.goal_state ?? initGoal(userInput);
     if (!initialRun.goal_state) await store.setGoalState(runId, goal);
-    const ctx = new ContextManager(prior, userInput, renderGoal(goal), { appendUserInput: !isResume });
+    const toolSettings = deps.toolSettings ?? (await getToolSettings());
+    const ctx = new ContextManager(prior, userInput, renderGoal(goal), {
+      appendUserInput: !isResume,
+      runtimeContext: renderRuntimeContext(toolSettings),
+    });
     currentCtx = ctx;
     if (!isResume) {
       // 新 run 只在首次执行时写入用户输入；恢复时历史里已经有这条消息。
@@ -263,6 +337,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     }
 
     const tools = toolSchemas();
+    const streamStats = new StreamStatsTracker(runId, publish);
     const recentToolSignatures: string[] = [];
     const recentFailures: string[] = [];
     let noActionTurns = 0;
@@ -282,6 +357,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
 
       const step = await store.createStep(runId, stepIdx);
       await emit(step.id, { type: 'step_start', step: stepIdx });
+      streamStats.mark(stepIdx, 'llm_waiting', undefined, true);
 
       // Keep the working context under budget before spending a model call. Masking
       // decisions are persisted so they survive a restart (window drops are not).
@@ -295,29 +371,76 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       let publishedDelta = false;
       const llmStartedAt = new Date().toISOString();
       let reasoningStartedAt: string | null = null;
-      if (stream && provider.completeStream) {
-        try {
-          result = await provider.completeStream(ctx.all(), tools, (d) => {
-            publishedDelta = true;
-            if (d.reasoning) {
-              reasoningStartedAt ??= new Date().toISOString();
-              publish(runId, { type: 'reasoning', step: stepIdx, text: d.reasoning, startedAt: reasoningStartedAt });
-            }
-            if (d.content) publish(runId, { type: 'llm_delta', step: stepIdx, text: d.content });
-          });
-          liveStreamed = true;
-        } catch (err) {
-          if (publishedDelta) throw err; // can't cleanly recover after partial output
-          // otherwise fall through to the non-streaming path (which has retry)
+      let llmStage: StreamStage = 'llm_waiting';
+      const streamedToolInputChars = new Map<string, number>();
+      const streamedToolNames = new Map<string, string>();
+      const stopLlmHeartbeat = streamStats.startHeartbeat(stepIdx, () => llmStage);
+      try {
+        if (stream && provider.completeStream) {
+          try {
+            result = await provider.completeStream(ctx.all(), tools, (d) => {
+              publishedDelta = true;
+              if (d.toolInputStart) {
+                llmStage = 'tool_call';
+                streamedToolNames.set(d.toolInputStart.id, d.toolInputStart.name);
+                streamStats.mark(stepIdx, 'tool_call', d.toolInputStart, true);
+              }
+              if (d.toolInputDelta) {
+                llmStage = 'tool_call';
+                if (d.toolInputDelta.name) streamedToolNames.set(d.toolInputDelta.id, d.toolInputDelta.name);
+                const name = streamedToolNames.get(d.toolInputDelta.id) ?? d.toolInputDelta.name ?? 'tool';
+                const chars = charCount(d.toolInputDelta.delta);
+                streamedToolInputChars.set(d.toolInputDelta.id, (streamedToolInputChars.get(d.toolInputDelta.id) ?? 0) + chars);
+                streamStats.add(stepIdx, 'tool_call', 'toolInputChars', chars, { id: d.toolInputDelta.id, name });
+              }
+              if (d.toolInputAvailable) {
+                llmStage = 'tool_call';
+                streamedToolNames.set(d.toolInputAvailable.id, d.toolInputAvailable.name);
+                const chars = charCount(d.toolInputAvailable.input);
+                const counted = streamedToolInputChars.get(d.toolInputAvailable.id) ?? 0;
+                const remaining = Math.max(0, chars - counted);
+                if (remaining) {
+                  streamedToolInputChars.set(d.toolInputAvailable.id, counted + remaining);
+                  streamStats.add(stepIdx, 'tool_call', 'toolInputChars', remaining, {
+                    id: d.toolInputAvailable.id,
+                    name: d.toolInputAvailable.name,
+                  });
+                } else {
+                  streamStats.mark(stepIdx, 'tool_call', { id: d.toolInputAvailable.id, name: d.toolInputAvailable.name }, true);
+                }
+              }
+              if (d.reasoning) {
+                llmStage = 'reasoning';
+                reasoningStartedAt ??= new Date().toISOString();
+                streamStats.add(stepIdx, 'reasoning', 'reasoningChars', charCount(d.reasoning));
+                publish(runId, { type: 'reasoning', step: stepIdx, text: d.reasoning, startedAt: reasoningStartedAt });
+              }
+              if (d.content) {
+                llmStage = 'output';
+                streamStats.add(stepIdx, 'output', 'outputChars', charCount(d.content));
+                publish(runId, { type: 'llm_delta', step: stepIdx, text: d.content });
+              }
+            });
+            liveStreamed = true;
+          } catch (err) {
+            if (publishedDelta) throw err; // can't cleanly recover after partial output
+            // otherwise fall through to the non-streaming path (which has retry)
+          }
         }
+        if (!result) result = await provider.complete(ctx.all(), tools);
+      } finally {
+        stopLlmHeartbeat();
       }
-      if (!result) result = await provider.complete(ctx.all(), tools);
       const llmEndedAt = new Date().toISOString();
 
       // Calibrate the token estimator from real usage for the next compaction check.
       ctx.recordUsage(result.usage);
 
       const { content, reasoning, toolCalls } = result;
+      if (!liveStreamed) {
+        if (reasoning) streamStats.add(stepIdx, 'reasoning', 'reasoningChars', charCount(reasoning), undefined);
+        if (content) streamStats.add(stepIdx, 'output', 'outputChars', charCount(content), undefined);
+      }
 
       // Reasoning: surfaced for display only, NOT fed back into context.
       if (reasoning) {
@@ -376,6 +499,10 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         const startedAt = new Date().toISOString();
         const trace: ToolTrace = { id: call.id, name: call.name, args, startedAt };
         toolTraces.push(trace);
+        const activeTool = { id: call.id, name: call.name };
+        const toolInputChars = charCount(call.arguments);
+        const streamedInputChars = streamedToolInputChars.get(call.id) ?? 0;
+        streamStats.add(stepIdx, 'tool_call', 'toolInputChars', Math.max(0, toolInputChars - streamedInputChars), activeTool);
         await emit(step.id, { type: 'tool_call', step: stepIdx, id: call.id, name: call.name, args, startedAt });
 
         if (call.name === ASK_USER_TOOL_NAME) {
@@ -387,6 +514,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
           trace.result = text;
           trace.endedAt = endedAt;
           trace.durationMs = durationMs(startedAt, endedAt);
+          streamStats.add(stepIdx, 'tool_result', 'toolOutputChars', charCount(text), activeTool);
           await emit(step.id, {
             type: 'tool_result',
             step: stepIdx,
@@ -405,19 +533,27 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
           return;
         }
 
+        let toolStage: StreamStage = 'tool_running';
+        const stopToolHeartbeat = streamStats.startHeartbeat(stepIdx, () => toolStage, () => activeTool);
         const result = await withSpan(
           'execute_tool',
           { 'gen_ai.tool.name': call.name, 'tool.call_id': call.id },
           async (span) => {
-            const out = await runTool(call.name, args);
-            span.setAttribute('tool.result.length', out.text.length);
-            return out;
+            try {
+              const out = await runTool(call.name, args);
+              span.setAttribute('tool.result.length', out.text.length);
+              return out;
+            } finally {
+              stopToolHeartbeat();
+            }
           },
         );
         const endedAt = new Date().toISOString();
         trace.result = result.text;
         trace.endedAt = endedAt;
         trace.durationMs = durationMs(startedAt, endedAt);
+        toolStage = 'tool_result';
+        streamStats.add(stepIdx, 'tool_result', 'toolOutputChars', charCount(result.text), activeTool);
         await emit(step.id, {
           type: 'tool_result',
           step: stepIdx,
@@ -472,6 +608,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         await store.setGoalState(runId, goal);
         ctx.setGoal(renderGoal(goal));
         await persistCompaction(step.id, ctx.compactForHistory());
+        streamStats.mark(stepIdx, 'done', undefined, true);
         await emit(step.id, { type: 'final', step: stepIdx, output: completedOutput });
         await store.setRunStatus(runId, 'done', { output: completedOutput });
         return;

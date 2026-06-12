@@ -91,6 +91,10 @@
   #root {
     height: 100%;
   }
+  html,
+  body {
+    overflow: hidden;
+  }
   body {
     @apply bg-background text-foreground font-sans antialiased;
   }
