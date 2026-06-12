@@ -205,8 +205,10 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       currentCtx?.setSummaryDbId(compaction.summaryMessage, summaryId);
       await store.markMessagesCollapsed(compaction.summarizedIds, 'summarized');
     }
-    if (compaction.collapsedIds.length) {
-      await store.markMessagesCollapsed(compaction.collapsedIds, 'masked');
+    const summarized = new Set(compaction.summarizedIds);
+    const maskedIds = compaction.collapsedIds.filter((id) => !summarized.has(id));
+    if (maskedIds.length) {
+      await store.markMessagesCollapsed(maskedIds, 'masked');
     }
     await emit(stepId, { type: 'compaction', step: currentStepIdx, ...compaction.info });
   };

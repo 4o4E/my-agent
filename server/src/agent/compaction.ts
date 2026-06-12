@@ -34,6 +34,7 @@ const MASK_MIN_CHARS = 200; // don't bother masking already-small tool results
 const MASK_HEAD_CHARS = 140; // how much of the original to keep as a recall hint
 const TOOL_ARGS_MASK_MIN_CHARS = 1000; // small args are useful enough to keep verbatim
 const TOOL_ARGS_HEAD_CHARS = 240;
+const DISPLAY_PAYLOAD_TOOLS = new Set(['render_ui']);
 
 /** The placeholder a masked tool result shows the model: a short head hint plus an
  *  elision marker. Derived purely from the original content, so the store recomputes
@@ -45,21 +46,43 @@ export function maskPlaceholder(original: string): string {
   return `${head}\n…[+${original.length - head.length} chars elided]`;
 }
 
-/** 压缩旧 assistant tool call 的大参数。保留 id/name 和参数开头，避免破坏
- *  provider 需要的 tool_call ↔ tool_result 结构，同时不把大 JSON 继续喂给模型。 */
+function maskedToolCallArguments(call: LlmToolCall): string {
+  const base = {
+    context_elided: true,
+    not_executable: true,
+    tool_name: call.name,
+    original_chars: call.arguments.length,
+    instruction:
+      'Historical tool-call arguments were compacted. Do not copy this object into a new tool call; rebuild complete arguments if the tool is needed.',
+    instruction_zh: '这是压缩后的历史工具调用参数。不要把这个对象复制成新的工具调用；如果仍需调用工具，请重新构造完整参数。',
+  };
+
+  if (DISPLAY_PAYLOAD_TOOLS.has(call.name)) {
+    return JSON.stringify({
+      ...base,
+      reason:
+        'Historical display payloads are intentionally omitted because they are large UI snapshots, not reusable reasoning context.',
+      reason_zh: '历史展示 payload 体积较大，且不是可复用的推理上下文，因此已被故意省略。',
+    });
+  }
+
+  const preview = call.arguments.slice(0, TOOL_ARGS_HEAD_CHARS).replace(/\s+/g, ' ').trimEnd();
+  return JSON.stringify({
+    ...base,
+    non_executable_preview: preview,
+  });
+}
+
+/** 压缩旧 assistant tool call 的大参数。保留 id/name，避免破坏 provider 需要的
+ *  tool_call ↔ tool_result 结构；参数替换成明确不可执行的历史占位，避免模型复用。 */
 export function maskToolCallArguments(calls: LlmToolCall[]): { calls: LlmToolCall[]; changed: boolean } {
   let changed = false;
   const out = calls.map((call) => {
     if (call.arguments.length < TOOL_ARGS_MASK_MIN_CHARS) return call;
     changed = true;
-    const head = call.arguments.slice(0, TOOL_ARGS_HEAD_CHARS).replace(/\s+/g, ' ').trimEnd();
     return {
       ...call,
-      arguments: JSON.stringify({
-        context_elided: true,
-        original_chars: call.arguments.length,
-        head,
-      }),
+      arguments: maskedToolCallArguments(call),
     };
   });
   return { calls: out, changed };
@@ -68,6 +91,8 @@ export function maskToolCallArguments(calls: LlmToolCall[]): { calls: LlmToolCal
 export interface MaskOptions {
   /** Most-recent messages never masked. */
   keepRecent: number;
+  /** These tool calls carry display payloads; mask large args even in recent turns. */
+  forceToolNames?: string[];
 }
 
 /**
@@ -100,10 +125,12 @@ export function maskOldAssistantToolCalls(
   opts: MaskOptions,
 ): { messages: LlmMessage[]; masked: number } {
   const cutoff = messages.length - Math.max(0, opts.keepRecent);
+  const force = new Set(opts.forceToolNames ?? []);
   let masked = 0;
   const out = messages.map((m, i) => {
-    if (i >= cutoff) return m;
     if (m.role !== 'assistant' || m.collapsed || !m.toolCalls?.length) return m;
+    const shouldMask = i < cutoff || m.toolCalls.some((call) => force.has(call.name));
+    if (!shouldMask) return m;
     const result = maskToolCallArguments(m.toolCalls);
     if (!result.changed) return m;
     masked += 1;

@@ -12,6 +12,7 @@ import { grepTool } from './grep.js';
 import { truncateFetchText } from './webFetch.js';
 import { getTool, runTool, toolSchemas } from './registry.js';
 import type { ToolResult } from './types.js';
+import { normalizeToolSettings } from '../settings.js';
 
 /** Tools may return a string or a ToolResult; tests assert on the text. */
 const text = (r: string | ToolResult): string => (typeof r === 'string' ? r : r.text);
@@ -98,4 +99,9 @@ test('web_fetch truncation is visible to the model', () => {
 test('web_fetch truncation respects very small limits', () => {
   const out = truncateFetchText('a'.repeat(2000), 12);
   assert.ok(out.length <= 12);
+});
+
+test('tool settings clamp maxOutput to the context-safe ceiling', () => {
+  const settings = normalizeToolSettings({ maxOutput: 100000 });
+  assert.equal(settings.maxOutput, 40000);
 });

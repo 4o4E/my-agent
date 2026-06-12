@@ -67,8 +67,45 @@ test('maskOldAssistantToolCalls elides old large tool arguments but keeps ids', 
   assert.equal(call?.id, 'ui1');
   assert.equal(call?.name, 'render_ui');
   assert.ok((call?.arguments.length ?? 0) < hugeArgs.length);
-  assert.equal(JSON.parse(call?.arguments ?? '{}').context_elided, true);
+  const placeholder = JSON.parse(call?.arguments ?? '{}');
+  assert.equal(placeholder.context_elided, true);
+  assert.equal(placeholder.not_executable, true);
+  assert.equal(placeholder.tool_name, 'render_ui');
+  assert.equal('root' in placeholder, false);
+  assert.equal('components' in placeholder, false);
   assert.ok(messages.some((m) => m.role === 'tool' && m.toolCallId === call?.id));
+});
+
+test('maskOldAssistantToolCalls masks forced display tools even when recent', () => {
+  const hugeArgs = JSON.stringify({ root: 'root', components: big(3000) });
+  const msgs: LlmMessage[] = [
+    { role: 'user', content: 'render' },
+    { role: 'assistant', content: null, toolCalls: [{ id: 'ui1', name: 'render_ui', arguments: hugeArgs }] },
+  ];
+
+  const { messages, masked } = maskOldAssistantToolCalls(msgs, { keepRecent: 10, forceToolNames: ['render_ui'] });
+
+  assert.equal(masked, 1);
+  assert.equal(messages[1].collapsed, 'masked');
+  const placeholder = JSON.parse(messages[1].toolCalls?.[0]?.arguments ?? '{}');
+  assert.equal(placeholder.context_elided, true);
+  assert.equal(placeholder.not_executable, true);
+  assert.equal('root' in placeholder, false);
+  assert.equal('components' in placeholder, false);
+});
+
+test('maskOldAssistantToolCalls keeps non-forced recent tool args', () => {
+  const hugeArgs = JSON.stringify({ command: big(3000) });
+  const msgs: LlmMessage[] = [
+    { role: 'user', content: 'run' },
+    { role: 'assistant', content: null, toolCalls: [{ id: 'sh1', name: 'shell', arguments: hugeArgs }] },
+  ];
+
+  const { messages, masked } = maskOldAssistantToolCalls(msgs, { keepRecent: 10, forceToolNames: ['render_ui'] });
+
+  assert.equal(masked, 0);
+  assert.equal(messages[1].collapsed, undefined);
+  assert.equal(messages[1].toolCalls?.[0]?.arguments, hugeArgs);
 });
 
 test('slidingWindow keeps system + first user anchor and cuts on a safe boundary', () => {

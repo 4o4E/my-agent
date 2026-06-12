@@ -33,6 +33,25 @@ test('maybeCompact reports the DB ids of newly-masked tool results', async () =>
   }
 });
 
+test('maybeCompact masks display tool args even below the warn threshold', async () => {
+  const prior: ThreadMessage[] = [
+    {
+      id: 30,
+      role: 'assistant',
+      content: null,
+      toolCalls: [{ id: 'ui1', name: 'render_ui', arguments: JSON.stringify({ components: 'z'.repeat(3000) }) }],
+    },
+    { id: 31, role: 'tool', content: 'UI rendered.', toolCallId: 'ui1' },
+  ];
+  const ctx = new ContextManager(prior, 'continue');
+  const res = await ctx.maybeCompact();
+
+  assert.ok(res, 'expected display payload compaction to run');
+  assert.equal(res.info.reason, 'display-payload');
+  assert.equal(res.info.summarized, 0);
+  assert.deepEqual(res.collapsedIds, [30]);
+});
+
 test('compactForHistory masks old bulky payloads even below live threshold', () => {
   const { keepRecentMessages } = config.agent;
   config.agent.keepRecentMessages = 2;
@@ -49,6 +68,7 @@ test('compactForHistory masks old bulky payloads even below live threshold', () 
     assert.ok(res, 'expected history compaction to mask old payloads');
     assert.deepEqual(res.collapsedIds, [20, 21]);
     assert.equal(res.info.reason, 'post-run-history');
+    assert.equal(res.info.summarized, 0);
     assert.ok(res.info.estAfter < res.info.estBefore);
   } finally {
     config.agent.keepRecentMessages = keepRecentMessages;
@@ -109,7 +129,12 @@ test('store returns masked assistant tool-call args on reload', async () => {
   assert.equal(call?.id, 'ui1');
   assert.equal(call?.name, 'render_ui');
   assert.ok((call?.arguments.length ?? 0) < args.length);
-  assert.equal(JSON.parse(call?.arguments ?? '{}').context_elided, true);
+  const placeholder = JSON.parse(call?.arguments ?? '{}');
+  assert.equal(placeholder.context_elided, true);
+  assert.equal(placeholder.not_executable, true);
+  assert.equal(placeholder.tool_name, 'render_ui');
+  assert.equal('root' in placeholder, false);
+  assert.equal('components' in placeholder, false);
 });
 
 test('summarized rows are omitted from the reloaded view', async () => {

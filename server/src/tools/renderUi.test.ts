@@ -31,6 +31,20 @@ test('render_ui rejects missing root / empty components', async () => {
   assert.equal(r.display, undefined);
 });
 
+test('render_ui rejects compacted historical placeholders with a corrective bilingual error', async () => {
+  const r = (await renderUiTool.run({ context_elided: true, not_executable: true, tool_name: 'render_ui' })) as {
+    text: string;
+    display?: unknown;
+  };
+
+  assert.match(r.text, /compacted historical tool-call placeholder/);
+  assert.match(r.text, /Rebuild a complete render_ui payload/);
+  assert.match(r.text, /压缩后的历史工具调用占位符/);
+  assert.match(r.text, /root/);
+  assert.match(r.text, /components/);
+  assert.equal(r.display, undefined);
+});
+
 test('render_ui rejects invalid component trees before emitting display', async () => {
   const cases = [
     { root: 'x', components: [{ id: 'x', component: 'Nope' }], match: /未知组件类型/ },

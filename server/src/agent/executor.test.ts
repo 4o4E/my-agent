@@ -125,7 +125,10 @@ test('executeRun: compacts bulky old history when finishing a run', async () => 
     const oldAssistant = msgs.find((m) => m.toolCalls?.[0]?.id === 'ui-old');
     const oldTool = msgs.find((m) => m.toolCallId === 'ui-old');
     assert.equal(oldAssistant?.collapsed, 'masked');
-    assert.equal(JSON.parse(oldAssistant?.toolCalls?.[0]?.arguments ?? '{}').context_elided, true);
+    const placeholder = JSON.parse(oldAssistant?.toolCalls?.[0]?.arguments ?? '{}');
+    assert.equal(placeholder.context_elided, true);
+    assert.equal(placeholder.not_executable, true);
+    assert.equal(placeholder.tool_name, 'render_ui');
     assert.equal(oldTool?.content, maskPlaceholder('x'.repeat(4000)));
     assert.ok(published.some((e) => e.type === 'compaction' && e.reason === 'post-run-history'));
   } finally {

@@ -62,7 +62,7 @@ export type AgentEvent =
       estBefore: number;
       estAfter: number;
       masked: number;
-      summarized?: number;
+      summarized: number;
       dropped: number;
       reason?: string;
     }

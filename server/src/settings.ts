@@ -25,6 +25,7 @@ const TOOL_SETTING_KEYS = [
 ] as const;
 
 const warned = new Set<string>();
+const MAX_TOOL_OUTPUT_CHARS = 40_000;
 
 function warnOnce(key: string, message: string) {
   if (warned.has(key)) return;
@@ -43,6 +44,11 @@ function boolValue(value: unknown, fallback: boolean): boolean {
 function numberValue(value: unknown, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return value;
+}
+
+function outputLimitValue(value: unknown, fallback: number): number {
+  const raw = Math.floor(numberValue(value, fallback));
+  return Math.min(MAX_TOOL_OUTPUT_CHARS, Math.max(1000, raw));
 }
 
 function stringList(value: unknown, fallback: string[]): string[] {
@@ -93,7 +99,7 @@ function mergeToolSettings(values: Map<string, unknown>): ToolSettings {
     shellAllowCommands: stringList(values.get('tools.shellAllowCommands'), defaults.shellAllowCommands),
     network: networkValue(values.get('tools.network'), defaults.network),
     shellDeny: stringList(values.get('tools.shellDeny'), defaults.shellDeny),
-    maxOutput: Math.max(1000, Math.floor(numberValue(values.get('tools.maxOutput'), defaults.maxOutput))),
+    maxOutput: outputLimitValue(values.get('tools.maxOutput'), defaults.maxOutput),
   };
 }
 

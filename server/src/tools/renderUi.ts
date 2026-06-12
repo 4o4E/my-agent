@@ -26,6 +26,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isCompactedToolPlaceholder(args: Record<string, unknown>): boolean {
+  return args.context_elided === true;
+}
+
 function isBinding(value: unknown): boolean {
   return isRecord(value) && typeof value.path === 'string' && Object.keys(value).length === 1;
 }
@@ -153,6 +157,14 @@ export const renderUiTool: Tool = {
     required: ['root', 'components'],
   },
   async run(args): Promise<ToolResult> {
+    if (isCompactedToolPlaceholder(args)) {
+      return {
+        text:
+          'render_ui error: this is a compacted historical tool-call placeholder, not executable input. ' +
+          'Rebuild a complete render_ui payload with `root` and `components`; do not copy the placeholder. / ' +
+          '这是压缩后的历史工具调用占位符，不是可执行入参。请重新构造完整的 render_ui 参数，包含 `root` 和 `components`；不要复制占位符。',
+      };
+    }
     const root = String(args.root ?? '');
     if (!root || !Array.isArray(args.components) || args.components.length === 0) {
       return { text: 'render_ui error: `root` and a non-empty `components` array are required.' };

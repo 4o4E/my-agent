@@ -53,7 +53,7 @@ export interface CompactionInfo {
   estBefore: number;
   estAfter: number;
   masked: number;
-  summarized?: number;
+  summarized: number;
   dropped: number;
   reason?: string;
 }
@@ -82,6 +82,7 @@ interface WorkingMessage {
  * decisions are reported back so they can be persisted (long-task design §3.3, §4).
  */
 export class ContextManager {
+  private readonly forceMaskedToolNames = ['render_ui'];
   private items: WorkingMessage[] = [];
   /** The goal-anchor system message, held by reference so it can be refreshed in
    *  place each step. Kept in the leading system block so compaction never drops it. */
@@ -150,10 +151,28 @@ export class ContextManager {
     const collapsedIds: number[] = [];
     let masked = 0;
     const m1 = maskOldToolResults(this.all(), { keepRecent });
-    const m2 = maskOldAssistantToolCalls(m1.messages, { keepRecent });
+    const m2 = maskOldAssistantToolCalls(m1.messages, { keepRecent, forceToolNames: this.forceMaskedToolNames });
     for (let i = 0; i < this.items.length; i++) {
       if (m2.messages[i].collapsed === 'masked' && this.items[i].msg.collapsed !== 'masked') {
         this.items[i].msg = m2.messages[i];
+        masked += 1;
+        if (this.items[i].dbId != null) collapsedIds.push(this.items[i].dbId as number);
+      }
+    }
+    return { collapsedIds, masked };
+  }
+
+  /** 展示型工具的大参数没有推理价值，即使整体预算没超也要在模型调用前清理。 */
+  private maskForcedToolCallPayloads(): { collapsedIds: number[]; masked: number } {
+    const collapsedIds: number[] = [];
+    let masked = 0;
+    const m1 = maskOldAssistantToolCalls(this.all(), {
+      keepRecent: Number.MAX_SAFE_INTEGER,
+      forceToolNames: this.forceMaskedToolNames,
+    });
+    for (let i = 0; i < this.items.length; i++) {
+      if (m1.messages[i].collapsed === 'masked' && this.items[i].msg.collapsed !== 'masked') {
+        this.items[i].msg = m1.messages[i];
         masked += 1;
         if (this.items[i].dbId != null) collapsedIds.push(this.items[i].dbId as number);
       }
@@ -170,7 +189,7 @@ export class ContextManager {
     this.lastSentChars = totalChars(this.all());
     if (!masked) return null;
     return {
-      info: { estBefore, estAfter: this.estTokens(), masked, dropped: 0, reason },
+      info: { estBefore, estAfter: this.estTokens(), masked, summarized: 0, dropped: 0, reason },
       collapsedIds,
       summarizedIds: [],
     };
@@ -187,7 +206,15 @@ export class ContextManager {
     const estBefore = this.estTokens();
 
     if (estBefore < contextBudget * compactWarnRatio) {
+      const forced = this.maskForcedToolCallPayloads();
       this.lastSentChars = totalChars(this.all());
+      if (forced.masked) {
+        return {
+          info: { estBefore, estAfter: this.estTokens(), masked: forced.masked, summarized: 0, dropped: 0, reason: 'display-payload' },
+          collapsedIds: forced.collapsedIds,
+          summarizedIds: [],
+        };
+      }
       return null;
     }
 
