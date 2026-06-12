@@ -81,6 +81,7 @@ export interface FilePreview {
   mode: 'full' | 'chunk';
   startLine: number;
   lines: string[];
+  totalLines: number;
   nextLine: number | null;
   hasMore: boolean;
 }

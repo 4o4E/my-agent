@@ -64,6 +64,7 @@ const DEFAULT_SHELL_ALLOW_COMMANDS = [
   'sort',
   'uniq',
   'xargs',
+  'rm',
   'env',
   'git',
   'rg',

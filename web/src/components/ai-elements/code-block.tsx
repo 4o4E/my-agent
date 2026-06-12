@@ -8,15 +8,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { MarkdownContent } from "@/components/MarkdownContent";
+import { streamdownPreviewPlugins } from "@/components/streamdownConfig";
 import { cn } from "@/lib/utils";
-import { AlignLeftIcon, CheckIcon, CopyIcon, MapIcon } from "lucide-react";
-import type { ComponentProps, CSSProperties, HTMLAttributes } from "react";
+import { AlignLeftIcon, CheckIcon, Code2Icon, CopyIcon, EyeIcon, MapIcon } from "lucide-react";
+import type { ComponentProps, CSSProperties, ErrorInfo, HTMLAttributes, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import {
+  Component,
   createContext,
   memo,
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,7 +33,7 @@ import type {
 } from "shiki";
 import { createHighlighter } from "shiki";
 
-// Shiki uses bitflags for font styles: 1=italic, 2=bold, 4=underline
+// Shiki 的 fontStyle 是位标记：1=italic, 2=bold, 4=underline。
 // oxlint-disable-next-line eslint(no-bitwise)
 const isItalic = (fontStyle: number | undefined) => fontStyle && fontStyle & 1;
 // oxlint-disable-next-line eslint(no-bitwise)
@@ -38,7 +42,6 @@ const isUnderline = (fontStyle: number | undefined) =>
   // oxlint-disable-next-line eslint(no-bitwise)
   fontStyle && fontStyle & 4;
 
-// Transform tokens to include pre-computed keys to avoid noArrayIndexKey lint
 interface KeyedToken {
   token: ThemedToken;
   key: string;
@@ -57,7 +60,6 @@ const addKeysToTokens = (lines: ThemedToken[][]): KeyedLine[] =>
     })),
   }));
 
-// Token rendering component
 const TokenSpan = ({ token }: { token: ThemedToken }) => (
   <span
     className="dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]"
@@ -76,48 +78,65 @@ const TokenSpan = ({ token }: { token: ThemedToken }) => (
   </span>
 );
 
-// Line number styles using CSS counters
-const LINE_NUMBER_CLASSES = cn(
-  "block",
-  "before:content-[counter(line)]",
-  "before:inline-block",
-  "before:[counter-increment:line]",
-  "before:w-8",
-  "before:mr-4",
-  "before:text-right",
-  "before:text-muted-foreground/50",
-  "before:font-mono",
-  "before:select-none"
-);
-
-// Line rendering component
 const LineSpan = ({
   keyedLine,
+  lineNumber,
   showLineNumbers,
+  wrap,
 }: {
   keyedLine: KeyedLine;
+  lineNumber: number;
   showLineNumbers: boolean;
-}) => (
-  <span className={showLineNumbers ? LINE_NUMBER_CLASSES : "block"}>
-    {keyedLine.tokens.length === 0
-      ? "\n"
-      : keyedLine.tokens.map(({ token, key }) => (
-          <TokenSpan key={key} token={token} />
-        ))}
-  </span>
-);
+  wrap: boolean;
+}) => {
+  const code = keyedLine.tokens.length === 0
+    ? "\u00a0"
+    : keyedLine.tokens.map(({ token, key }) => (
+        <TokenSpan key={key} token={token} />
+      ));
 
-// Types
+  if (!showLineNumbers) {
+    return <span className="block min-h-5">{code}</span>;
+  }
+
+  return (
+    <span className={cn("flex min-h-5 items-start", wrap ? "min-w-0" : "min-w-max")}>
+      <span className="mr-4 w-8 shrink-0 select-none text-right font-mono text-muted-foreground/50">
+        {lineNumber}
+      </span>
+      <span className={cn("block", wrap ? "min-w-0 flex-1" : "min-w-max")}>
+        {code}
+      </span>
+    </span>
+  );
+};
+
 type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   code: string;
   language: BundledLanguage;
   showLineNumbers?: boolean;
   showGlance?: boolean;
+  showRenderToggle?: boolean;
   showWrapToggle?: boolean;
   defaultWrap?: boolean;
+  fillHeight?: boolean;
+  loadingMore?: boolean;
+  onReachEnd?: () => void;
   startLineNumber?: number;
   maxHighlightChars?: number;
 };
+
+interface CodeViewport {
+  top: number;
+  height: number;
+}
+
+type CodeViewMode = "source" | "render";
+
+interface GlanceRow {
+  key: string;
+  tokens: KeyedToken[];
+}
 
 interface TokenizedCode {
   tokens: ThemedToken[][];
@@ -125,25 +144,26 @@ interface TokenizedCode {
   bg: string;
 }
 
+interface AsyncTokenizedCode {
+  key: string;
+  result: TokenizedCode;
+}
+
 interface CodeBlockContextType {
   code: string;
 }
 
-// Context
 const CodeBlockContext = createContext<CodeBlockContextType>({
   code: "",
 });
 
-// Highlighter cache (singleton per language)
 const highlighterCache = new Map<
   string,
   Promise<HighlighterGeneric<BundledLanguage, BundledTheme>>
 >();
 
-// Token cache
 const tokensCache = new Map<string, TokenizedCode>();
 
-// Subscribers for async token updates
 const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>();
 
 const getTokensCacheKey = (code: string, language: BundledLanguage) => {
@@ -169,7 +189,6 @@ const getHighlighter = (
   return highlighterPromise;
 };
 
-// Create raw tokens for immediate display while highlighting loads
 const createRawTokens = (code: string): TokenizedCode => ({
   bg: "transparent",
   fg: "inherit",
@@ -185,7 +204,6 @@ const createRawTokens = (code: string): TokenizedCode => ({
   ),
 });
 
-// Synchronous highlight with callback for async results
 export const highlightCode = (
   code: string,
   language: BundledLanguage,
@@ -194,13 +212,11 @@ export const highlightCode = (
 ): TokenizedCode | null => {
   const tokensCacheKey = getTokensCacheKey(code, language);
 
-  // Return cached result if available
   const cached = tokensCache.get(tokensCacheKey);
   if (cached) {
     return cached;
   }
 
-  // Subscribe callback if provided
   if (callback) {
     if (!subscribers.has(tokensCacheKey)) {
       subscribers.set(tokensCacheKey, new Set());
@@ -208,7 +224,7 @@ export const highlightCode = (
     subscribers.get(tokensCacheKey)?.add(callback);
   }
 
-  // Start highlighting in background - fire-and-forget async pattern
+  // 高亮器异步加载，先返回朴素 token，加载完成后通知订阅者刷新。
   getHighlighter(language)
     // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then)
     .then((highlighter) => {
@@ -229,10 +245,8 @@ export const highlightCode = (
         tokens: result.tokens,
       };
 
-      // Cache the result
       tokensCache.set(tokensCacheKey, tokenized);
 
-      // Notify all subscribers
       const subs = subscribers.get(tokensCacheKey);
       if (subs) {
         for (const sub of subs) {
@@ -280,7 +294,7 @@ const CodeBlockBody = memo(
     return (
       <pre
         className={cn(
-          "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)] m-0 p-4 text-sm",
+          "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)] m-0 p-4 text-sm leading-5",
           wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre",
           className
         )}
@@ -288,16 +302,16 @@ const CodeBlockBody = memo(
       >
         <code
           className={cn(
-            "font-mono text-sm",
-            showLineNumbers && "[counter-increment:line_0]"
+            "font-mono text-sm"
           )}
-          style={showLineNumbers ? { counterReset: `line ${Math.max(0, startLineNumber - 1)}` } : undefined}
         >
-          {keyedLines.map((keyedLine) => (
+          {keyedLines.map((keyedLine, index) => (
             <LineSpan
               key={keyedLine.key}
               keyedLine={keyedLine}
+              lineNumber={startLineNumber + index}
               showLineNumbers={showLineNumbers}
+              wrap={wrap}
             />
           ))}
         </code>
@@ -316,10 +330,11 @@ CodeBlockBody.displayName = "CodeBlockBody";
 
 export const CodeBlockContainer = ({
   className,
+  fillHeight = false,
   language,
   style,
   ...props
-}: HTMLAttributes<HTMLDivElement> & { language: string }) => (
+}: HTMLAttributes<HTMLDivElement> & { fillHeight?: boolean; language: string }) => (
   <div
     className={cn(
       "group relative w-full overflow-hidden rounded-md border bg-background text-foreground",
@@ -327,8 +342,8 @@ export const CodeBlockContainer = ({
     )}
     data-language={language}
     style={{
-      containIntrinsicSize: "auto 200px",
-      contentVisibility: "auto",
+      containIntrinsicSize: fillHeight ? undefined : "auto 200px",
+      contentVisibility: fillHeight ? undefined : "auto",
       ...style,
     }}
     {...props}
@@ -393,6 +408,9 @@ export const CodeBlockContent = ({
   wrap = false,
   maxHighlightChars = 120_000,
   scroll = true,
+  fillHeight = false,
+  loadingMore = false,
+  onReachEnd,
   className,
   bodyClassName,
 }: {
@@ -404,31 +422,25 @@ export const CodeBlockContent = ({
   wrap?: boolean;
   maxHighlightChars?: number;
   scroll?: boolean;
+  fillHeight?: boolean;
+  loadingMore?: boolean;
+  onReachEnd?: () => void;
   className?: string;
   bodyClassName?: string;
 }) => {
   const shouldHighlight = code.length <= maxHighlightChars;
-  // Memoized raw tokens for immediate display
+  const tokensCacheKey = useMemo(() => getTokensCacheKey(code, language), [code, language]);
+  // 高亮未完成前先展示原始 token，避免空白闪烁。
   const rawTokens = useMemo(() => createRawTokens(code), [code]);
 
-  // Synchronous cache lookup — avoids setState in effect for cached results
+  // 同步读取缓存，命中时不再等 effect 触发刷新。
   const syncTokens = useMemo(
     () => shouldHighlight ? highlightCode(code, language) ?? rawTokens : rawTokens,
     [code, language, rawTokens, shouldHighlight]
   );
 
-  // Async highlighting result (populated after shiki loads)
-  const [asyncTokens, setAsyncTokens] = useState<TokenizedCode | null>(null);
-  const asyncKeyRef = useRef({ code, language });
-
-  // Invalidate stale async tokens synchronously during render
-  if (
-    asyncKeyRef.current.code !== code ||
-    asyncKeyRef.current.language !== language
-  ) {
-    asyncKeyRef.current = { code, language };
-    setAsyncTokens(null);
-  }
+  // 异步高亮结果必须带上当前内容 key，避免旧 token 覆盖新代码。
+  const [asyncTokens, setAsyncTokens] = useState<AsyncTokenizedCode | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -437,20 +449,73 @@ export const CodeBlockContent = ({
 
     highlightCode(code, language, (result) => {
       if (!cancelled) {
-        setAsyncTokens(result);
+        setAsyncTokens({ key: tokensCacheKey, result });
       }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [code, language, shouldHighlight]);
+  }, [code, language, shouldHighlight, tokensCacheKey]);
 
-  const tokenized = asyncTokens ?? syncTokens;
+  const tokenized = shouldHighlight && asyncTokens?.key === tokensCacheKey ? asyncTokens.result : syncTokens;
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const reachedEndRef = useRef(false);
+  const [viewport, setViewport] = useState<CodeViewport>({ top: 0, height: 1 });
+  const [contentWidth, setContentWidth] = useState(0);
+
+  const syncViewport = useCallback((triggerReachEnd = false) => {
+    const node = scrollRef.current;
+    if (!node) return;
+    const scrollable = Math.max(1, node.scrollHeight - node.clientHeight);
+    setViewport({
+      top: node.scrollTop / scrollable,
+      height: Math.min(1, node.clientHeight / Math.max(1, node.scrollHeight)),
+    });
+    setContentWidth(node.clientWidth);
+
+    const distanceToEnd = node.scrollHeight - node.scrollTop - node.clientHeight;
+    if (triggerReachEnd && onReachEnd && scroll && distanceToEnd < 120) {
+      if (!reachedEndRef.current) {
+        reachedEndRef.current = true;
+        onReachEnd();
+      }
+    } else if (distanceToEnd > 240) {
+      reachedEndRef.current = false;
+    }
+  }, [onReachEnd, scroll]);
+
+  useEffect(() => {
+    reachedEndRef.current = false;
+  }, [code]);
+
+  useLayoutEffect(() => {
+    syncViewport(false);
+  }, [syncViewport, code, wrap, tokenized]);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return undefined;
+
+    const resizeObserver = new ResizeObserver(() => syncViewport(false));
+    resizeObserver.observe(node);
+    resizeObserver.observe(node.firstElementChild ?? node);
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [syncViewport]);
 
   return (
-    <div className={cn("relative flex min-w-0 overflow-hidden", className)}>
-      <div className={cn(scroll ? "scrollbar-thin min-w-0 flex-1 overflow-auto" : "min-w-max flex-1 overflow-visible")}>
+    <div className={cn("relative flex min-w-0 overflow-hidden", fillHeight && "min-h-0 flex-1", className)}>
+      <div
+        ref={scrollRef}
+        onScroll={() => syncViewport(true)}
+        className={cn(
+          scroll
+            ? cn("scrollbar-thin min-w-0 flex-1 overflow-auto", fillHeight ? "h-full max-h-none" : "max-h-[60vh]")
+            : "min-w-max flex-1 overflow-visible"
+        )}
+      >
         <CodeBlockBody
           showLineNumbers={showLineNumbers}
           startLineNumber={startLineNumber}
@@ -458,29 +523,298 @@ export const CodeBlockContent = ({
           wrap={wrap}
           className={bodyClassName}
         />
+        {loadingMore && (
+          <div className="border-t bg-background/95 px-3 py-2 text-center text-xs text-muted-foreground">
+            正在继续加载…
+          </div>
+        )}
       </div>
-      {showGlance && <CodeBlockGlance tokenized={tokenized} />}
+      {showGlance && (
+        <CodeBlockGlance
+          contentWidth={contentWidth}
+          scrollRef={scrollRef}
+          tokenized={tokenized}
+          viewport={viewport}
+          wrap={wrap}
+        />
+      )}
     </div>
   );
 };
 
-function CodeBlockGlance({ tokenized }: { tokenized: TokenizedCode }) {
+function splitWrappedGlanceRows(lines: KeyedLine[], wrap: boolean, contentWidth: number): GlanceRow[] {
+  if (!wrap) return lines;
+  const charsPerRow = Math.max(24, Math.floor((contentWidth - 64) / 7.4));
+  const rows: GlanceRow[] = [];
+
+  for (const line of lines) {
+    const tokens = line.tokens.filter(({ token }) => token.content.length > 0);
+    if (tokens.length === 0) {
+      rows.push({ key: line.key, tokens: [] });
+      continue;
+    }
+
+    let current: KeyedToken[] = [];
+    let currentLength = 0;
+    let rowIndex = 0;
+
+    for (const keyed of tokens) {
+      const pieces = keyed.token.content.split(/(\s+)/);
+      for (const piece of pieces) {
+        if (!piece) continue;
+        if (currentLength > 0 && currentLength + piece.length > charsPerRow) {
+          rows.push({ key: `${line.key}-wrap-${rowIndex}`, tokens: current });
+          current = [];
+          currentLength = 0;
+          rowIndex += 1;
+        }
+        current.push({
+          key: `${keyed.key}-${rowIndex}-${current.length}`,
+          token: { ...keyed.token, content: piece },
+        });
+        currentLength += piece.length;
+      }
+    }
+
+    rows.push({ key: `${line.key}-wrap-${rowIndex}`, tokens: current });
+  }
+
+  return rows;
+}
+
+function sampleGlanceRows(rows: GlanceRow[], limit: number): GlanceRow[] {
+  if (rows.length <= limit) return rows;
+  return Array.from({ length: limit }, (_, index) => rows[Math.floor(index * rows.length / limit)]);
+}
+
+const GLANCE_ROW_HEIGHT = 3;
+const GLANCE_MAX_ROWS = 1600;
+
+function CodeBlockGlance({
+  contentWidth,
+  scrollRef,
+  tokenized,
+  viewport,
+  wrap,
+}: {
+  contentWidth: number;
+  scrollRef: RefObject<HTMLDivElement>;
+  tokenized: TokenizedCode;
+  viewport: CodeViewport;
+  wrap: boolean;
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [trackHeight, setTrackHeight] = useState(0);
   const keyedLines = useMemo(() => addKeysToTokens(tokenized.tokens), [tokenized.tokens]);
+  const visibleLines = useMemo(
+    () => sampleGlanceRows(splitWrappedGlanceRows(keyedLines, wrap, contentWidth), GLANCE_MAX_ROWS),
+    [contentWidth, keyedLines, wrap]
+  );
+  const sliderHeight = Math.max(0.08, Math.min(1, viewport.height));
+  const sliderTop = Math.max(0, Math.min(1 - sliderHeight, viewport.top * (1 - sliderHeight)));
+  const mapHeight = visibleLines.length * GLANCE_ROW_HEIGHT + 8;
+  const mapOffset = -Math.max(0, mapHeight - trackHeight) * viewport.top;
+
+  useLayoutEffect(() => {
+    const node = trackRef.current;
+    if (!node) return undefined;
+    const update = () => setTrackHeight(node.clientHeight);
+    update();
+    const resizeObserver = new ResizeObserver(update);
+    resizeObserver.observe(node);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  const scrollToPointer = useCallback((clientY: number, target: HTMLDivElement) => {
+    const node = scrollRef.current;
+    if (!node) return;
+    const rect = target.getBoundingClientRect();
+    const relative = Math.max(0, Math.min(1, (clientY - rect.top) / Math.max(1, rect.height)));
+    const targetTop = Math.max(0, Math.min(1, relative - sliderHeight / 2));
+    node.scrollTop = targetTop / Math.max(0.001, 1 - sliderHeight) * Math.max(0, node.scrollHeight - node.clientHeight);
+  }, [scrollRef, sliderHeight]);
+
+  const startDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const track = event.currentTarget;
+    scrollToPointer(event.clientY, track);
+    const onMove = (moveEvent: PointerEvent) => scrollToPointer(moveEvent.clientY, track);
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+  }, [scrollToPointer]);
 
   return (
-    <div className="hidden w-12 shrink-0 border-l bg-muted/30 px-1 py-2 sm:block" aria-hidden="true">
-      <div className="space-y-[2px]">
-        {keyedLines.slice(0, 220).map((line) => {
-          const first = line.tokens.find(({ token }) => token.content.trim().length > 0)?.token;
-          return (
-            <div
-              key={line.key}
-              className="h-[2px] rounded-full bg-muted-foreground/25"
-              style={first?.color ? { backgroundColor: first.color } : undefined}
-            />
-          );
-        })}
+    <div className="hidden max-h-full w-14 shrink-0 overflow-hidden border-l bg-background/95 px-1.5 py-2 sm:block" aria-hidden="true">
+      <div
+        ref={trackRef}
+        className="relative h-full min-h-0 cursor-pointer overflow-hidden rounded-sm bg-muted/40 py-1"
+        onPointerDown={startDrag}
+      >
+        <div
+          className="absolute left-0 right-0 space-y-px"
+          style={{ transform: `translateY(${mapOffset}px)` }}
+        >
+          {visibleLines.map((line) => {
+            const visibleTokens = line.tokens
+              .filter(({ token }) => token.content.trim().length > 0)
+              .slice(0, 6);
+            return (
+              <div key={line.key} className="flex h-[2px] gap-px px-1">
+                {visibleTokens.length === 0 ? (
+                  <span className="h-full w-1/3 rounded-full bg-muted-foreground/20" />
+                ) : (
+                  visibleTokens.map(({ token, key }) => (
+                    <span
+                      key={key}
+                      className="h-full min-w-1 rounded-full"
+                      style={{
+                        backgroundColor: token.color ?? "currentColor",
+                        flexGrow: Math.max(1, Math.min(10, token.content.length)),
+                        opacity: token.color ? 0.85 : 0.25,
+                      }}
+                    />
+                  ))
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div
+          className="pointer-events-none absolute left-0 right-0 rounded-sm border border-primary/60 bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--background)/0.55)]"
+          style={{ top: `${sliderTop * 100}%`, height: `${sliderHeight * 100}%` }}
+        />
       </div>
+    </div>
+  );
+}
+
+function isRenderableLanguage(language: BundledLanguage): boolean {
+  return ["markdown", "md", "csv"].includes(String(language));
+}
+
+function parseCsvRows(code: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < code.length; index += 1) {
+    const char = code[index];
+    const next = code[index + 1];
+
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === "," && !quoted) {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+    if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+    cell += char;
+  }
+
+  row.push(cell);
+  if (row.length > 1 || row[0] !== "" || rows.length === 0) rows.push(row);
+  return rows;
+}
+
+function CsvPreview({ code, fillHeight }: { code: string; fillHeight: boolean }) {
+  const rows = useMemo(() => parseCsvRows(code), [code]);
+  const [head, ...body] = rows;
+  const columnCount = Math.max(...rows.map((row) => row.length), 1);
+
+  return (
+    <div className={cn("scrollbar-thin overflow-auto p-3", fillHeight ? "min-h-0 flex-1" : "max-h-[60vh]")}>
+      <table className="w-full border-collapse text-left text-xs">
+        <thead className="sticky top-0 bg-background">
+          <tr>
+            {Array.from({ length: columnCount }).map((_, index) => (
+              <th key={index} className="border-b px-2 py-1.5 font-medium text-muted-foreground">
+                {head?.[index] ?? `列 ${index + 1}`}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {body.slice(0, 500).map((row, rowIndex) => (
+            <tr key={rowIndex} className="border-b last:border-0">
+              {Array.from({ length: columnCount }).map((_, columnIndex) => (
+                <td key={columnIndex} className="max-w-72 whitespace-pre-wrap break-words px-2 py-1.5 align-top">
+                  {row[columnIndex] ?? ""}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {body.length > 500 && (
+        <div className="px-2 py-2 text-xs text-muted-foreground">
+          仅预览前 500 行
+        </div>
+      )}
+    </div>
+  );
+}
+
+class RenderErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("代码渲染视图失败:", error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="p-4 text-sm text-destructive">
+          渲染失败，已保留源码视图可继续查看。
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function CodeBlockRenderedContent({
+  code,
+  fillHeight,
+  language,
+}: {
+  code: string;
+  fillHeight: boolean;
+  language: BundledLanguage;
+}) {
+  if (String(language) === "csv") {
+    return <CsvPreview code={code} fillHeight={fillHeight} />;
+  }
+
+  return (
+    <div className={cn("scrollbar-thin overflow-auto p-4", fillHeight ? "min-h-0 flex-1" : "max-h-[60vh]")}>
+      <RenderErrorBoundary key={`${language}:${code.length}:${code.slice(0, 48)}`}>
+        <MarkdownContent plugins={streamdownPreviewPlugins} text={code} />
+      </RenderErrorBoundary>
     </div>
   );
 }
@@ -490,8 +824,12 @@ export const CodeBlock = memo(({
   language,
   showLineNumbers = false,
   showGlance = false,
+  showRenderToggle = true,
   showWrapToggle = false,
   defaultWrap = false,
+  fillHeight = false,
+  loadingMore = false,
+  onReachEnd,
   startLineNumber = 1,
   maxHighlightChars = 120_000,
   className,
@@ -500,11 +838,18 @@ export const CodeBlock = memo(({
 }: CodeBlockProps) => {
   const contextValue = useMemo(() => ({ code }), [code]);
   const [wrap, setWrap] = useState(defaultWrap);
-  const showDefaultHeader = showGlance || showWrapToggle;
+  const [viewMode, setViewMode] = useState<CodeViewMode>("source");
+  const canRender = showRenderToggle && isRenderableLanguage(language);
+  const showDefaultHeader = showGlance || showWrapToggle || canRender;
 
   return (
     <CodeBlockContext.Provider value={contextValue}>
-      <CodeBlockContainer className={className} language={language} {...props}>
+      <CodeBlockContainer
+        className={cn(fillHeight && "flex h-full min-h-0 flex-col", className)}
+        fillHeight={fillHeight}
+        language={language}
+        {...props}
+      >
         {children}
         {showDefaultHeader && (
           <CodeBlockHeader>
@@ -512,6 +857,32 @@ export const CodeBlock = memo(({
               <CodeBlockFilename>{language}</CodeBlockFilename>
             </CodeBlockTitle>
             <CodeBlockActions>
+              {canRender && (
+                <div className="flex items-center rounded-md border bg-background p-0.5">
+                  <Button
+                    type="button"
+                    variant={viewMode === "source" ? "secondary" : "ghost"}
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => setViewMode("source")}
+                    title="查看源码"
+                  >
+                    <Code2Icon className="size-3.5" />
+                    源码
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={viewMode === "render" ? "secondary" : "ghost"}
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => setViewMode("render")}
+                    title="查看渲染结果"
+                  >
+                    <EyeIcon className="size-3.5" />
+                    渲染
+                  </Button>
+                </div>
+              )}
               {showGlance && (
                 <span className="inline-flex items-center gap-1 text-muted-foreground">
                   <MapIcon className="size-3.5" />
@@ -535,15 +906,22 @@ export const CodeBlock = memo(({
             </CodeBlockActions>
           </CodeBlockHeader>
         )}
-        <CodeBlockContent
-          code={code}
-          language={language}
-          showLineNumbers={showLineNumbers}
-          startLineNumber={startLineNumber}
-          showGlance={showGlance}
-          wrap={wrap}
-          maxHighlightChars={maxHighlightChars}
-        />
+        {viewMode === "render" && canRender ? (
+          <CodeBlockRenderedContent code={code} fillHeight={fillHeight} language={language} />
+        ) : (
+          <CodeBlockContent
+            code={code}
+            fillHeight={fillHeight}
+            language={language}
+            loadingMore={loadingMore}
+            onReachEnd={onReachEnd}
+            showLineNumbers={showLineNumbers}
+            startLineNumber={startLineNumber}
+            showGlance={showGlance}
+            wrap={wrap}
+            maxHighlightChars={maxHighlightChars}
+          />
+        )}
       </CodeBlockContainer>
     </CodeBlockContext.Provider>
   );

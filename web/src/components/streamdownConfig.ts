@@ -7,6 +7,7 @@ import { useMemo } from 'react';
 import { useThemeCtx } from '@/theme';
 
 export const streamdownPlugins = { cjk, code, math, mermaid };
+export const streamdownPreviewPlugins = { cjk, math, mermaid };
 
 export function useThemedMermaid(): StreamdownProps['mermaid'] {
   const { theme } = useThemeCtx();

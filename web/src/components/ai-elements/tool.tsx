@@ -202,7 +202,7 @@ function JsonValue({
     return (
       <div className="space-y-1">
         {value.map((item, index) => (
-          <div key={index} className="grid min-w-0 grid-cols-[2rem,1fr] gap-2">
+          <div key={index} className="grid min-w-0 grid-cols-[2rem,minmax(0,1fr)] gap-2">
             <span className="select-none text-right text-muted-foreground">{index}</span>
             <JsonValue value={item} depth={depth + 1} objectKey={objectKey} workspaceRoot={workspaceRoot} onOpenRemoteFile={onOpenRemoteFile} />
           </div>
@@ -217,7 +217,7 @@ function JsonValue({
     return (
       <div className={cn("space-y-1", depth > 0 && "rounded-md border border-border/50 p-2")}>
         {entries.map(([key, item]) => (
-          <div key={key} className="grid min-w-0 grid-cols-[minmax(7rem,14rem),1fr] gap-2">
+          <div key={key} className="grid min-w-0 grid-cols-[minmax(4.5rem,8rem),minmax(0,1fr)] gap-2">
             <span className="min-w-0 truncate font-medium text-muted-foreground" title={key}>
               {key}
             </span>
@@ -296,7 +296,7 @@ export const ToolOutput = ({
       parsed && (Array.isArray(parsed) || isPlainObject(parsed)) ? (
         <JsonPanel value={parsed} />
       ) : (
-        <CodeBlock code={output} language="log" showGlance showWrapToggle />
+        <CodeBlock code={output} language="log" showGlance showLineNumbers showWrapToggle />
       );
   }
 
@@ -305,12 +305,11 @@ export const ToolOutput = ({
       <h4 className="font-medium text-muted-foreground text-xs">
         {errorText ? "错误" : "结果"}
       </h4>
-      {/* 输出在视口内滚动，避免长结果把整段对话撑得过高。 */}
       <div
         className={cn(
-          "max-h-[60vh] overflow-auto rounded-md text-xs [&_table]:w-full",
+          "rounded-md text-xs [&_table]:w-full",
           errorText
-            ? "bg-destructive/10 text-destructive"
+            ? "max-h-[60vh] overflow-auto bg-destructive/10 text-destructive"
             : "bg-muted/35 text-foreground"
         )}
       >

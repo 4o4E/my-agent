@@ -8,10 +8,12 @@ export function MarkdownContent({
   text,
   className,
   components,
+  plugins = streamdownPlugins,
 }: {
   text: string;
   className?: string;
   components?: StreamdownProps['components'];
+  plugins?: StreamdownProps['plugins'];
 }) {
   const mermaid = useThemedMermaid();
 
@@ -24,7 +26,7 @@ export function MarkdownContent({
       components={components}
       mermaid={mermaid}
       parseIncompleteMarkdown
-      plugins={streamdownPlugins}
+      plugins={plugins}
       shikiTheme={['github-light', 'github-dark']}
     >
       {text}

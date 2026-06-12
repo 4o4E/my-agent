@@ -131,30 +131,30 @@
   }
 }
 
-/* Markdown 渲染由 Streamdown 负责，Mermaid 需要按对话容器放大展示。 */
+/* Markdown 渲染由 Streamdown 负责，Mermaid 预留固定高度，避免加载后重排闪烁。 */
 .markdown-content [data-streamdown='mermaid'] {
-  min-height: min(70vh, 32rem);
+  contain: layout paint;
+  height: min(70vh, 32rem);
+  overflow: hidden;
 }
 
 .markdown-content [data-streamdown='mermaid'] > div,
 .markdown-content [data-streamdown='mermaid'] > div > div:not(.absolute),
 .markdown-content [data-streamdown='mermaid'] > div > div:not(.absolute) > div {
-  min-height: inherit;
+  height: 100%;
+  min-height: 0;
   width: 100%;
 }
 
 .markdown-content [data-streamdown='mermaid'] svg[id^='mermaid-'] {
+  display: block;
   width: 100%;
-  height: min(70vh, 32rem);
+  height: 100%;
   max-width: 100%;
 }
 
 @media (max-width: 640px) {
   .markdown-content [data-streamdown='mermaid'] {
-    min-height: min(65vh, 24rem);
-  }
-
-  .markdown-content [data-streamdown='mermaid'] svg[id^='mermaid-'] {
     height: min(65vh, 24rem);
   }
 }

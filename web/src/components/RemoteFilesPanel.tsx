@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { BundledLanguage } from 'shiki';
-import { AlignLeft, ChevronRight, FileText, Folder, FolderOpen, Paperclip, RefreshCw, X } from 'lucide-react';
+import { ChevronRight, FileText, Folder, FolderOpen, Paperclip, RefreshCw, X } from 'lucide-react';
 import { listRemoteFiles, previewRemoteFile, type FilePreview, type RemoteFileEntry } from '@/api';
-import { CodeBlockContent } from '@/components/ai-elements/code-block';
+import { CodeBlock } from '@/components/ai-elements/code-block';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 interface PreviewChunk {
   startLine: number;
   lines: string[];
+}
+
+interface PreviewRow {
+  lineNumber: number;
+  text: string;
 }
 
 interface Props {
@@ -32,6 +37,7 @@ const LANGUAGE_BY_EXT: Record<string, BundledLanguage> = {
   json: 'json',
   jsx: 'jsx',
   md: 'markdown',
+  csv: 'csv',
   py: 'python',
   rs: 'rust',
   sh: 'shellscript',
@@ -113,10 +119,10 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
   const [selectedSize, setSelectedSize] = useState<number | undefined>();
   const [preview, setPreview] = useState<FilePreview | null>(null);
   const [chunks, setChunks] = useState<PreviewChunk[]>([]);
-  const [previewWrap, setPreviewWrap] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const previewRequestRef = useRef(0);
+  const pendingPreviewStartsRef = useRef<Set<number>>(new Set());
 
   async function loadDir(path = currentPath, select = true) {
     setLoading(true);
@@ -133,13 +139,17 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
   }
 
   async function openFile(path: string, size?: number, startLine = 1) {
+    if (startLine > 1 && pendingPreviewStartsRef.current.has(startLine)) return;
     const requestId = previewRequestRef.current + 1;
     previewRequestRef.current = requestId;
     if (startLine === 1) {
+      pendingPreviewStartsRef.current.clear();
       setSelectedPath(path);
       setSelectedSize(size);
       setPreview(null);
       setChunks([]);
+    } else {
+      pendingPreviewStartsRef.current.add(startLine);
     }
     setLoading(true);
     setError(null);
@@ -156,6 +166,7 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
       if (previewRequestRef.current !== requestId) return;
       setError((err as Error).message);
     } finally {
+      pendingPreviewStartsRef.current.delete(startLine);
       if (previewRequestRef.current === requestId) setLoading(false);
     }
   }
@@ -182,10 +193,35 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
   }, [open, previewPath]);
 
   const previewLanguage = selectedPath ? languageForPath(selectedPath) : 'log';
-  const loadedLines = useMemo(() => chunks.reduce((total, chunk) => total + chunk.lines.length, 0), [chunks]);
+  const previewRows = useMemo<PreviewRow[]>(() => {
+    const byLine = new Map<number, string>();
+    const sortedChunks = [...chunks].sort((a, b) => a.startLine - b.startLine);
+    for (const chunk of sortedChunks) {
+      chunk.lines.forEach((text, index) => {
+        const lineNumber = chunk.startLine + index;
+        if (!byLine.has(lineNumber)) byLine.set(lineNumber, text);
+      });
+    }
+
+    const firstLine = sortedChunks[0]?.startLine ?? 1;
+    const rows: PreviewRow[] = [];
+    for (let lineNumber = firstLine; byLine.has(lineNumber); lineNumber += 1) {
+      rows.push({ lineNumber, text: byLine.get(lineNumber) ?? '' });
+    }
+    return rows;
+  }, [chunks]);
+  const previewCode = useMemo(() => previewRows.map((row) => row.text).join('\n'), [previewRows]);
+  const previewStartLine = previewRows[0]?.lineNumber ?? 1;
+  const loadedLines = previewRows.length;
+  const totalLines = preview?.totalLines ?? null;
 
   if (!open) return null;
-  const nextLine = preview?.hasMore && preview.nextLine != null ? preview.nextLine : null;
+  const hasUnloadedLines = preview?.mode === 'chunk' && (totalLines == null || loadedLines < totalLines);
+  const nextLine = hasUnloadedLines ? previewStartLine + loadedLines : null;
+  const loadMorePreview = () => {
+    if (!selectedPath || nextLine == null || loading || !hasUnloadedLines) return;
+    void openFile(selectedPath, selectedSize, nextLine);
+  };
 
   const renderRows = (entries: RemoteFileEntry[] | undefined, depth: number): JSX.Element[] =>
     (entries ?? []).flatMap((entry) => {
@@ -269,13 +305,14 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
           onPointerDown={(event) => startTreeResize(event, treeWidth, setTreeWidth)}
         />
 
-        <div className="scrollbar-thin min-w-0 flex-1 overflow-auto p-3">
+        <div className="min-w-0 flex-1 overflow-hidden p-3">
           {selectedPath ? (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
+            <div className="flex h-full min-h-0 flex-col gap-3">
+              <div className="flex shrink-0 items-center gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{selectedPath}</div>
                   <div className="text-xs text-muted-foreground">{formatSize(selectedSize)}</div>
+                  {totalLines != null && <div className="text-xs text-muted-foreground">{totalLines} 行</div>}
                 </div>
                 <Button
                   variant="secondary"
@@ -286,49 +323,36 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
                   添加
                 </Button>
               </div>
-              <div className="overflow-hidden rounded-md border bg-background text-foreground">
-                <div className="flex items-center justify-between border-b bg-muted/80 px-3 py-2 text-xs text-muted-foreground">
-                  <span className="font-mono">{previewLanguage}</span>
-                  <Button
-                    type="button"
-                    variant={previewWrap ? 'secondary' : 'ghost'}
-                    size="sm"
-                    className="h-7 px-2 text-xs"
-                    onClick={() => setPreviewWrap((value) => !value)}
-                    title={previewWrap ? '关闭自动换行' : '开启自动换行'}
-                  >
-                    <AlignLeft className="size-3.5" />
-                    {previewWrap ? '换行' : '不换行'}
-                  </Button>
-                </div>
-                <div className="scrollbar-thin overflow-auto">
-                {loading && chunks.length === 0 && (
-                  <div className="bg-muted/20 px-3 py-8 text-center text-sm text-muted-foreground">
+              <div className="min-h-0 flex-1">
+                {loading && chunks.length === 0 ? (
+                  <div className="flex h-full items-center justify-center rounded-md border bg-muted/20 px-3 py-8 text-center text-sm text-muted-foreground">
                     正在加载前 {INITIAL_PREVIEW_LINES} 行…
                   </div>
-                )}
-                {chunks.map((chunk, index) => (
-                  <CodeBlockContent
-                    key={chunk.startLine}
-                    code={chunk.lines.join('\n')}
+                ) : chunks.length > 0 ? (
+                  <CodeBlock
+                    className="h-full"
+                    code={previewCode}
+                    fillHeight
                     language={previewLanguage}
+                    loadingMore={loading && chunks.length > 0}
+                    onReachEnd={nextLine != null ? loadMorePreview : undefined}
                     showLineNumbers
-                    startLineNumber={chunk.startLine}
-                    wrap={previewWrap}
+                    startLineNumber={previewStartLine}
+                    showGlance
+                    showRenderToggle
+                    showWrapToggle
                     maxHighlightChars={80_000}
-                    scroll={false}
-                    bodyClassName={cn(index === 0 ? 'pt-4' : 'pt-0', index === chunks.length - 1 ? 'pb-4' : 'pb-0')}
                   />
-                ))}
-                </div>
+                ) : (
+                  <div className="flex h-full items-center justify-center rounded-md border bg-muted/20 text-sm text-muted-foreground">
+                    暂无预览内容
+                  </div>
+                )}
               </div>
               {preview?.mode === 'chunk' && (
-                <div className="text-xs text-muted-foreground">已加载 {loadedLines} 行</div>
-              )}
-              {nextLine != null && (
-                <Button variant="outline" size="sm" onClick={() => void openFile(selectedPath, selectedSize, nextLine)} disabled={loading}>
-                  加载更多
-                </Button>
+                <div className="shrink-0 text-xs text-muted-foreground">
+                  已加载 {loadedLines}{totalLines != null ? ` / ${totalLines}` : ''} 行{nextLine != null ? '，滚动到底部继续加载' : ''}
+                </div>
               )}
             </div>
           ) : (

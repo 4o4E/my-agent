@@ -112,6 +112,7 @@ filesApi.get('/preview', async (req, res) => {
         mode: 'full',
         startLine: 1,
         lines,
+        totalLines: lines.length,
         nextLine: null,
         hasMore: false,
       });
@@ -119,26 +120,24 @@ filesApi.get('/preview', async (req, res) => {
 
     const lines: string[] = [];
     let lineNo = 0;
-    let hasMore = false;
     const rl = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
     for await (const line of rl) {
       lineNo += 1;
       if (lineNo < startLine) continue;
-      if (lines.length >= limit) {
-        hasMore = true;
-        rl.close();
-        break;
-      }
-      lines.push(previewLine(line));
+      // 继续读完整个文件以返回真实总行数，前端才能可靠停止触底加载。
+      if (lines.length < limit) lines.push(previewLine(line));
     }
 
+    const nextLine = startLine + lines.length;
+    const hasMore = nextLine <= lineNo;
     res.json({
       path: toRemotePath(file, settings.workspaceRoot),
       size: info.size,
       mode: 'chunk',
       startLine,
       lines,
-      nextLine: hasMore ? startLine + lines.length : null,
+      totalLines: lineNo,
+      nextLine: hasMore ? nextLine : null,
       hasMore,
     });
   } catch (err) {
