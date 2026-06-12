@@ -46,12 +46,12 @@ async function walk(dir: string, root: string, out: string[], limit: number) {
 
 export const globTool: Tool = {
   name: 'glob',
-  description: 'Find files by glob pattern (supports **, *, ?). Returns matching paths relative to the search directory.',
+  description: '按 glob 模式查找文件（支持 **、*、?），返回相对于搜索目录的匹配路径。',
   parameters: {
     type: 'object',
     properties: {
-      pattern: { type: 'string', description: 'Glob pattern, e.g. "src/**/*.ts"' },
-      path: { type: 'string', description: 'Directory to search from (default: cwd)' },
+      pattern: { type: 'string', description: 'glob 模式，例如 "src/**/*.ts"' },
+      path: { type: 'string', description: '搜索起始目录，默认是当前目录' },
     },
     required: ['pattern'],
   },
@@ -62,6 +62,6 @@ export const globTool: Tool = {
     await walk(root, root, all, 5000);
     const re = globToRegExp(pattern);
     const matches = all.filter((p) => re.test(p)).slice(0, 200);
-    return matches.length ? matches.join('\n') : '(no matches)';
+    return matches.length ? matches.join('\n') : '（没有匹配项）';
   },
 };

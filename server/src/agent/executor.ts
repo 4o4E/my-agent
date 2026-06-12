@@ -4,7 +4,7 @@ import type { Provider } from '../llm/types.js';
 import type { LlmMessage } from '../llm/types.js';
 import { runTool, toolSchemas } from '../tools/registry.js';
 import { ContextManager } from './context.js';
-import { finishGoal, initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
+import { canFinishGoal, finishBlockedMessage, finishGoal, initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
 import { runBus } from './bus.js';
 import type { AgentEvent } from './types.js';
 import { store as defaultStore } from '../store/index.js';
@@ -12,7 +12,6 @@ import type { Store } from '../store/types.js';
 import { getToolSettings } from '../settings.js';
 import type { ToolSettings } from '../settings.js';
 import { withSpan } from '../telemetry.js';
-import type { A2uiMessage } from './a2ui.js';
 import type { AskUserAnswer, AskUserMode, AskUserOption, AskUserSpec, StreamStage, StreamStats } from './types.js';
 import { renderRuntimeContext } from './context.js';
 
@@ -113,17 +112,6 @@ class StreamStatsTracker {
       },
     });
   }
-}
-
-function withToolData(message: A2uiMessage, toolCalls: ToolTrace[]): A2uiMessage {
-  return {
-    ...message,
-    dataModel: {
-      ...(message.dataModel ?? {}),
-      _toolCalls: toolCalls,
-      _latestToolCall: toolCalls[toolCalls.length - 1] ?? null,
-    },
-  };
 }
 
 function finishOutput(args: Record<string, unknown>): string | null {
@@ -234,24 +222,24 @@ function defaultAskUserAnswer(): AskUserAnswer {
     selected: [],
     customOptions: [],
     text: '',
-    note: '按默认假设继续。 / Continue with the default assumption.',
+    note: '按默认假设继续。',
     usedRecommended: true,
   };
 }
 
 /**
- * The core agent loop, organized as thread → run → steps.
+ * 核心 agent 循环，按 thread → run → step 组织。
  *
- * One run = one user turn. Each loop iteration is a step (one LLM turn + its tool
- * calls). Prior thread messages are loaded so the agent has multi-turn memory.
- * All dependencies are injectable so the loop is unit-testable without PG/network.
+ * 一个 run 对应一次用户输入；每次循环是一轮 LLM 调用及其工具调用。
+ * 运行前会加载同一 thread 的历史消息，让 agent 具备多轮记忆。
+ * 所有依赖都可注入，便于在没有 PG/网络的情况下做单元测试。
  */
 export async function executeRun(runId: string, overrides: Partial<ExecutorDeps> = {}): Promise<void> {
   const deps = { ...defaultDeps(), ...overrides };
   const { provider, store, publish, hardStepCap, stream, resume } = deps;
 
   const run = await store.getRun(runId);
-  if (!run) throw new Error(`run not found: ${runId}`);
+  if (!run) throw new Error(`run 不存在：${runId}`);
   const initialRun = run;
   const threadId = initialRun.thread_id;
   const userInput = initialRun.input;
@@ -350,7 +338,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       // we observe it at the top of each step and stop cleanly.
       const current = await store.getRun(runId);
       if (current?.status === 'canceling') {
-        await emit(null, { type: 'error', step: stepIdx, message: 'Run canceled by user.' });
+        await emit(null, { type: 'error', step: stepIdx, message: '用户已取消 run。' });
         await store.setRunStatus(runId, 'canceled');
         return;
       }
@@ -481,8 +469,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         }
         ctx.add({
           role: 'system',
-          content:
-            'finish_conversation is required before ending. Call render_ui for the final AgentUI summary first, then call finish_conversation with completed=true and progress.',
+          content: '结束前必须调用 finish_conversation。已有 plan 时必须先调用 update_plan，把全部条目收口为 done 或 failed；失败条目要保留并标记 failed。然后用 Markdown 给出最终回答，或说明 HTML artifact 路径，再调用 finish_conversation，并设置 completed=true 和 progress。',
         });
         continue;
       }
@@ -511,9 +498,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         if (call.name === ASK_USER_TOOL_NAME) {
           const spec = normalizeAskUserSpec(args);
           const endedAt = new Date().toISOString();
-          const text =
-            `Waiting for user answer. Question: ${spec.question}\n` +
-            `正在等待用户回答。问题：${spec.question}`;
+          const text = `正在等待用户回答。问题：${spec.question}`;
           trace.result = text;
           trace.endedAt = endedAt;
           trace.durationMs = durationMs(startedAt, endedAt);
@@ -538,7 +523,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
 
         let toolStage: StreamStage = 'tool_running';
         const stopToolHeartbeat = streamStats.startHeartbeat(stepIdx, () => toolStage, () => activeTool);
-        const result = await withSpan(
+        let result = await withSpan(
           'execute_tool',
           { 'gen_ai.tool.name': call.name, 'tool.call_id': call.id },
           async (span) => {
@@ -551,6 +536,10 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
             }
           },
         );
+        const finishAttempt = call.name === FINISH_TOOL_NAME ? finishOutput(args) : null;
+        if (finishAttempt && !canFinishGoal(goal)) {
+          result = { text: finishBlockedMessage(goal) };
+        }
         const endedAt = new Date().toISOString();
         trace.result = result.text;
         trace.endedAt = endedAt;
@@ -568,17 +557,6 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
           durationMs: trace.durationMs,
         });
 
-        // 结构化展示会自动附带本 step 已完成的工具参数和结果，方便 A2UI 多次补全同一界面。
-        if (result.display?.type === 'a2ui') {
-          const surfaceId = result.display.surfaceId ?? result.display.message.surfaceId ?? call.id;
-          await emit(step.id, {
-            type: 'a2ui',
-            step: stepIdx,
-            surfaceId,
-            message: withToolData(result.display.message, toolTraces),
-          });
-        }
-
         const toolMsg = { role: 'tool' as const, content: result.text, toolCallId: call.id };
         ctx.add(toolMsg);
         ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, toolMsg));
@@ -586,7 +564,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         const signature = toolSignature(call.name, args);
         recentToolSignatures.push(signature);
         if (recentToolSignatures.length > 6) recentToolSignatures.shift();
-        const failure = /^(Tool .* threw|Blocked by tool policy|Unknown tool:)/.test(result.text)
+        const failure = /^(工具 .* 抛出异常|工具策略已阻止|未知工具：)/.test(result.text)
           ? `${signature}:${result.text.slice(0, 240)}`
           : '';
         if (failure) {
@@ -599,10 +577,16 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
           goal = mergeGoal(goal, parseGoalPatch(args));
           await store.setGoalState(runId, goal);
           ctx.setGoal(renderGoal(goal));
+          if (goal.plan.length) await emit(step.id, { type: 'plan_update', step: stepIdx, goal });
         }
 
-        if (call.name === FINISH_TOOL_NAME) {
-          completedOutput = finishOutput(args);
+        if (finishAttempt) {
+          if (canFinishGoal(goal)) {
+            completedOutput = finishAttempt;
+          } else {
+            ctx.add({ role: 'system', content: finishBlockedMessage(goal) });
+            await emit(step.id, { type: 'recovery', step: stepIdx, message: finishBlockedMessage(goal) });
+          }
         }
       }
 
@@ -610,6 +594,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         goal = finishGoal(goal);
         await store.setGoalState(runId, goal);
         ctx.setGoal(renderGoal(goal));
+        if (goal.plan.length) await emit(step.id, { type: 'plan_update', step: stepIdx, goal });
         await persistCompaction(step.id, ctx.compactForHistory());
         streamStats.mark(stepIdx, 'done', undefined, true);
         await emit(step.id, { type: 'final', step: stepIdx, output: completedOutput });

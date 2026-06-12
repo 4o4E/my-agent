@@ -34,7 +34,6 @@ const MASK_MIN_CHARS = 200; // don't bother masking already-small tool results
 const MASK_HEAD_CHARS = 140; // how much of the original to keep as a recall hint
 const TOOL_ARGS_MASK_MIN_CHARS = 1000; // small args are useful enough to keep verbatim
 const TOOL_ARGS_HEAD_CHARS = 240;
-const DISPLAY_PAYLOAD_TOOLS = new Set(['render_ui']);
 
 /** The placeholder a masked tool result shows the model: a short head hint plus an
  *  elision marker. Derived purely from the original content, so the store recomputes
@@ -56,15 +55,6 @@ function maskedToolCallArguments(call: LlmToolCall): string {
       'Historical tool-call arguments were compacted. Do not copy this object into a new tool call; rebuild complete arguments if the tool is needed.',
     instruction_zh: '这是压缩后的历史工具调用参数。不要把这个对象复制成新的工具调用；如果仍需调用工具，请重新构造完整参数。',
   };
-
-  if (DISPLAY_PAYLOAD_TOOLS.has(call.name)) {
-    return JSON.stringify({
-      ...base,
-      reason:
-        'Historical display payloads are intentionally omitted because they are large UI snapshots, not reusable reasoning context.',
-      reason_zh: '历史展示 payload 体积较大，且不是可复用的推理上下文，因此已被故意省略。',
-    });
-  }
 
   const preview = call.arguments.slice(0, TOOL_ARGS_HEAD_CHARS).replace(/\s+/g, ' ').trimEnd();
   return JSON.stringify({
@@ -118,7 +108,7 @@ export function maskOldToolResults(
 }
 
 /** L1 — Tool-call argument masking. Older assistant messages can carry huge
- *  arguments (for example render_ui payloads). The result message remains paired by
+ *  arguments. The result message remains paired by
  *  call id, so old arguments can be summarized without losing conversation shape. */
 export function maskOldAssistantToolCalls(
   messages: LlmMessage[],
@@ -187,12 +177,11 @@ export function renderSummaryPrompt(messages: LlmMessage[], goal: string): LlmMe
     {
       role: 'system',
       content:
-        'Summarize old agent context for a future LLM call. Keep intent, plan, decisions, next action, key file paths, commands, errors, and completed work. Be concise and factual.\n' +
         '请为后续 LLM 调用总结较早的 agent 上下文。必须保留：意图、计划、关键决策、下一步、关键文件路径、命令、错误信息和已完成动作。要求简洁、准确、不要编造。',
     },
     {
       role: 'user',
-      content: `Current goal anchor / 当前目标锚点:\n${goal}\n\nOld context to summarize / 需要摘要的旧上下文:\n${transcript}`,
+      content: `当前目标锚点：\n${goal}\n\n需要摘要的旧上下文：\n${transcript}`,
     },
   ];
 }
@@ -200,7 +189,7 @@ export function renderSummaryPrompt(messages: LlmMessage[], goal: string): LlmMe
 export function summaryMessage(summary: string): LlmMessage {
   return {
     role: 'system',
-    content: `L3 anchored summary of earlier context / L3 锚定摘要：\n${summary.trim()}`,
+    content: `L3 锚定摘要：\n${summary.trim()}`,
     collapsed: 'summarized',
   };
 }

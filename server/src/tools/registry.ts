@@ -12,7 +12,7 @@ import { grepTool } from './grep.js';
 import { webFetchTool } from './webFetch.js';
 import { webSearchTool } from './webSearch.js';
 import { askUserTool } from './askUser.js';
-import { renderUiTool } from './renderUi.js';
+import { htmlArtifactTool } from './htmlArtifact.js';
 import { updatePlanTool } from './updatePlan.js';
 import { finishConversationTool } from './finishConversation.js';
 
@@ -26,7 +26,7 @@ const TOOLS: Tool[] = [
   webFetchTool,
   webSearchTool,
   askUserTool,
-  renderUiTool,
+  htmlArtifactTool,
   updatePlanTool,
   finishConversationTool,
 ];
@@ -41,22 +41,22 @@ export function getTool(name: string): Tool | undefined {
   return byName.get(name);
 }
 
-/** Run a tool by name, returning a normalized `ToolResult` ({ text, display? }).
+/** Run a tool by name, returning a normalized `ToolResult` ({ text }).
  *  Plain-string tool returns are wrapped; the policy gate runs first and the
  *  output cap is applied to `text`. */
 export async function runTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
   const tool = byName.get(name);
-  if (!tool) return { text: `Unknown tool: ${name}` };
+  if (!tool) return { text: `未知工具：${name}` };
   // Every tool call passes through the sandbox/permission policy first.
   const settings = await getToolSettings();
   const policy = createPolicy(settings);
   const decision = policy.check(name, args);
-  if (!decision.ok) return { text: `Blocked by tool policy: ${decision.reason}` };
+  if (!decision.ok) return { text: `工具策略已阻止：${decision.reason}` };
   try {
     const raw = await tool.run(args, { settings });
     const result: ToolResult = typeof raw === 'string' ? { text: raw } : raw;
-    return { text: policy.capOutput(result.text), display: result.display };
+    return { text: policy.capOutput(result.text) };
   } catch (err) {
-    return { text: `Tool ${name} threw: ${(err as Error).message}` };
+    return { text: `工具 ${name} 抛出异常：${(err as Error).message}` };
   }
 }

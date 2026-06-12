@@ -1,57 +1,66 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { finishGoal, initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
+import { canFinishGoal, finishBlockedMessage, finishGoal, initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
 import { executeRun } from './executor.js';
 import { MemoryStore } from '../store/memoryStore.js';
 import type { Provider } from '../llm/types.js';
 
-test('mergeGoal: plan/next replace, decisions append, intent fixed', () => {
+test('mergeGoal: plan/next replace, decisions append, missing unfinished items become failed', () => {
   const g0 = initGoal('build the thing');
-  const g1 = mergeGoal(g0, { plan: [{ text: 'a', status: 'doing' }], decisions: ['d1'], next: 'do a' });
+  const g1 = mergeGoal(g0, { plan: [{ text: 'a', status: 'doing' }, { text: 'b', status: 'doing' }], decisions: ['d1'], next: 'do a' });
   const g2 = mergeGoal(g1, { plan: [{ text: 'a', status: 'done' }], decisions: ['d2'], next: 'do b' });
 
-  assert.equal(g2.intent, 'build the thing'); // never changes
-  assert.deepEqual(g2.plan, [{ text: 'a', status: 'done' }]); // replaced
-  assert.deepEqual(g2.decisions, ['d1', 'd2']); // appended, never lost
+  assert.equal(g2.intent, 'build the thing'); // 原始目标不变
+  assert.deepEqual(g2.plan, [{ text: 'a', status: 'done' }, { text: 'b', status: 'failed' }]); // 漏掉的未完成项会保留为失败
+  assert.deepEqual(g2.decisions, ['d1', 'd2']); // 决策只追加，不丢失
   assert.equal(g2.next, 'do b');
 });
 
 test('renderGoal: compact, includes intent + plan checkboxes + next', () => {
   const text = renderGoal({
     intent: 'X',
-    plan: [{ text: 'one', status: 'done' }, { text: 'two', status: 'todo' }],
+    plan: [{ text: 'one', status: 'done' }, { text: 'two', status: 'todo' }, { text: 'three', status: 'failed' }],
     decisions: ['keep Y'],
     next: 'do two',
   });
-  assert.match(text, /Intent: X/);
+  assert.match(text, /意图：X/);
   assert.match(text, /\[x\] one/);
   assert.match(text, /\[ \] two/);
+  assert.match(text, /\[!\] three/);
   assert.match(text, /keep Y/);
-  assert.match(text, /Next: do two/);
+  assert.match(text, /下一步：do two/);
 });
 
 test('parseGoalPatch: coerces messy args, drops invalid', () => {
   const patch = parseGoalPatch({
-    plan: [{ text: 'a', status: 'doing' }, { text: '', status: 'todo' }, { status: 'bad' }],
+    plan: [{ text: 'a', status: 'failed' }, { text: '', status: 'todo' }, { status: 'bad' }],
     decisions: ['d1', ''],
     next: 'go',
   });
-  assert.deepEqual(patch.plan, [{ text: 'a', status: 'doing' }]); // empty/invalid dropped
+  assert.deepEqual(patch.plan, [{ text: 'a', status: 'failed' }]); // 空项和无效项会丢弃
   assert.deepEqual(patch.decisions, ['d1']);
   assert.equal(patch.next, 'go');
 });
 
-test('finishGoal: completed runs no longer keep doing state in the anchor', () => {
+test('finishGoal: preserves terminal plan status instead of forcing success', () => {
   const goal = finishGoal({
     intent: 'ship it',
-    plan: [{ text: 'build', status: 'doing' }, { text: 'verify', status: 'todo' }],
+    plan: [{ text: 'build', status: 'done' }, { text: 'verify', status: 'failed' }],
     decisions: ['keep tests'],
     next: 'verify',
   });
 
-  assert.deepEqual(goal.plan.map((p) => p.status), ['done', 'done']);
-  assert.equal(goal.next, '已完成');
+  assert.deepEqual(goal.plan.map((p) => p.status), ['done', 'failed']);
+  assert.equal(goal.next, '已结束（存在失败项）');
   assert.deepEqual(goal.decisions, ['keep tests']);
+});
+
+test('canFinishGoal: only blocks todo/doing plan items', () => {
+  const open = { intent: 'x', plan: [{ text: 'a', status: 'doing' as const }], decisions: [], next: '' };
+  const settled = { intent: 'x', plan: [{ text: 'a', status: 'failed' as const }], decisions: [], next: '' };
+  assert.equal(canFinishGoal(open), false);
+  assert.match(finishBlockedMessage(open), /未收口/);
+  assert.equal(canFinishGoal(settled), true);
 });
 
 test('executeRun: update_plan persists the goal anchor on the run', async () => {
@@ -80,11 +89,21 @@ test('executeRun: update_plan persists the goal anchor on the run', async () => 
       }
       return {
         content: 'done',
-        toolCalls: [{
-          id: 'f1',
-          name: 'finish_conversation',
-          arguments: JSON.stringify({ progress: 'done', completed: true }),
-        }],
+        toolCalls: [
+          {
+            id: 'p2',
+            name: 'update_plan',
+            arguments: JSON.stringify({
+              plan: [{ text: 'read files', status: 'done' }],
+              next: 'finish',
+            }),
+          },
+          {
+            id: 'f1',
+            name: 'finish_conversation',
+            arguments: JSON.stringify({ progress: 'done', completed: true }),
+          },
+        ],
       };
     },
   };
@@ -99,4 +118,62 @@ test('executeRun: update_plan persists the goal anchor on the run', async () => 
   assert.deepEqual(goal!.plan, [{ text: 'read files', status: 'done' }]);
   assert.deepEqual(goal!.decisions, ['focus on server/']);
   assert.equal(goal!.next, '已完成');
+});
+
+test('executeRun: finish_conversation is blocked until plan items are settled', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'build safely');
+
+  let turn = 0;
+  const provider: Provider = {
+    name: 'scripted',
+    async complete() {
+      turn += 1;
+      if (turn === 1) {
+        return {
+          content: null,
+          toolCalls: [{
+            id: 'p1',
+            name: 'update_plan',
+            arguments: JSON.stringify({ plan: [{ text: 'build', status: 'doing' }], next: 'build' }),
+          }],
+        };
+      }
+      if (turn === 2) {
+        return {
+          content: 'premature',
+          toolCalls: [{
+            id: 'f1',
+            name: 'finish_conversation',
+            arguments: JSON.stringify({ progress: 'done', completed: true }),
+          }],
+        };
+      }
+      return {
+        content: 'settled',
+        toolCalls: [
+          {
+            id: 'p2',
+            name: 'update_plan',
+            arguments: JSON.stringify({ plan: [{ text: 'build', status: 'done' }], next: 'finish' }),
+          },
+          {
+            id: 'f2',
+            name: 'finish_conversation',
+            arguments: JSON.stringify({ progress: 'done', completed: true }),
+          },
+        ],
+      };
+    },
+  };
+
+  await executeRun(run.id, { store, provider, publish: () => {}, hardStepCap: 5 });
+
+  const finished = await store.getRun(run.id);
+  assert.equal(finished?.status, 'done');
+  assert.equal(finished?.goal_state?.plan[0]?.status, 'done');
+  const events = await store.getEvents(run.id);
+  assert.ok(events.some((event) => event.type === 'recovery' && event.message.includes('finish_conversation 已被拒绝')));
+  assert.ok(events.some((event) => event.type === 'plan_update'));
 });

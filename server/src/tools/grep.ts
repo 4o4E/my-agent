@@ -21,13 +21,13 @@ async function* walkFiles(dir: string): AsyncGenerator<string> {
 
 export const grepTool: Tool = {
   name: 'grep',
-  description: 'Search file contents with a regular expression. Returns matching lines with file path and line number.',
+  description: '使用正则表达式搜索文件内容，返回带文件路径和行号的匹配行。',
   parameters: {
     type: 'object',
     properties: {
-      pattern: { type: 'string', description: 'Regular expression to search for' },
-      path: { type: 'string', description: 'Directory to search (default: cwd)' },
-      ignore_case: { type: 'boolean', description: 'Case-insensitive match' },
+      pattern: { type: 'string', description: '要搜索的正则表达式' },
+      path: { type: 'string', description: '搜索目录，默认是当前目录' },
+      ignore_case: { type: 'boolean', description: '是否忽略大小写' },
     },
     required: ['pattern'],
   },
@@ -37,7 +37,7 @@ export const grepTool: Tool = {
     try {
       re = new RegExp(String(args.pattern ?? ''), args.ignore_case ? 'i' : undefined);
     } catch (err) {
-      return `Invalid regex: ${(err as Error).message}`;
+      return `正则表达式无效：${(err as Error).message}`;
     }
     const results: string[] = [];
     for await (const file of walkFiles(root)) {
@@ -57,6 +57,6 @@ export const grepTool: Tool = {
         }
       }
     }
-    return results.length ? results.join('\n') : '(no matches)';
+    return results.length ? results.join('\n') : '（没有匹配项）';
   },
 };

@@ -80,13 +80,6 @@ export function uiEventStreamToChunks(
           case 'stream_stats':
             safe({ type: 'data-stream-stats', id: `stats-${runId}`, data: e.stats } as unknown as UIMessageChunk);
             break;
-          case 'a2ui':
-            // Declarative UI surface → an in-place-reconciling data part keyed by
-            // surfaceId; rendered by the A2UI catalog in Conversation.
-            closeText();
-            closeReason();
-            safe({ type: `data-a2ui`, id: e.surfaceId, data: e.message });
-            break;
           case 'notice': {
             closeReason();
             const id = `t-${e.step}`;
@@ -170,6 +163,11 @@ export function uiEventStreamToChunks(
             }
             break;
           }
+          case 'plan_update':
+            closeText();
+            closeReason();
+            safe({ type: 'data-plan-state', id: `plan-${e.step}`, data: e.goal } as unknown as UIMessageChunk);
+            break;
           case 'final': {
             // If this step produced no streamed text, surface the final output as
             // a text part; otherwise it was already streamed via 'text' deltas.

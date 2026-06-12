@@ -33,33 +33,14 @@ test('maybeCompact reports the DB ids of newly-masked tool results', async () =>
   }
 });
 
-test('maybeCompact masks display tool args even below the warn threshold', async () => {
-  const prior: ThreadMessage[] = [
-    {
-      id: 30,
-      role: 'assistant',
-      content: null,
-      toolCalls: [{ id: 'ui1', name: 'render_ui', arguments: JSON.stringify({ components: 'z'.repeat(3000) }) }],
-    },
-    { id: 31, role: 'tool', content: 'UI rendered.', toolCallId: 'ui1' },
-  ];
-  const ctx = new ContextManager(prior, 'continue');
-  const res = await ctx.maybeCompact();
-
-  assert.ok(res, 'expected display payload compaction to run');
-  assert.equal(res.info.reason, 'display-payload');
-  assert.equal(res.info.summarized, 0);
-  assert.deepEqual(res.collapsedIds, [30]);
-});
-
 test('compactForHistory masks old bulky payloads even below live threshold', () => {
   const { keepRecentMessages } = config.agent;
   config.agent.keepRecentMessages = 2;
   try {
-    const bigArgs = JSON.stringify({ components: 'z'.repeat(3000) });
+    const bigArgs = JSON.stringify({ path: 'artifacts/report.html', html: 'z'.repeat(3000) });
     const prior: ThreadMessage[] = [
-      { id: 20, role: 'assistant', content: null, toolCalls: [{ id: 'ui1', name: 'render_ui', arguments: bigArgs }] },
-      { id: 21, role: 'tool', content: 'x'.repeat(4000), toolCallId: 'ui1' },
+      { id: 20, role: 'assistant', content: null, toolCalls: [{ id: 'html1', name: 'write_html_artifact', arguments: bigArgs }] },
+      { id: 21, role: 'tool', content: 'x'.repeat(4000), toolCallId: 'html1' },
       { id: 22, role: 'assistant', content: null, toolCalls: [{ id: 'f1', name: 'finish_conversation', arguments: '{}' }] },
     ];
     const ctx = new ContextManager(prior, 'continue');
@@ -124,28 +105,27 @@ test('store returns masked assistant tool-call args on reload', async () => {
   const store = new MemoryStore();
   const thread = await store.createThread();
   const run = await store.createRun(thread.id, 'task');
-  const args = JSON.stringify({ components: 'u'.repeat(3000) });
+  const args = JSON.stringify({ path: 'artifacts/report.html', html: 'u'.repeat(3000) });
 
   const assistantId = await store.addMessage(thread.id, run.id, null, {
     role: 'assistant',
     content: null,
-    toolCalls: [{ id: 'ui1', name: 'render_ui', arguments: args }],
+    toolCalls: [{ id: 'html1', name: 'write_html_artifact', arguments: args }],
   });
-  await store.addMessage(thread.id, run.id, null, { role: 'tool', content: 'UI rendered.', toolCallId: 'ui1' });
+  await store.addMessage(thread.id, run.id, null, { role: 'tool', content: 'HTML artifact 已写入。', toolCallId: 'html1' });
   await store.markMessagesCollapsed([assistantId], 'masked');
 
   const reloaded = await store.loadThreadMessages(thread.id);
   const call = reloaded[0].toolCalls?.[0];
   assert.equal(reloaded[0].collapsed, 'masked');
-  assert.equal(call?.id, 'ui1');
-  assert.equal(call?.name, 'render_ui');
+  assert.equal(call?.id, 'html1');
+  assert.equal(call?.name, 'write_html_artifact');
   assert.ok((call?.arguments.length ?? 0) < args.length);
   const placeholder = JSON.parse(call?.arguments ?? '{}');
   assert.equal(placeholder.context_elided, true);
   assert.equal(placeholder.not_executable, true);
-  assert.equal(placeholder.tool_name, 'render_ui');
-  assert.equal('root' in placeholder, false);
-  assert.equal('components' in placeholder, false);
+  assert.equal(placeholder.tool_name, 'write_html_artifact');
+  assert.equal('html' in placeholder, false);
 });
 
 test('summarized rows are omitted from the reloaded view', async () => {

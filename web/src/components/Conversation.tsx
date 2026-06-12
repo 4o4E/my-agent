@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import { Activity, Bot, ChevronDown, Copy, Fingerprint, FileText, Workflow } from 'lucide-react';
+import { Activity, Bot, CheckCircle2, ChevronDown, Circle, Copy, Fingerprint, FileText, ListChecks, LoaderCircle, Workflow, XCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import {
   Conversation as AIConversation,
@@ -11,15 +11,13 @@ import { Message, MessageAction, MessageActions, MessageContent } from '@/compon
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai-elements/reasoning';
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from '@/components/ai-elements/tool';
 import type { ToolUIPart } from 'ai';
-import { A2uiSurface } from '@/a2ui/A2uiSurface';
-import type { A2uiMessage } from '@/a2ui/types';
 import { TableOfContents } from './TableOfContents';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { MarkdownContent } from './MarkdownContent';
 import type { StreamdownProps } from 'streamdown';
 import { AskUserQuestionCard, emptyAskUserDraft, type AskUserDraft } from './AskUserCard';
-import type { AskUserAnswer, AskUserSpec, StreamStats } from '@/api';
+import type { AskUserAnswer, AskUserSpec, GoalState, PlanItem, StreamStats } from '@/api';
 
 type Part = UIMessage['parts'][number];
 type Timing = { startedAt?: string; endedAt?: string; durationMs?: number };
@@ -47,7 +45,7 @@ function isActivityPart(p: Part): boolean {
 }
 
 function isHiddenDataPart(p: Part): boolean {
-  return p.type === 'data-run-id' || p.type === 'data-tool-timing' || p.type === 'data-reasoning-timing' || p.type === 'data-stream-stats';
+  return p.type === 'data-run-id' || p.type === 'data-tool-timing' || p.type === 'data-reasoning-timing' || p.type === 'data-stream-stats' || p.type === 'data-plan-state';
 }
 
 function durationFromTiming(t?: Timing): number | undefined {
@@ -174,6 +172,67 @@ function streamStageLabel(stats: StreamStats): string {
   if (stats.stage === 'tool_result') return `工具已返回${tool}`;
   if (stats.stage === 'error') return '运行出错';
   return '输出完成';
+}
+
+function latestPlanState(messages: UIMessage[]): GoalState | null {
+  for (let mi = messages.length - 1; mi >= 0; mi--) {
+    const message = messages[mi];
+    if (message.role !== 'assistant') continue;
+    for (let pi = message.parts.length - 1; pi >= 0; pi--) {
+      const part = message.parts[pi] as { type: string; data?: GoalState };
+      if (part.type === 'data-plan-state' && part.data?.plan?.length) return part.data;
+    }
+  }
+  return null;
+}
+
+function planStatusMeta(item: PlanItem): { label: string; className: string; icon: JSX.Element } {
+  if (item.status === 'done') {
+    return { label: '完成', className: 'text-emerald-600 dark:text-emerald-400', icon: <CheckCircle2 className="size-3.5" /> };
+  }
+  if (item.status === 'doing') {
+    return { label: '进行中', className: 'text-sky-600 dark:text-sky-400', icon: <LoaderCircle className="size-3.5 animate-spin" /> };
+  }
+  if (item.status === 'failed') {
+    return { label: '失败', className: 'text-destructive', icon: <XCircle className="size-3.5" /> };
+  }
+  return { label: '待办', className: 'text-muted-foreground', icon: <Circle className="size-3.5" /> };
+}
+
+function PinnedPlan({ goal, wide }: { goal: GoalState | null; wide: boolean }) {
+  if (!goal?.plan?.length) return null;
+  const done = goal.plan.filter((item) => item.status === 'done').length;
+  const failed = goal.plan.filter((item) => item.status === 'failed').length;
+  const open = goal.plan.length - done - failed;
+  const summary = open > 0 ? `${done}/${goal.plan.length} 完成 · ${open} 未收口` : failed > 0 ? `${done}/${goal.plan.length} 完成 · ${failed} 失败` : '计划已收口';
+
+  return (
+    <div className="shrink-0 border-b border-border/70 bg-background/95 backdrop-blur">
+      <div className={cn('mx-auto flex min-h-0 flex-col gap-2 px-4 py-3', wide ? 'max-w-5xl' : 'max-w-3xl')}>
+        <div className="flex min-w-0 items-center gap-2 text-sm">
+          <ListChecks className="size-4 shrink-0 text-primary" />
+          <span className="shrink-0 font-medium">任务计划</span>
+          <span className="min-w-0 truncate text-xs text-muted-foreground">{summary}</span>
+        </div>
+        <div className="flex max-h-28 flex-col gap-1 overflow-auto pr-1">
+          {goal.plan.map((item, index) => {
+            const meta = planStatusMeta(item);
+            return (
+              <div key={`${item.text}:${index}`} className="flex min-h-6 min-w-0 items-start gap-2 text-xs">
+                <span className={cn('mt-0.5 inline-flex shrink-0 items-center gap-1', meta.className)} title={meta.label}>
+                  {meta.icon}
+                </span>
+                <span className={cn('min-w-0 flex-1 break-words', item.status === 'done' && 'text-muted-foreground line-through decoration-border')}>
+                  {item.text}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        {goal.next && <div className="truncate text-xs text-muted-foreground">下一步：{goal.next}</div>}
+      </div>
+    </div>
+  );
 }
 
 function formatDuration(ms?: number): string | undefined {
@@ -390,9 +449,6 @@ function AssistantPart({
         <ReasoningContent>{part.text}</ReasoningContent>
       </Reasoning>
     ) : null;
-  }
-  if (part.type === 'data-a2ui') {
-    return <A2uiSurface message={(part as { data: A2uiMessage }).data} />;
   }
   if (part.type === 'data-ask-user-question') {
     const spec = (part as { data: AskUserSpec }).data;
@@ -638,7 +694,6 @@ function AssistantMessage({
   const timingMaps = buildTimingMaps(message.parts);
   const runId = runIdFromAssistant(message);
   const nodes: JSX.Element[] = [];
-  const a2uiParts: Array<{ part: Part; index: number }> = [];
   let group: { entries: ActivityEntry[]; start: number } | null = null;
   const flushGroup = () => {
     if (!group) return;
@@ -665,10 +720,6 @@ function AssistantMessage({
 
   message.parts.forEach((part, i) => {
     if (isHiddenDataPart(part)) return;
-    if (part.type === 'data-a2ui') {
-      a2uiParts.push({ part, index: i });
-      return;
-    }
     if (isActivityPart(part)) {
       group ??= { entries: [], start: i };
       group.entries.push({ part, index: i });
@@ -695,25 +746,6 @@ function AssistantMessage({
     );
   });
   flushGroup();
-  for (const { part, index } of a2uiParts) {
-    nodes.push(
-      <AssistantPart
-        key={`a2ui-${index}`}
-        part={part}
-        answer={undefined}
-        canceled={undefined}
-        toolActive={false}
-        timingMaps={timingMaps}
-        workspaceRoot={workspaceRoot}
-        onOpenRemoteFile={onOpenRemoteFile}
-        runId={runId}
-        askUserDrafts={askUserDrafts}
-        onAskUserDraftChange={onAskUserDraftChange}
-        onAskUserSubmit={onAskUserSubmit}
-        onAskUserCancel={onAskUserCancel}
-      />,
-    );
-  }
   return (
     <>
       {nodes}
@@ -759,10 +791,13 @@ export function Conversation({
       });
     }
   }
+  const plan = latestPlanState(messages);
 
   return (
     <div className="relative flex h-full min-h-0">
-      <AIConversation className="h-full flex-1">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        <PinnedPlan goal={plan} wide={wide} />
+      <AIConversation className="min-h-0 flex-1">
         <ConversationContent className={cn('mx-auto', wide ? 'max-w-5xl' : 'max-w-3xl')}>
           <div ref={contentRef} className="flex flex-col gap-8">
             {messages.length === 0 ? (
@@ -815,6 +850,7 @@ export function Conversation({
         </ConversationContent>
         <ConversationScrollButton />
       </AIConversation>
+      </div>
       <TableOfContents contentRef={contentRef} />
     </div>
   );

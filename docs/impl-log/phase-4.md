@@ -71,5 +71,5 @@ OTEL_ENABLED=true OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 npm --prefix
 ## 备注
 
 - 默认 `OTEL_ENABLED=false`:不加载导出器、不产生开销,运行版本零变化。
-- "debug 面板渲染原始 parts/A2UI JSON" 属前端项,随被推迟的 Phase 3/5 再做;
+- debug 面板属前端项,随后续界面打磨再做;
   本阶段后端侧 trace 已覆盖 token / tool I/O / 多步链路。

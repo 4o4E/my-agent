@@ -7,7 +7,7 @@
 
 在前端引入 `UiTransport` 接口,把现有 WS/REST 逻辑包成 `LegacyTransport`;
 上层渲染只依赖归一化的 `UiEvent`,与具体传输协议解耦。为后续接入
-AI SDK UI stream / AG-UI / A2UI part 预留唯一切换点。
+AI SDK UI stream 或其他事件流预留唯一切换点。
 
 ## 改动
 
@@ -16,10 +16,9 @@ AI SDK UI stream / AG-UI / A2UI part 预留唯一切换点。
 - [web/src/transport/types.ts](../../web/src/transport/types.ts)
   - `UserInput` —— 用户提交的一轮输入(对象形态,便于以后加附件等字段)。
   - `UiEvent` —— 渲染层消费的归一化事件联合,与线缆格式无关:
-    `step_start | reasoning | text | tool | a2ui | final | error`。
+    `step_start | reasoning | text | tool | final | error`。
     保留 `step`(引擎多步、UI 按 step 分组);`tool` 事件可带 `input`(调用)
-    和/或 `output`(结果),由渲染层按 `id` 合并。`a2ui` 变体为 Phase 5 预留,
-    现在即写入契约,避免日后改动边界。
+    和/或 `output`(结果),由渲染层按 `id` 合并。
   - `UiTransport` —— `send(threadId, input)` 启动一次 run、`subscribe(runId, …)`
     流式订阅 `UiEvent`;上层看不到底层 REST/WS。
 - [web/src/transport/legacy.ts](../../web/src/transport/legacy.ts)
@@ -38,7 +37,7 @@ AI SDK UI stream / AG-UI / A2UI part 预留唯一切换点。
 - [web/src/components/MessageList.tsx](../../web/src/components/MessageList.tsx)
   - `Turn.events`、`buildBlocks`、`StepGroup`、`TurnView` 全部改吃 `UiEvent`;
     `switch (e.type)` → `switch (e.kind)`;`tool` 事件按 `id` 合并 input/output
-    (等价旧的 tool_call/tool_result 在位合并);`a2ui` 暂忽略(无 renderer)。
+    (等价旧的 tool_call/tool_result 在位合并)。
 
 > 说明:`web/src/api.ts` 仍保留 `AgentEvent` 与 `startRun`/`subscribeRun` 作为
 > **底层线缆客户端**,仅由 `transport/legacy.ts` 引用;上层不再直接依赖。
@@ -54,4 +53,4 @@ AI SDK UI stream / AG-UI / A2UI part 预留唯一切换点。
 
 - 切换传输时,只需替换 `App.tsx` 顶部的 `transport` 与新增一个实现 `UiTransport`
   的适配器,渲染层零改动。
-- `UiEvent.a2ui` 已在契约内,Phase 5 落 renderer 时无需改边界。
+- 如需新增事件类型,只改 transport 适配器和对应渲染分支。

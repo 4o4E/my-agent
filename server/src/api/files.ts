@@ -22,7 +22,7 @@ function normalizeRemotePath(raw: unknown, configuredRoot: string): string {
   const root = workspaceRoot(configuredRoot);
   const absolute = isAbsolute(input) ? resolve(input) : resolve(root, input);
   if (!isWithin(root, absolute)) {
-    throw new Error(`path is outside workspace: ${input}`);
+    throw new Error(`路径超出 workspace：${input}`);
   }
   return absolute;
 }
@@ -54,7 +54,7 @@ filesApi.get('/list', async (req, res) => {
     const settings = await getToolSettings();
     const dir = normalizeRemotePath(req.query.path, settings.workspaceRoot);
     const info = await stat(dir);
-    if (!info.isDirectory()) return res.status(400).json({ error: 'path is not a directory' });
+    if (!info.isDirectory()) return res.status(400).json({ error: 'path 不是目录' });
 
     const entries = await Promise.all(
       (await readdir(dir)).map(async (name) => {
@@ -82,7 +82,7 @@ filesApi.post('/upload', async (req, res) => {
     const settings = await getToolSettings();
     const targetPath = normalizeRemotePath(req.body?.path, settings.workspaceRoot);
     const contentBase64 = String(req.body?.contentBase64 ?? '');
-    if (!contentBase64) return res.status(400).json({ error: 'contentBase64 is required' });
+    if (!contentBase64) return res.status(400).json({ error: 'contentBase64 为必填' });
 
     const content = Buffer.from(contentBase64, 'base64');
     await mkdir(dirname(targetPath), { recursive: true });
@@ -98,7 +98,7 @@ filesApi.get('/preview', async (req, res) => {
     const settings = await getToolSettings();
     const file = normalizeRemotePath(req.query.path, settings.workspaceRoot);
     const info = await stat(file);
-    if (!info.isFile()) return res.status(400).json({ error: 'path is not a file' });
+    if (!info.isFile()) return res.status(400).json({ error: 'path 不是文件' });
 
     const startLine = Math.max(1, Number(req.query.startLine ?? 1) || 1);
     const limit = Math.min(MAX_LINE_LIMIT, Math.max(1, Number(req.query.limit ?? DEFAULT_LINE_LIMIT) || DEFAULT_LINE_LIMIT));

@@ -73,7 +73,7 @@ UI message stream。这样 executor / WS / PG 持久化全部不动,风险最低
   - **未加**全局 `* {@apply border-border}`,避免改动既有边框。
 - 新增 copy-in 组件 [web/src/components/ui/](../../web/src/components/ui/):
   `button card badge separator table textarea`(离线手写,Card/Table/Badge/Separator
-  也作 Stage 3 的 A2UI catalog 基座)。
+  供通用界面复用)。
 - 用 shadcn 重做外壳:[Sidebar](../../web/src/components/Sidebar.tsx)、
   [Composer](../../web/src/components/Composer.tsx)、[ChatView](../../web/src/components/ChatView.tsx)、
   [Conversation](../../web/src/components/Conversation.tsx)(气泡/工具卡/思考卡改 Card/Badge +
@@ -91,8 +91,7 @@ reasoning tool prompt-input`(自动确认覆盖)。
 
 - 重写 [Conversation.tsx](../../web/src/components/Conversation.tsx):用 AI Elements
   `Conversation/ConversationContent/ConversationEmptyState/ConversationScrollButton`、
-  `Message/MessageContent/MessageResponse`(Streamdown)、`Reasoning*`、`Tool*`;
-  `data-a2ui` 分片仍渲染我们的 `<A2uiSurface>`。
+  `Message/MessageContent/MessageResponse`(Streamdown)、`Reasoning*`、`Tool*`。
 - 重写 [Composer.tsx](../../web/src/components/Composer.tsx):用 `PromptInput*`(自管输入态、
   Enter 发送、Submit 状态图标)。
 - AI Elements 装入 `src/components/ai-elements/` + 一批 `ui/`(collapsible/select/dialog/
@@ -102,10 +101,9 @@ reasoning tool prompt-input`(自动确认覆盖)。
   [select.tsx](../../web/src/components/ui/select.tsx) `SelectTrigger` 的 `size` prop。
 
 验收:`tsc -b` + `vite build` 绿(bundle 升至 ~2.3MB,含 Streamdown math/mermaid/shiki,
-后续可按需 lazy-load);SSR `ChatView` 渲染用户气泡 + 工具卡 + Reasoning + A2UI 表格 + 助手
+后续可按需 lazy-load);SSR `ChatView` 渲染用户气泡 + 工具卡 + Reasoning + 助手
 Markdown 全部正常。
 
 ## 后续(Stage 3/4)
 
-- A2UI 声明式 UI 以 `data-a2ui` 分片接入,`uiEventStreamToChunks` 已为 `a2ui` 预留分支位;
-  catalog 复用 shadcn 组件。
+- 继续打磨 Markdown/Mermaid/LaTeX 渲染和 HTML artifact 预览体验。

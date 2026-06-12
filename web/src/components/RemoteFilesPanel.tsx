@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { BundledLanguage } from 'shiki';
-import { ChevronRight, FileText, Folder, FolderOpen, Paperclip, RefreshCw, X } from 'lucide-react';
+import { Code2, Eye, ChevronRight, FileText, Folder, FolderOpen, Paperclip, RefreshCw, X } from 'lucide-react';
 import { listRemoteFiles, previewRemoteFile, type FilePreview, type RemoteFileEntry } from '@/api';
 import { CodeBlock } from '@/components/ai-elements/code-block';
 import { Button } from '@/components/ui/button';
@@ -119,6 +119,7 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
   const [selectedSize, setSelectedSize] = useState<number | undefined>();
   const [preview, setPreview] = useState<FilePreview | null>(null);
   const [chunks, setChunks] = useState<PreviewChunk[]>([]);
+  const [htmlMode, setHtmlMode] = useState<'preview' | 'source'>('preview');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const previewRequestRef = useRef(0);
@@ -148,6 +149,7 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
       setSelectedSize(size);
       setPreview(null);
       setChunks([]);
+      setHtmlMode(extOf(path) === 'html' || extOf(path) === 'htm' ? 'preview' : 'source');
     } else {
       pendingPreviewStartsRef.current.add(startLine);
     }
@@ -193,6 +195,7 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
   }, [open, previewPath]);
 
   const previewLanguage = selectedPath ? languageForPath(selectedPath) : 'log';
+  const selectedIsHtml = selectedPath ? ['html', 'htm'].includes(extOf(selectedPath)) : false;
   const previewRows = useMemo<PreviewRow[]>(() => {
     const byLine = new Map<number, string>();
     const sortedChunks = [...chunks].sort((a, b) => a.startLine - b.startLine);
@@ -314,6 +317,28 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
                   <div className="text-xs text-muted-foreground">{formatSize(selectedSize)}</div>
                   {totalLines != null && <div className="text-xs text-muted-foreground">{totalLines} 行</div>}
                 </div>
+                {selectedIsHtml && (
+                  <div className="flex rounded-md border bg-background p-0.5">
+                    <Button
+                      variant={htmlMode === 'preview' ? 'secondary' : 'ghost'}
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => setHtmlMode('preview')}
+                      title="预览 HTML"
+                    >
+                      <Eye className="size-4" />
+                    </Button>
+                    <Button
+                      variant={htmlMode === 'source' ? 'secondary' : 'ghost'}
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => setHtmlMode('source')}
+                      title="查看源码"
+                    >
+                      <Code2 className="size-4" />
+                    </Button>
+                  </div>
+                )}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -328,6 +353,14 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
                   <div className="flex h-full items-center justify-center rounded-md border bg-muted/20 px-3 py-8 text-center text-sm text-muted-foreground">
                     正在加载前 {INITIAL_PREVIEW_LINES} 行…
                   </div>
+                ) : chunks.length > 0 && selectedIsHtml && htmlMode === 'preview' ? (
+                  <iframe
+                    title={selectedPath}
+                    className="h-full w-full rounded-md border bg-white"
+                    sandbox="allow-scripts allow-forms allow-popups allow-downloads"
+                    referrerPolicy="no-referrer"
+                    srcDoc={previewCode}
+                  />
                 ) : chunks.length > 0 ? (
                   <CodeBlock
                     className="h-full"

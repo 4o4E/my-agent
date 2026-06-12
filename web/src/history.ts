@@ -16,7 +16,6 @@ type Part = UIMessage['parts'][number];
 export function foldUiEventsToParts(events: UiEvent[]): Part[] {
   const parts: Part[] = [];
   const toolById = new Map<string, Record<string, unknown>>();
-  const a2uiBySurface = new Map<string, number>();
   let textBuf = '';
   let reasonBuf = '';
   let reasonStep: number | null = null;
@@ -125,6 +124,11 @@ export function foldUiEventsToParts(events: UiEvent[]): Part[] {
         }
         break;
       }
+      case 'plan_update':
+        flushReason();
+        flushText();
+        parts.push({ type: 'data-plan-state', id: `plan-${e.step}`, data: e.goal } as unknown as Part);
+        break;
       case 'final':
         flushReason();
         if (textBuf) flushText();
@@ -134,16 +138,6 @@ export function foldUiEventsToParts(events: UiEvent[]): Part[] {
         flushReason();
         flushText();
         parts.push({ type: 'text', text: `⚠️ ${e.message}`, state: 'done' });
-        break;
-      case 'a2ui':
-        flushReason();
-        flushText();
-        if (a2uiBySurface.has(e.surfaceId)) {
-          parts[a2uiBySurface.get(e.surfaceId) as number] = { type: 'data-a2ui', id: e.surfaceId, data: e.message } as unknown as Part;
-        } else {
-          a2uiBySurface.set(e.surfaceId, parts.length);
-          parts.push({ type: 'data-a2ui', id: e.surfaceId, data: e.message } as unknown as Part);
-        }
         break;
       case 'step_start':
         break;
@@ -162,6 +156,9 @@ export function runsToUiMessages(runs: RunWithEvents[]): UIMessage[] {
     const parts = foldUiEventsToParts(
       run.events.map(toUiEvent).filter((e): e is UiEvent => e !== null),
     );
+    if (run.goal_state?.plan?.length && !parts.some((part) => part.type === 'data-plan-state')) {
+      parts.unshift({ type: 'data-plan-state', id: `plan-${run.id}`, data: run.goal_state } as unknown as Part);
+    }
     if (parts.length) {
       parts.unshift({ type: 'data-run-id', id: run.id, data: { runId: run.id } } as unknown as Part);
       messages.push({ id: `${run.id}:a`, role: 'assistant', parts });

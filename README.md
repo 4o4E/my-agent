@@ -144,7 +144,7 @@ pnpm run restart
 
 - 前端能看到多轮 step、reasoning、tool_call、tool_result 和 final。
 - 任务过程会使用文件读取、grep 或 shell 等工具。
-- 最终输出前会通过 `render_ui` 生成结构化总结，再调用 `finish_conversation` 完成。
+- 最终输出默认使用 Markdown/Mermaid/LaTeX；复杂报告可写入 HTML artifact，再调用 `finish_conversation` 完成。
 - 数据库中能查到对应 run、step、message 和 event。
 - 人为降低 `LLM_CONTEXT_BUDGET` 时，可以观察到 `compaction` 事件。
 
@@ -168,7 +168,7 @@ pnpm --filter server typecheck
 - [长任务设计](docs/long-task-design.md)：Goal 锚点、上下文压缩、token 预算、取消与长任务验证链路。
 - [工具沙箱设计](docs/tool-sandbox.md)：工具权限、bwrap 沙箱选型、读写范围与命令限制。
 - [题面验收报告](docs/acceptance-report.md)：当前完成范围、未实现边界和后续平台化设计。
-- [架构改造方案](docs/refactor-plan.md)：AI SDK、AI Elements、Streamdown、A2UI、可观测和沙箱路线。
+- [架构改造方案](docs/refactor-plan.md)：AI SDK、AI Elements、Streamdown、HTML artifact、可观测和沙箱路线。
 - [实施日志](docs/impl-log/)：各阶段落地记录、验证结果和遗留事项。
 - [.env.example](.env.example)：本地环境变量模板。
 

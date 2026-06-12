@@ -78,7 +78,7 @@ test('executeRun: runs the loop across steps and finalizes', async () => {
   assert.ok(stats.some((e) => e.totals.toolInputChars > 0));
   assert.ok(stats.some((e) => e.totals.toolOutputChars > 0));
 
-  // Conversation persisted as user + assistant/tool for glob + assistant/tool for finish.
+  // 对话会持久化为：用户消息、glob 的 assistant/tool 消息、finish 的 assistant/tool 消息。
   const msgs = await store.loadThreadMessages(thread.id);
   assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant', 'tool']);
 });
@@ -103,7 +103,7 @@ test('executeRun: injects the current workspace root into the LLM context', asyn
     toolSettings: TEST_TOOL_SETTINGS,
   });
 
-  assert.match(systemText, /Persistent workspace root/);
+  assert.match(systemText, /持久工作区根目录/);
   assert.match(systemText, /\/workspace\/agent/);
   assert.match(systemText, /\/home\/user/);
   assert.match(systemText, /\/tmp/);
@@ -179,13 +179,13 @@ test('executeRun: compacts bulky old history when finishing a run', async () => 
     const store = new MemoryStore();
     const thread = await store.createThread();
     const oldRun = await store.createRun(thread.id, 'old');
-    const bigArgs = JSON.stringify({ components: 'r'.repeat(3000) });
+    const bigArgs = JSON.stringify({ path: 'artifacts/old.html', html: 'r'.repeat(3000) });
     await store.addMessage(thread.id, oldRun.id, null, {
       role: 'assistant',
       content: null,
-      toolCalls: [{ id: 'ui-old', name: 'render_ui', arguments: bigArgs }],
+      toolCalls: [{ id: 'html-old', name: 'write_html_artifact', arguments: bigArgs }],
     });
-    await store.addMessage(thread.id, oldRun.id, null, { role: 'tool', content: 'x'.repeat(4000), toolCallId: 'ui-old' });
+    await store.addMessage(thread.id, oldRun.id, null, { role: 'tool', content: 'x'.repeat(4000), toolCallId: 'html-old' });
 
     const run = await store.createRun(thread.id, 'new');
     const published: AgentEvent[] = [];
@@ -197,13 +197,13 @@ test('executeRun: compacts bulky old history when finishing a run', async () => 
     });
 
     const msgs = await store.loadThreadMessages(thread.id);
-    const oldAssistant = msgs.find((m) => m.toolCalls?.[0]?.id === 'ui-old');
-    const oldTool = msgs.find((m) => m.toolCallId === 'ui-old');
+    const oldAssistant = msgs.find((m) => m.toolCalls?.[0]?.id === 'html-old');
+    const oldTool = msgs.find((m) => m.toolCallId === 'html-old');
     assert.equal(oldAssistant?.collapsed, 'masked');
     const placeholder = JSON.parse(oldAssistant?.toolCalls?.[0]?.arguments ?? '{}');
     assert.equal(placeholder.context_elided, true);
     assert.equal(placeholder.not_executable, true);
-    assert.equal(placeholder.tool_name, 'render_ui');
+    assert.equal(placeholder.tool_name, 'write_html_artifact');
     assert.equal(oldTool?.content, maskPlaceholder('x'.repeat(4000)));
     assert.ok(published.some((e) => e.type === 'compaction' && e.reason === 'post-run-history'));
   } finally {
@@ -345,7 +345,7 @@ test('executeRun: resumes the same run after a user answer without duplicating i
   };
 
   await executeRun(run.id, { store, provider, publish: () => {}, hardStepCap: 3 });
-  await store.addMessage(thread.id, run.id, null, { role: 'user', content: '用户回答 / User answer:\nA' });
+  await store.addMessage(thread.id, run.id, null, { role: 'user', content: '用户回答：\nA' });
   await store.setRunStatus(run.id, 'pending');
   await executeRun(run.id, { store, provider, publish: () => {}, hardStepCap: 3, resume: true });
 
@@ -354,7 +354,7 @@ test('executeRun: resumes the same run after a user answer without duplicating i
   assert.equal(finished?.output, 'used answer');
   const msgs = await store.loadThreadMessages(thread.id);
   assert.equal(msgs.filter((m) => m.role === 'user' && m.content === 'needs answer').length, 1);
-  assert.ok(msgs.some((m) => m.role === 'user' && m.content?.includes('User answer')));
+  assert.ok(msgs.some((m) => m.role === 'user' && m.content?.includes('用户回答')));
 });
 
 test('memory store: deleteThread removes dependent run data', async () => {

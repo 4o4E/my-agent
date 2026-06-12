@@ -1,6 +1,6 @@
 // Transport boundary (Phase 0): the UI layer depends only on `UiEvent` and the
 // `UiTransport` interface — never on the concrete wire protocol (WS frames, SSE,
-// or a future AG-UI / A2UI part stream). Swapping the transport (LegacyTransport →
+// or a future event stream). Swapping the transport (LegacyTransport →
 // AiSdkTransport → AgUiTransport) must not touch any rendering code.
 
 /** A user-submitted turn. Kept as an object so future fields (attachments, etc.)
@@ -15,9 +15,7 @@ export interface UserInput {
  *
  * `step` is preserved (the engine is multi-step and the UI groups by step). A
  * `tool` event may carry `input` (on the call) and/or `output` (on the result);
- * the renderer merges the two by `id`. The `a2ui` variant is reserved for
- * Phase 5 (declarative UI) and is part of the contract now so the boundary need
- * not change later.
+ * the renderer merges the two by `id`.
  */
 export type UiEvent =
   | { kind: 'step_start'; step: number }
@@ -26,7 +24,7 @@ export type UiEvent =
   | { kind: 'reasoning_timing'; step: number; startedAt: string; endedAt: string; durationMs: number }
   | { kind: 'text'; step: number; delta: string }
   | { kind: 'tool'; step: number; id: string; name: string; input?: unknown; output?: unknown; startedAt?: string; endedAt?: string; durationMs?: number }
-  | { kind: 'a2ui'; step: number; surfaceId: string; message: unknown }
+  | { kind: 'plan_update'; step: number; goal: GoalState }
   | { kind: 'notice'; step: number; message: string }
   | { kind: 'ask_user_question'; step: number; runId?: string; spec: AskUserSpec }
   | { kind: 'ask_user_answer'; step: number; answer: AskUserAnswer }
@@ -45,5 +43,5 @@ export interface UiTransport {
   /** Stream live `UiEvent`s for a run. Returns an unsubscribe function. */
   subscribe(runId: string, onEvent: (e: UiEvent) => void, onClose?: () => void): () => void;
 }
-import type { AskUserAnswer, AskUserSpec } from '@/api';
+import type { AskUserAnswer, AskUserSpec, GoalState } from '@/api';
 import type { StreamStats } from '@/api';

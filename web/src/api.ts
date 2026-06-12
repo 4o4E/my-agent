@@ -1,4 +1,18 @@
 // Mirror of the server's AgentEvent union (kept in sync manually for the skeleton).
+export type PlanStatus = 'todo' | 'doing' | 'done' | 'failed';
+
+export interface PlanItem {
+  text: string;
+  status: PlanStatus;
+}
+
+export interface GoalState {
+  intent: string;
+  plan: PlanItem[];
+  decisions: string[];
+  next: string;
+}
+
 export type AgentEvent =
   | { type: 'step_start'; step: number }
   | ({ type: 'stream_stats'; step: number } & StreamStats)
@@ -7,7 +21,7 @@ export type AgentEvent =
   | { type: 'llm_delta'; step: number; text: string }
   | { type: 'tool_call'; step: number; name: string; args: unknown; id: string; startedAt: string }
   | { type: 'tool_result'; step: number; id: string; name: string; result: string; startedAt: string; endedAt: string; durationMs: number }
-  | { type: 'a2ui'; step: number; surfaceId: string; message: unknown }
+  | { type: 'plan_update'; step: number; goal: GoalState }
   | { type: 'compaction'; step: number; estBefore: number; estAfter: number; masked: number; summarized?: number; dropped: number; reason?: string }
   | { type: 'user_question'; step: number; question: string; toolCallId?: string; spec?: AskUserSpec }
   | { type: 'user_answer'; step: number; answer: AskUserAnswer }
@@ -85,6 +99,7 @@ export interface RunWithEvents {
   input: string;
   output: string | null;
   error: string | null;
+  goal_state?: GoalState | null;
   created_at: string;
   events: AgentEvent[];
 }

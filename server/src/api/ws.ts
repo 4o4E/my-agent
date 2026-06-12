@@ -5,8 +5,8 @@ import { store } from '../store/index.js';
 import type { AgentEvent } from '../agent/types.js';
 
 /**
- * WebSocket endpoint: ws://host/ws?runId=<id>
- * Replays any events already persisted, then streams live events for that run.
+ * WebSocket 端点：ws://host/ws?runId=<id>
+ * 先回放已持久化事件，再继续推送该 run 的实时事件。
  */
 export function attachWebSocket(server: Server): void {
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -15,7 +15,7 @@ export function attachWebSocket(server: Server): void {
     const url = new URL(req.url ?? '', 'http://localhost');
     const runId = url.searchParams.get('runId');
     if (!runId) {
-      socket.close(1008, 'runId query param required');
+      socket.close(1008, '缺少 runId 查询参数');
       return;
     }
 
@@ -23,17 +23,17 @@ export function attachWebSocket(server: Server): void {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(event));
     };
 
-    // Replay history so a late subscriber still sees the full run.
+    // 回放历史事件，确保较晚连接的前端也能看到完整 run。
     try {
       for (const e of await store.getEvents(runId)) send(e);
     } catch {
-      /* ignore replay errors */
+      /* 忽略回放失败 */
     }
 
     const unsubscribe = runBus.subscribe(runId, (event) => {
       send(event);
       if (event.type === 'final' || event.type === 'error' || event.type === 'user_question') {
-        socket.close(1000, 'run complete');
+        socket.close(1000, 'run 已结束');
       }
     });
 

@@ -4,17 +4,17 @@ import type { Tool } from './types.js';
 export const finishConversationTool: Tool = {
   name: 'finish_conversation',
   description:
-    'Finish or checkpoint the current conversation. English: call this tool with `progress` before ending; only `completed: true` is allowed to finish the run. 中文：结束前必须调用本工具并填写 `progress` 工作进度；只有 `completed: true` 才允许真正结束本次 run。',
+    '结束或记录当前对话进度。结束前必须调用本工具并填写 `progress` 工作进度；只有 `completed: true` 才允许真正结束本次 run。',
   parameters: {
     type: 'object',
     properties: {
       progress: {
         type: 'string',
-        description: '工作进度 / Work progress: what has been done, key result, and remaining risk if any.',
+        description: '工作进度：已完成什么、关键结果是什么、是否还有剩余风险。',
       },
       completed: {
         type: 'boolean',
-        description: '是否已完成 / Whether the requested work is fully completed.',
+        description: '用户请求的工作是否已经完全完成。',
       },
     },
     required: ['progress', 'completed'],
@@ -22,8 +22,7 @@ export const finishConversationTool: Tool = {
   async run(args) {
     const progress = typeof args.progress === 'string' ? args.progress.trim() : '';
     const completed = args.completed === true;
-    if (!progress) return 'finish_conversation error: `progress` is required.';
-    return completed ? `Conversation finished. Progress: ${progress}` : `Progress recorded, continue working: ${progress}`;
+    if (!progress) return 'finish_conversation 错误：必须填写 `progress`。';
+    return completed ? `对话已完成。进度：${progress}` : `已记录进度，请继续工作：${progress}`;
   },
 };
-

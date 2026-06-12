@@ -9,8 +9,6 @@ interface TocItem {
 }
 
 const MESSAGE_SELECTOR = '[data-toc-message]';
-const RENDER_UI_SCOPE_SELECTOR = '[data-toc-scope="render-ui"]';
-const A2UI_TITLE_SELECTOR = `${RENDER_UI_SCOPE_SELECTOR} [data-a2ui-title]`;
 
 /** Nearest scrollable ancestor — the element the conversation actually scrolls in. */
 function getScrollParent(node: HTMLElement | null): HTMLElement | null {
@@ -26,7 +24,7 @@ function getScrollParent(node: HTMLElement | null): HTMLElement | null {
 }
 
 /**
- * 右侧导航只认对话层级：用户锚点显示用户消息，回复锚点显示 render_ui 标题。
+ * 右侧导航只认对话层级：用户锚点显示用户消息，回复锚点显示回复摘要。
  * 工具参数、工具结果和思考内容即使包含标题元素，也不会进入目录。
  */
 export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElement | null> }) {
@@ -46,26 +44,14 @@ export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElem
         continue;
       }
 
-      const titles = Array.from(message.querySelectorAll<HTMLElement>(A2UI_TITLE_SELECTOR))
-        .map((el) => ({ el, text: el.textContent?.trim() ?? '' }))
-        .filter((item) => item.text.length > 0);
-      const surface = message.querySelector<HTMLElement>(RENDER_UI_SCOPE_SELECTOR);
-      const fallbackTitle = surface?.dataset.tocTitle || message.dataset.tocTitle || '回复';
-      const firstTitle = titles[0];
-
-      nextItems.push({ index: targets.length, text: firstTitle?.text || fallbackTitle, level: 1 });
-      targets.push(firstTitle?.el ?? surface ?? message);
-
-      for (const title of titles.slice(1)) {
-        nextItems.push({ index: targets.length, text: title.text, level: 2 });
-        targets.push(title.el);
-      }
+      nextItems.push({ index: targets.length, text: message.dataset.tocTitle || '回复', level: 1 });
+      targets.push(message);
     }
 
     return { items: nextItems, targets };
   }, []);
 
-  // 对话 DOM 变化时重新扫描，包含流式输出和 A2UI 分批更新。
+  // 对话 DOM 变化时重新扫描，包含流式输出。
   useEffect(() => {
     const root = contentRef.current;
     if (!root) return;
@@ -76,7 +62,7 @@ export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElem
     return () => mo.disconnect();
   }, [collectTargets, contentRef]);
 
-  // 滚动时高亮最靠近顶部的消息或 A2UI 标题。
+  // 滚动时高亮最靠近顶部的消息。
   useEffect(() => {
     const root = contentRef.current;
     if (!root || items.length === 0) return;

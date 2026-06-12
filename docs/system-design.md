@@ -121,7 +121,7 @@ Web 创建 thread
 - `registry.ts`：工具注册表和统一执行入口。
 - `policy.ts`：工具 allow/deny、路径围栏、shell 开关、网络开关、输出截断。
 - `sandbox.ts`：shell 子进程执行后端，支持宿主执行和 bwrap。
-- 具体工具：`shell`、`file_read`、`file_write`、`file_edit`、`glob`、`grep`、`web_fetch`、`web_search`、`ask_user`、`render_ui`、`update_plan`、`finish_conversation`。
+- 具体工具：`shell`、`file_read`、`file_write`、`file_edit`、`glob`、`grep`、`web_fetch`、`web_search`、`ask_user`、`write_html_artifact`、`update_plan`、`finish_conversation`。
 
 `server/src/store/`
 
@@ -154,10 +154,6 @@ Web 创建 thread
 - `ChatView`、`Conversation`、`Composer`：聊天主界面。
 - `SettingsView`：工具策略、沙箱、网络和输出上限等运行时配置。
 - `RemoteFilesPanel`：工作区文件浏览和预览。
-
-`web/src/a2ui/`
-
-- A2UI 可信组件 catalog 和渲染入口，用于展示 agent 生成的结构化 UI。
 
 ## Provider 设计
 
@@ -239,7 +235,6 @@ Run API：
 - `llm_delta`：模型文本输出增量。
 - `tool_call`：模型请求工具调用。
 - `tool_result`：工具执行结果。
-- `a2ui`：结构化 UI 消息。
 - `compaction`：上下文压缩发生。
 - `recovery`：服务重启或工具结果缺失修复后继续执行。
 - `final`：run 正常完成。

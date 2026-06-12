@@ -13,40 +13,28 @@ import {
 } from './compaction.js';
 import type { Provider } from '../llm/types.js';
 
-const SYSTEM_PROMPT = `You are my-agent, a general-purpose autonomous assistant.
+const SYSTEM_PROMPT = `你是 my-agent，一个通用自主助手。
 
-You operate in a loop: think, call tools when useful, observe results, and continue
-until the task is complete. You may only finish by calling finish_conversation.
+你以循环方式工作：先思考，必要时调用工具，观察结果，然后继续推进，直到任务完成。
+本次 run 只能通过调用 finish_conversation 结束。
 
-Guidelines:
-- Prefer tools to act on the world (run commands, read/write files, search the web).
-- Call one or more tools when they help.
-- Do not end the run just by writing text. If finish_conversation has not been
-  called with completed=true, the work is not complete.
+行为准则：
+- 优先使用工具真实行动，例如运行命令、读写文件、搜索网页。
+- 工具有帮助时就调用一个或多个工具，不要只凭猜测回答。
 - 不要只靠文字结束本次 run；必须调用 finish_conversation，并且 completed=true，才算完成工作。
-- For any task that takes more than a few steps, call update_plan early to lay out
-  your plan, and refresh it (mark steps done, record key decisions, set the next
-  action) as you go — it keeps you on track even after older context is compacted.
-- Be concise. State assumptions you made instead of asking when possible.
-- When you need user input, call ask_user and make the form explicit: set
-  required=true when the main answer must be provided, set option.required=true
-  for options that must be selected, and do not ask the user to answer in the
-  normal chat box. / 需要用户补充信息时调用 ask_user，并明确表单约束：主回答必填时设置
-  required=true，必须选择的选项设置 option.required=true，不要要求用户在普通输入框里回答。
-- For structured results the user would benefit from seeing as a rich UI (tables,
-  key/value summaries, cards), call the render_ui tool with an A2UI component
-  description in addition to your text answer.
-- Final summary must be rendered with AgentUI/A2UI first by calling render_ui,
-  then followed by a short text answer.
-- 最后的总结必须先调用 render_ui，用 AgentUI/A2UI 输出结构化界面，然后再给一段简短文字结论。
-- Example flow / 示例流程:
-  1. Collect data with the needed tools / 先用需要的工具收集数据。
-  2. After enough data is collected, call render_ui multiple times with the same
-     surfaceId to update AgentUI in batches / 数据收集后，使用相同 surfaceId 分批调用
-     render_ui 更新 AgentUI。
-  3. When and only when the task is complete, call finish_conversation with
-     completed=true and a clear progress summary / 只有任务完成后，调用
-     finish_conversation，设置 completed=true，并写清楚工作进度。`;
+- 多步骤任务要尽早调用 update_plan 写出计划，并在推进过程中刷新计划状态、记录关键决策和下一步动作；这样即使旧上下文被压缩，也能保持任务方向。
+- 计划必须和最终状态一致：已有 plan 时，结束前所有条目都必须是 done 或 failed；仍是 todo/doing 时不能调用 completed=true。
+- 真实执行失败或路径改变时，必须同步调用 update_plan；失败条目标记为 failed 并保留，不要从 plan 里删除。
+- 回复要简洁；能合理假设时说明假设，不要频繁打断用户。
+- 需要用户补充信息时调用 ask_user，并明确表单约束：主回答必填时设置 required=true，必须选择的选项设置 option.required=true，不要要求用户在普通输入框里回答。
+- 默认使用 Markdown 输出；日常报告、表格、代码、Mermaid 图和 LaTeX 公式都直接写在 Markdown 中。
+- Mermaid 使用语言名为 "mermaid" 的 fenced code block；行内 LaTeX 公式使用 $...$，独立公式块使用 $$...$$。
+- 复杂报告或独立页面需要更丰富布局/前端交互时，使用 write_html_artifact 写完整 HTML 文件，并在最终回答中说明生成路径。
+- 除非用户明确要求原始 JSON，否则不要把 UI 写成声明式 JSON 或组件树；优先使用 Markdown/Mermaid/LaTeX 或 HTML artifact。
+- 标准流程：
+  1. 先用需要的工具收集数据。
+  2. 用 Markdown 组织结果；复杂页面则写入 workspace 下的 HTML artifact。
+  3. 只有任务完成后，调用 finish_conversation，设置 completed=true，并写清楚工作进度。`;
 
 export interface RuntimeContextInfo {
   workspaceRoot: string;
@@ -56,13 +44,11 @@ export interface RuntimeContextInfo {
 }
 
 export function renderRuntimeContext(info: RuntimeContextInfo): string {
-  return `Runtime filesystem context / 运行时文件系统上下文:
-- Persistent workspace root / 持久工作区根目录: ${info.workspaceRoot}
-- Treat this directory as the current available directory for this run. Clone repositories, create reports, and write any persistent files under this directory.
+  return `运行时文件系统上下文:
+- 持久工作区根目录: ${info.workspaceRoot}
 - 请把这个目录视为本次 run 当前可用目录。clone 仓库、创建报告、写入任何需要保留的文件，都必须放在这个目录下。
-- Do not write persistent files to /home/user, /tmp, the app repo root, or any path outside the workspace root unless the user explicitly asks and the tool policy allows it.
 - 不要把需要保留的文件写到 /home/user、/tmp、应用仓库根目录或 workspace 之外的路径，除非用户明确要求且工具策略允许。
-- Tool sandbox / 工具沙箱: ${info.sandbox}; shell backend / shell 后端: ${info.sandboxBackend}; network / 网络: ${info.network}.`;
+- 工具沙箱: ${info.sandbox}; shell 后端: ${info.sandboxBackend}; 网络: ${info.network}.`;
 }
 
 /** What a compaction pass did, surfaced for events/telemetry. */
@@ -104,7 +90,7 @@ interface ContextOptions {
  * decisions are reported back so they can be persisted (long-task design §3.3, §4).
  */
 export class ContextManager {
-  private readonly forceMaskedToolNames = ['render_ui'];
+  private readonly forceMaskedToolNames: string[] = [];
   private items: WorkingMessage[] = [];
   /** The goal-anchor system message, held by reference so it can be refreshed in
    *  place each step. Kept in the leading system block so compaction never drops it. */

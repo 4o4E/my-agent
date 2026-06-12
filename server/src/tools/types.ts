@@ -1,22 +1,19 @@
 import type { LlmTool } from '../llm/types.js';
-import type { A2uiDisplay } from '../agent/a2ui.js';
 import type { ToolSettings } from '../settings.js';
 
-/** Structured tool result (refactor-plan §4): text for the LLM, plus an optional
- *  declarative display (A2UI) surfaced to the UI. */
+/** 工具返回给 LLM 的标准文本结果。复杂展示应写入 Markdown/HTML artifact，而不是返回 UI JSON。 */
 export interface ToolResult {
   text: string;
-  display?: A2uiDisplay;
 }
 
 export interface Tool {
   name: string;
   description: string;
-  /** JSON Schema for the tool's parameters object */
+  /** 工具参数对象的 JSON Schema。 */
   parameters: Record<string, unknown>;
   /**
-   * Execute the tool with parsed args. Return a plain string (text for the LLM)
-   * or a `ToolResult` to additionally emit a declarative UI surface.
+   * 使用解析后的参数执行工具。一般返回给 LLM 的纯文本；
+   * 需要结构化文本包装时返回 ToolResult。
    */
   run(args: Record<string, unknown>, ctx?: { settings: ToolSettings }): Promise<string | ToolResult>;
 }

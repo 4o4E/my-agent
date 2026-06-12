@@ -175,22 +175,22 @@ function hostShell(command: string, timeout: number): Promise<ShellExecResult> {
 function shouldUseBwrap(cfg: ShellSandboxConfig): { use: true; bwrapPath: string } | { use: false } {
   if (isWindows || cfg.policyMode !== 'enforce' || cfg.backend === 'none') return { use: false };
   if (process.platform !== 'linux') {
-    if (cfg.backend === 'bwrap') throw new Error('bwrap sandbox requires Linux');
-    warnOnce('bwrap-non-linux', 'Tool sandbox auto mode: non-Linux host, shell falls back to host execution.');
+    if (cfg.backend === 'bwrap') throw new Error('bwrap 沙箱需要 Linux 环境');
+    warnOnce('bwrap-non-linux', '工具沙箱 auto 模式：当前不是 Linux，shell 回落到宿主执行。');
     return { use: false };
   }
 
   const bwrapPath = findExecutable('bwrap');
   if (!bwrapPath) {
-    if (cfg.backend === 'bwrap') throw new Error('TOOL_SANDBOX_BACKEND=bwrap but bwrap was not found in PATH');
-    warnOnce('bwrap-missing', 'Tool sandbox auto mode: bwrap not found, shell falls back to host execution.');
+    if (cfg.backend === 'bwrap') throw new Error('TOOL_SANDBOX_BACKEND=bwrap，但 PATH 中找不到 bwrap');
+    warnOnce('bwrap-missing', '工具沙箱 auto 模式：找不到 bwrap，shell 回落到宿主执行。');
     return { use: false };
   }
   if (canStartBwrap(bwrapPath)) return { use: true, bwrapPath };
   if (cfg.backend === 'bwrap') {
-    throw new Error('TOOL_SANDBOX_BACKEND=bwrap but bwrap cannot start a sandbox on this host');
+    throw new Error('TOOL_SANDBOX_BACKEND=bwrap，但当前主机无法启动 bwrap 沙箱');
   }
-  warnOnce('bwrap-unusable', 'Tool sandbox auto mode: bwrap cannot start a sandbox, shell falls back to host execution.');
+  warnOnce('bwrap-unusable', '工具沙箱 auto 模式：bwrap 无法启动沙箱，shell 回落到宿主执行。');
   return { use: false };
 }
 
@@ -203,7 +203,7 @@ export async function runShellCommand(command: string, timeout: number, cfg: She
   if (missing.length) {
     warnOnce(
       `bwrap-missing-commands:${missing.join(',')}`,
-      `Tool sandbox bwrap mode: command(s) not found and will be unavailable: ${missing.join(', ')}`,
+      `工具沙箱 bwrap 模式：以下命令找不到，因此不可用：${missing.join(', ')}`,
     );
   }
 

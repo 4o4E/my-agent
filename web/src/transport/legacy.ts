@@ -58,8 +58,8 @@ export function toUiEvent(e: AgentEvent): UiEvent | null {
         endedAt: e.endedAt,
         durationMs: e.durationMs,
       };
-    case 'a2ui':
-      return { kind: 'a2ui', step: e.step, surfaceId: e.surfaceId, message: e.message };
+    case 'plan_update':
+      return { kind: 'plan_update', step: e.step, goal: e.goal };
     case 'user_question':
       return { kind: 'ask_user_question', step: e.step, spec: e.spec ?? defaultAskSpec(e.question) };
     case 'user_answer':

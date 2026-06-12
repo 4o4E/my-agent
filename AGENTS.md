@@ -6,7 +6,7 @@
 ## 项目结构
 
 - `server/` — Node/TypeScript 后端（agent 主循环、LLM provider、工具、PG 持久化）
-- `web/` — React/Vite 前端（对话渲染 + A2UI）
+- `web/` — React/Vite 前端（对话渲染 + Markdown/Mermaid/LaTeX + HTML artifact 预览）
 - `docs/` — 方案文档；`docs/impl-log/` 为分阶段实施记录
 
 核心设计文档：

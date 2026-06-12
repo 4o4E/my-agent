@@ -3,13 +3,13 @@ import type { Tool } from './types.js';
 
 export const fileEditTool: Tool = {
   name: 'file_edit',
-  description: 'Replace an exact string in a file with a new string. old_string must appear exactly once.',
+  description: '把文件中的精确字符串替换为新字符串；old_string 必须在文件中只出现一次。',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path to the file to edit' },
-      old_string: { type: 'string', description: 'Exact text to replace (must be unique in the file)' },
-      new_string: { type: 'string', description: 'Replacement text' },
+      path: { type: 'string', description: '要编辑的文件路径' },
+      old_string: { type: 'string', description: '要替换的精确文本，必须在文件中唯一' },
+      new_string: { type: 'string', description: '替换后的文本' },
     },
     required: ['path', 'old_string', 'new_string'],
   },
@@ -20,12 +20,12 @@ export const fileEditTool: Tool = {
     try {
       const content = await readFile(path, 'utf8');
       const count = content.split(oldStr).length - 1;
-      if (count === 0) return `Edit failed: old_string not found in ${path}`;
-      if (count > 1) return `Edit failed: old_string appears ${count} times in ${path}; make it unique`;
+      if (count === 0) return `编辑失败：在 ${path} 中没有找到 old_string`;
+      if (count > 1) return `编辑失败：old_string 在 ${path} 中出现了 ${count} 次，请提供唯一文本`;
       await writeFile(path, content.replace(oldStr, newStr), 'utf8');
-      return `Edited ${path}`;
+      return `已编辑 ${path}`;
     } catch (err) {
-      return `Failed to edit ${path}: ${(err as Error).message}`;
+      return `编辑文件失败 ${path}: ${(err as Error).message}`;
     }
   },
 };

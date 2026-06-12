@@ -31,7 +31,7 @@
   --surface-950: 241 245 249;
 }
 
-/* shadcn/ui 设计令牌：slate 底色加 teal 主色，供 UI 组件和 A2UI 目录复用。 */
+/* shadcn/ui 设计令牌：slate 底色加 teal 主色，供通用 UI 组件复用。 */
 :root {
   --background: 0 0% 100%;
   --foreground: 222.2 84% 4.9%;

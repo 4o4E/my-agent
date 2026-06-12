@@ -1,39 +1,39 @@
 import type { Tool } from './types.js';
 
 /**
- * Maintain the working plan for the current task. The tool itself is stateless — it
- * just acknowledges; the executor reads the same args to update the run's persisted
- * goal anchor (intent/plan/decisions/next), which is re-injected into the context on
- * every step so it survives compaction (long-task design §3.2, §9/G1).
+ * 维护当前任务的工作计划。工具本身无状态，只负责确认；
+ * executor 会读取同一份参数，更新 run 持久化的目标锚点
+ * （intent/plan/decisions/next），并在每一步重新注入上下文，
+ * 使其在压缩后仍保留（长任务设计 §3.2、§9/G1）。
  */
 export const updatePlanTool: Tool = {
   name: 'update_plan',
   description:
-    'Record or refresh your working plan for the current task: the remaining steps (with status), key decisions to remember, and the immediate next action. Call this at the start of a multi-step task and whenever your plan changes, so you stay on track across many steps. Decisions are appended; plan and next replace the previous values.',
+    '记录或刷新当前任务的工作计划：包含步骤及状态、需要记住的关键决策、马上要做的下一步。多步骤任务开始时调用；计划变化时也要调用。decisions 会追加，plan 和 next 会替换旧值。执行失败的步骤必须保留并标记为 failed，不要删除。',
   parameters: {
     type: 'object',
     properties: {
       plan: {
         type: 'array',
-        description: 'The full current plan (replaces the previous plan).',
+        description: '完整的当前计划，会替换旧计划。',
         items: {
           type: 'object',
           properties: {
-            text: { type: 'string', description: 'What this step accomplishes' },
-            status: { type: 'string', enum: ['todo', 'doing', 'done'] },
+            text: { type: 'string', description: '这个步骤要完成的事情' },
+            status: { type: 'string', enum: ['todo', 'doing', 'done', 'failed'] },
           },
           required: ['text', 'status'],
         },
       },
       decisions: {
         type: 'array',
-        description: 'Key decisions to remember going forward (appended to existing).',
+        description: '后续需要记住的关键决策，会追加到已有决策。',
         items: { type: 'string' },
       },
-      next: { type: 'string', description: 'The immediate next action you will take.' },
+      next: { type: 'string', description: '马上要执行的下一步动作。' },
     },
   },
   async run() {
-    return 'Plan updated.';
+    return '计划已更新。';
   },
 };

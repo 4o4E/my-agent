@@ -43,7 +43,7 @@ test('enforce: filesystem path confinement', () => {
   assert.equal(p.check('file_read', { path: resolve(ROOT, 'src/a.ts') }).ok, true);
   const escaped = p.check('file_write', { path: resolve(ROOT, '../secret.txt') });
   assert.equal(escaped.ok, false);
-  assert.match((escaped as { reason: string }).reason, /outside the workspace/);
+  assert.match((escaped as { reason: string }).reason, /超出 workspace/);
   // Optional path (glob default cwd) is allowed through.
   assert.equal(p.check('glob', { pattern: '**/*' }).ok, true);
 });
@@ -64,11 +64,11 @@ test('enforce: network switch gates web tools', () => {
   assert.equal(createPolicy(cfg({ network: 'enabled' })).check('web_search', { query: 'x' }).ok, true);
   const blocked = createPolicy(cfg({ network: 'disabled' })).check('web_fetch', { url: 'https://example.com/x' });
   assert.equal(blocked.ok, false);
-  assert.match((blocked as { reason: string }).reason, /network access is disabled/);
+  assert.match((blocked as { reason: string }).reason, /网络访问已禁用/);
 });
 
 test('capOutput truncates oversized results', () => {
   const p = createPolicy(cfg({ maxOutput: 10 }));
   assert.equal(p.capOutput('short'), 'short');
-  assert.match(p.capOutput('x'.repeat(50)), /truncated 40 chars/);
+  assert.match(p.capOutput('x'.repeat(50)), /已截断 40 个字符/);
 });

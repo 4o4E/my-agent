@@ -17,7 +17,7 @@ export function truncateFetchText(text: string, maxChars: number): string {
   let marker = '';
   let keep = limit;
   for (let i = 0; i < 3; i++) {
-    marker = `\n…[truncated ${text.length - keep} chars by web_fetch max_chars]`;
+    marker = `\n…[web_fetch 已按 max_chars 截断 ${text.length - keep} 个字符]`;
     keep = Math.max(0, limit - marker.length);
   }
   if (marker.length > limit) return marker.slice(0, limit);
@@ -26,12 +26,12 @@ export function truncateFetchText(text: string, maxChars: number): string {
 
 export const webFetchTool: Tool = {
   name: 'web_fetch',
-  description: 'Fetch a URL and return its content as text (HTML is reduced to plain text).',
+  description: '抓取 URL 并以文本形式返回内容；HTML 会被简化为纯文本。',
   parameters: {
     type: 'object',
     properties: {
-      url: { type: 'string', description: 'The URL to fetch (http/https)' },
-      max_chars: { type: 'number', description: 'Truncate result to this many characters (default 8000)' },
+      url: { type: 'string', description: '要抓取的 URL（http/https）' },
+      max_chars: { type: 'number', description: '结果最多保留多少字符，默认 8000' },
     },
     required: ['url'],
   },
@@ -40,13 +40,13 @@ export const webFetchTool: Tool = {
     const maxChars = Number(args.max_chars ?? 8000);
     try {
       const res = await fetch(url, { headers: { 'User-Agent': 'my-agent/0.1' } });
-      if (!res.ok) return `Fetch failed (${res.status}) for ${url}`;
+      if (!res.ok) return `抓取失败（${res.status}）：${url}`;
       const ct = res.headers.get('content-type') ?? '';
       const raw = await res.text();
       const text = ct.includes('html') ? htmlToText(raw) : raw;
       return truncateFetchText(text, maxChars);
     } catch (err) {
-      return `Failed to fetch ${url}: ${(err as Error).message}`;
+      return `抓取失败 ${url}: ${(err as Error).message}`;
     }
   },
 };

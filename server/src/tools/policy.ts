@@ -47,7 +47,7 @@ const META: Record<string, ToolMeta> = {
   web_fetch: { kind: 'net' },
   web_search: { kind: 'net' },
   ask_user: { kind: 'safe' },
-  render_ui: { kind: 'safe' },
+  write_html_artifact: { kind: 'safe' },
   update_plan: { kind: 'safe' },
   finish_conversation: { kind: 'safe' },
 };
@@ -69,9 +69,9 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
 
   function check(name: string, args: Record<string, unknown>): PolicyDecision {
     // 1) deny/allow lists — honored in every mode.
-    if (cfg.deny.includes(name)) return { ok: false, reason: `tool '${name}' is denied by policy` };
+    if (cfg.deny.includes(name)) return { ok: false, reason: `工具 '${name}' 被策略拒绝` };
     if (cfg.allow.length && !cfg.allow.includes(name)) {
-      return { ok: false, reason: `tool '${name}' is not in the allow-list` };
+      return { ok: false, reason: `工具 '${name}' 不在允许列表中` };
     }
     if (cfg.sandbox === 'off') return { ok: true };
 
@@ -84,23 +84,23 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
         if (raw == null || raw === '') continue; // optional path (e.g. glob/grep default cwd)
         const target = resolve(String(raw));
         if (!isWithin(cfg.workspaceRoot, target)) {
-          return { ok: false, reason: `path '${String(raw)}' is outside the workspace (${cfg.workspaceRoot})` };
+          return { ok: false, reason: `路径 '${String(raw)}' 超出 workspace (${cfg.workspaceRoot})` };
         }
       }
     }
 
     // 3) shell gating + command denylist.
     if (meta.kind === 'exec') {
-      if (!cfg.shellEnabled) return { ok: false, reason: 'shell execution is disabled' };
+      if (!cfg.shellEnabled) return { ok: false, reason: 'shell 执行已禁用' };
       const command = String(args.command ?? '');
       for (const re of shellDenyRes) {
-        if (re.test(command)) return { ok: false, reason: `command blocked by denylist (${re.source})` };
+        if (re.test(command)) return { ok: false, reason: `命令被拒绝列表拦截（${re.source}）` };
       }
     }
 
     // 4) 网络总开关。域名/IP 白名单不在这里假实现,当前只有全开或全断。
     if (meta.kind === 'net') {
-      if (cfg.network === 'disabled') return { ok: false, reason: 'network access is disabled' };
+      if (cfg.network === 'disabled') return { ok: false, reason: '网络访问已禁用' };
     }
 
     return { ok: true };
@@ -113,7 +113,7 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
     // the tail often holds the conclusion (error summary, final lines).
     const head = Math.floor(cfg.maxOutput * 0.7);
     const tail = cfg.maxOutput - head;
-    return `${output.slice(0, head)}\n…[truncated ${dropped} chars by tool policy]…\n${output.slice(output.length - tail)}`;
+    return `${output.slice(0, head)}\n…[工具策略已截断 ${dropped} 个字符]…\n${output.slice(output.length - tail)}`;
   }
 
   return { config: cfg, check, capOutput };

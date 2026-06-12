@@ -3,11 +3,11 @@ import type { Tool } from './types.js';
 
 export const fileReadTool: Tool = {
   name: 'file_read',
-  description: 'Read the contents of a file as UTF-8 text.',
+  description: '按 UTF-8 文本读取文件内容。',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Absolute or relative path to the file' },
+      path: { type: 'string', description: '文件的绝对路径或相对路径' },
     },
     required: ['path'],
   },
@@ -15,9 +15,9 @@ export const fileReadTool: Tool = {
     const path = String(args.path ?? '');
     try {
       const content = await readFile(path, 'utf8');
-      return content || '(empty file)';
+      return content || '（空文件）';
     } catch (err) {
-      return `Failed to read ${path}: ${(err as Error).message}`;
+      return `读取文件失败 ${path}: ${(err as Error).message}`;
     }
   },
 };

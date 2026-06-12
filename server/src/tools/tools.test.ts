@@ -7,6 +7,7 @@ import { shellTool } from './shell.js';
 import { fileReadTool } from './fileRead.js';
 import { fileWriteTool } from './fileWrite.js';
 import { fileEditTool } from './fileEdit.js';
+import { htmlArtifactTool } from './htmlArtifact.js';
 import { globTool } from './glob.js';
 import { grepTool } from './grep.js';
 import { truncateFetchText } from './webFetch.js';
@@ -35,16 +36,17 @@ test('registry exposes neutral tool schemas and dispatches by name', async () =>
   const schemas = toolSchemas();
   assert.ok(schemas.find((s) => s.name === 'shell'));
   assert.ok(schemas.find((s) => s.name === 'finish_conversation'));
+  assert.ok(schemas.find((s) => s.name === 'write_html_artifact'));
   assert.ok(getTool('glob'));
-  assert.match((await runTool('does_not_exist', {})).text, /Unknown tool/);
+  assert.match((await runTool('does_not_exist', {})).text, /未知工具/);
 });
 
 test('finish_conversation records progress and validates required progress', async () => {
   assert.match(
     (await runTool('finish_conversation', { progress: 'tests passed', completed: true })).text,
-    /Conversation finished/,
+    /对话已完成/,
   );
-  assert.match((await runTool('finish_conversation', { completed: true })).text, /progress.*required/);
+  assert.match((await runTool('finish_conversation', { completed: true })).text, /必须填写.*progress/);
 });
 
 test('shell runs a command (PowerShell on Windows, sh elsewhere)', async () => {
@@ -63,19 +65,38 @@ test('file_write creates file and parent dirs', async () => {
   assert.equal(await readFile(target, 'utf8'), 'hi there');
 });
 
+test('write_html_artifact creates a confined HTML file', async () => {
+  const res = text(await htmlArtifactTool.run(
+    { path: 'artifacts/demo.html', html: '<main>hello</main>' },
+    { settings: normalizeToolSettings({ workspaceRoot: dir }) },
+  ));
+  assert.match(res, /HTML artifact 已写入：artifacts\/demo\.html/);
+  const content = await readFile(join(dir, 'artifacts', 'demo.html'), 'utf8');
+  assert.match(content, /<!doctype html>/i);
+  assert.match(content, /<main>hello<\/main>/);
+});
+
+test('write_html_artifact rejects paths outside workspace', async () => {
+  const res = text(await htmlArtifactTool.run(
+    { path: '../escape.html', html: 'bad' },
+    { settings: normalizeToolSettings({ workspaceRoot: dir }) },
+  ));
+  assert.match(res, /超出 workspace/);
+});
+
 test('file_edit replaces a unique string', async () => {
   const target = join(dir, 'edit.txt');
   await writeFile(target, 'one two three');
   const res = text(await fileEditTool.run({ path: target, old_string: 'two', new_string: 'TWO' }));
-  assert.match(res, /Edited/);
+  assert.match(res, /已编辑/);
   assert.equal(await readFile(target, 'utf8'), 'one TWO three');
 });
 
 test('file_edit refuses non-unique or missing strings', async () => {
   const target = join(dir, 'dup.txt');
   await writeFile(target, 'x x x');
-  assert.match(text(await fileEditTool.run({ path: target, old_string: 'x', new_string: 'y' })), /appears 3 times/);
-  assert.match(text(await fileEditTool.run({ path: target, old_string: 'zzz', new_string: 'y' })), /not found/);
+  assert.match(text(await fileEditTool.run({ path: target, old_string: 'x', new_string: 'y' })), /出现了 3 次/);
+  assert.match(text(await fileEditTool.run({ path: target, old_string: 'zzz', new_string: 'y' })), /没有找到/);
 });
 
 test('glob matches by pattern', async () => {
@@ -93,7 +114,7 @@ test('grep finds matching lines with file:line', async () => {
 test('web_fetch truncation is visible to the model', () => {
   const out = truncateFetchText('a'.repeat(2000), 200);
   assert.ok(out.length <= 200);
-  assert.match(out, /truncated \d+ chars by web_fetch max_chars/);
+  assert.match(out, /web_fetch 已按 max_chars 截断 \d+ 个字符/);
 });
 
 test('web_fetch truncation respects very small limits', () => {

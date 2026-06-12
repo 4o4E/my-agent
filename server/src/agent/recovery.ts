@@ -10,18 +10,18 @@ export async function recoverInterruptedRuns(store: Store = defaultStore): Promi
   for (const run of runs) {
     if (run.status === 'canceling') {
       await store.setRunStatus(run.id, 'canceled');
-      await store.addEvent(run.id, null, { type: 'error', step: 0, message: 'Run canceled during server recovery.' });
+      await store.addEvent(run.id, null, { type: 'error', step: 0, message: '服务恢复期间，run 已被取消。' });
       continue;
     }
     await store.addEvent(run.id, null, {
       type: 'recovery',
       step: (await store.getLastStepIndex(run.id)) + 1,
-      message: 'Server restarted; resuming this run from the latest durable checkpoint. / 服务已重启，正在从最近的持久化检查点恢复 run。',
+      message: '服务已重启，正在从最近的持久化检查点恢复 run。',
     });
     runBus.publish(run.id, {
       type: 'recovery',
       step: (await store.getLastStepIndex(run.id)) + 1,
-      message: 'Server restarted; resuming this run from the latest durable checkpoint. / 服务已重启，正在从最近的持久化检查点恢复 run。',
+      message: '服务已重启，正在从最近的持久化检查点恢复 run。',
     });
     void executeRun(run.id, { resume: true });
     started += 1;

@@ -59,7 +59,7 @@
 ### 前端与用户体验
 
 - 前端通过 REST + WebSocket 展示 step、reasoning、tool call、tool result、final、error 等事件。
-- 支持结构化 UI 输出，agent 可用 `render_ui` 生成可读的结果视图。
+- 支持 Markdown/Mermaid/LaTeX 输出；复杂报告可用 `write_html_artifact` 生成 HTML artifact 并在文件面板预览。
 - 支持用户在 run 中途回答 `ask_user` 问题。
 
 边界：subagent、常驻 shell、skill、memory 还没有实现。
