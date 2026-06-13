@@ -81,3 +81,8 @@ test('capOutput truncates oversized results', () => {
   assert.match(out, /已截断 40 个字符/);
   assert.ok(out.length <= 50);
 });
+
+test('capOutput removes NUL characters before persistence', () => {
+  const p = createPolicy(cfg({ maxOutput: 50 }));
+  assert.equal(p.capOutput('a\u0000b'), 'ab');
+});

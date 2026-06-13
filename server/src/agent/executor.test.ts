@@ -165,7 +165,13 @@ test('executeRun: activates a skill and trims tools to allowed-tools', async () 
         const systemText = messages.filter((m) => m.role === 'system').map((m) => m.content ?? '').join('\n');
         if (turn === 1) {
           firstSystemText = systemText;
-          return { content: null, toolCalls: [{ id: 'skill_1', name: 'skill_activate', arguments: '{"name":"sample-skill"}' }] };
+          return {
+            content: null,
+            toolCalls: [
+              { id: 'skill_1', name: 'skill_activate', arguments: '{"name":"sample-skill"}' },
+              { id: 'read_1', name: 'file_read', arguments: JSON.stringify({ path: join(skillRoot, 'SKILL.md') }) },
+            ],
+          };
         }
         secondSystemText = systemText;
         return { content: 'done', toolCalls: [finishCall('finish_1', 'done')] };
@@ -190,6 +196,11 @@ test('executeRun: activates a skill and trims tools to allowed-tools', async () 
   assert.equal(activated?.type, 'skill_activated');
   assert.equal(activated?.type === 'skill_activated' ? activated.name : '', 'sample-skill');
   assert.deepEqual(activated?.type === 'skill_activated' ? activated.allowedTools : [], ['file_read']);
+  const msgs = await store.loadThreadMessages(thread.id);
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'tool', 'system', 'assistant', 'tool']);
+  assert.equal(msgs[2].toolCallId, 'skill_1');
+  assert.equal(msgs[3].toolCallId, 'read_1');
+  assert.match(msgs[4].content ?? '', /已激活 Skill/);
   assert.equal((await store.getRun(run.id))?.status, 'done');
 });
 

@@ -134,6 +134,8 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
   }
 
   function capOutput(output: string): string {
+    // PostgreSQL text/jsonb 都不接受 NUL 字符；工具读到二进制片段时先统一清理。
+    output = output.replace(/\u0000/g, '');
     if (output.length <= cfg.maxOutput) return output;
     const dropped = output.length - cfg.maxOutput;
     const marker = `\n…[工具策略已截断 ${dropped} 个字符]…\n`;

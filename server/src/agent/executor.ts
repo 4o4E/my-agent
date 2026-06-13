@@ -483,6 +483,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
 
       const toolTraces: ToolTrace[] = [];
       let completedOutput: string | null = null;
+      const pendingSkillSystemMessages: LlmMessage[] = [];
 
       // Execute each requested tool, feed results back.
       for (const call of toolCalls) {
@@ -547,6 +548,10 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
           const toolMsg = { role: 'tool' as const, content: text, toolCallId: call.id };
           ctx.add(toolMsg);
           ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, toolMsg));
+          for (const msg of pendingSkillSystemMessages) {
+            ctx.add(msg);
+            ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, msg));
+          }
           await store.setRunStatus(runId, 'waiting_for_user');
           return;
         }
@@ -609,8 +614,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
           const alreadyActive = activeSkills.some((skill) => skill.id === activation.skill.id);
           if (!alreadyActive) activeSkills.push(activation.skill);
           const skillMsg = { role: 'system' as const, content: activation.systemMessage };
-          ctx.add(skillMsg);
-          ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, skillMsg));
+          pendingSkillSystemMessages.push(skillMsg);
           await emit(step.id, {
             type: 'skill_activated',
             step: stepIdx,
@@ -651,6 +655,13 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
             await emit(step.id, { type: 'recovery', step: stepIdx, message: finishBlockedMessage(goal) });
           }
         }
+      }
+
+      // 同一个 assistant turn 里可能有多个 tool_call。Provider 要求这些调用的
+      // tool_result 连续出现，所以 skill 的 system 注入必须等本轮工具结果全部回填后再追加。
+      for (const msg of pendingSkillSystemMessages) {
+        ctx.add(msg);
+        ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, msg));
       }
 
       if (completedOutput) {
