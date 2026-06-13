@@ -25,6 +25,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LlmConfig, LlmDelta, LlmMessage, LlmResult, LlmTool, Provider } from '../types.js';
 import { config } from '../../config.js';
+import { toolArgumentsForModel } from '../toolArgs.js';
 
 export type AiSdkFlavor = 'openai-compatible' | 'openai' | 'anthropic';
 
@@ -92,12 +93,7 @@ export function toModelMessages(msgs: LlmMessage[]): ModelMessage[] {
           const parts: Array<TextPart | ToolCallPart> = [];
           if (m.content) parts.push({ type: 'text', text: m.content });
           for (const tc of m.toolCalls) {
-            let input: unknown = {};
-            try {
-              input = JSON.parse(tc.arguments || '{}');
-            } catch {
-              /* malformed args → empty object */
-            }
+            const input = toolArgumentsForModel(tc.arguments || '{}');
             parts.push({ type: 'tool-call', toolCallId: tc.id, toolName: tc.name, input });
           }
           out.push({ role: 'assistant', content: parts });

@@ -48,6 +48,13 @@ test('enforce: filesystem path confinement', () => {
   assert.equal(p.check('glob', { pattern: '**/*' }).ok, true);
 });
 
+test('skill materialized directory is readonly for file writes', () => {
+  const p = createPolicy(cfg({ sandbox: 'off' }));
+  const blocked = p.check('file_write', { path: resolve(ROOT, '.agents/skills/database-access/SKILL.md') });
+  assert.equal(blocked.ok, false);
+  assert.match((blocked as { reason: string }).reason, /只读/);
+});
+
 test('off mode skips path confinement but still caps/denies', () => {
   const p = createPolicy(cfg({ sandbox: 'off' }));
   assert.equal(p.check('file_read', { path: resolve('/etc/passwd') }).ok, true);
@@ -68,7 +75,9 @@ test('enforce: network switch gates web tools', () => {
 });
 
 test('capOutput truncates oversized results', () => {
-  const p = createPolicy(cfg({ maxOutput: 10 }));
+  const p = createPolicy(cfg({ maxOutput: 50 }));
   assert.equal(p.capOutput('short'), 'short');
-  assert.match(p.capOutput('x'.repeat(50)), /已截断 40 个字符/);
+  const out = p.capOutput('x'.repeat(90));
+  assert.match(out, /已截断 40 个字符/);
+  assert.ok(out.length <= 50);
 });

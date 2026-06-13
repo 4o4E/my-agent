@@ -2,8 +2,11 @@ import { config } from '../config.js';
 import { getProvider } from '../llm/index.js';
 import type { Provider } from '../llm/types.js';
 import type { LlmMessage } from '../llm/types.js';
+import { parseToolArguments } from '../llm/toolArgs.js';
 import { runTool, toolSchemas } from '../tools/registry.js';
 import { ContextManager } from './context.js';
+import { activateSkill, activeAllowedTools, loadSkillIndex, renderSkillCatalog, renderSkillSystemRules } from '../skills/registry.js';
+import type { SkillIndexItem, SkillActivation } from '../skills/registry.js';
 import { canFinishGoal, finishBlockedMessage, finishGoal, initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
 import { runBus } from './bus.js';
 import type { AgentEvent } from './types.js';
@@ -314,9 +317,11 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     let goal = initialRun.goal_state ?? initGoal(userInput);
     if (!initialRun.goal_state) await store.setGoalState(runId, goal);
     const toolSettings = deps.toolSettings ?? (await getToolSettings());
+    const skillIndex = await loadSkillIndex(toolSettings.workspaceRoot);
+    const skillRuntimeContext = [renderSkillSystemRules(), renderSkillCatalog(skillIndex)].join('\n\n');
     const ctx = new ContextManager(prior, userInput, renderGoal(goal), {
       appendUserInput: !isResume,
-      runtimeContext: renderRuntimeContext(toolSettings),
+      runtimeContext: `${renderRuntimeContext(toolSettings)}\n\n${skillRuntimeContext}`,
     });
     currentCtx = ctx;
     if (!isResume) {
@@ -324,7 +329,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       await store.addMessage(threadId, runId, null, { role: 'user', content: userInput });
     }
 
-    const tools = toolSchemas();
+    const activeSkills: SkillIndexItem[] = [];
     const streamStats = new StreamStatsTracker(runId, publish);
     const recentToolSignatures: string[] = [];
     const recentFailures: string[] = [];
@@ -365,6 +370,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       const streamedToolNames = new Map<string, string>();
       const stopLlmHeartbeat = streamStats.startHeartbeat(stepIdx, () => llmStage, () => llmActiveTool);
       try {
+        const tools = toolSchemas(activeAllowedTools(activeSkills));
         if (stream && provider.completeStream) {
           try {
             result = await provider.completeStream(ctx.all(), tools, (d) => {
@@ -480,12 +486,8 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
 
       // Execute each requested tool, feed results back.
       for (const call of toolCalls) {
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(call.arguments || '{}');
-        } catch {
-          /* malformed JSON → empty args */
-        }
+        const parsedArgs = parseToolArguments(call.arguments || '{}');
+        const args = parsedArgs.args;
         const startedAt = new Date().toISOString();
         const trace: ToolTrace = { id: call.id, name: call.name, args, startedAt };
         toolTraces.push(trace);
@@ -494,6 +496,34 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         const streamedInputChars = streamedToolInputChars.get(call.id) ?? 0;
         streamStats.add(stepIdx, 'tool_call', 'toolInputChars', Math.max(0, toolInputChars - streamedInputChars), activeTool);
         await emit(step.id, { type: 'tool_call', step: stepIdx, id: call.id, name: call.name, args, startedAt });
+
+        if (!parsedArgs.ok) {
+          const endedAt = new Date().toISOString();
+          const text = `工具参数无效，未执行 ${call.name}：${parsedArgs.error}`;
+          trace.result = text;
+          trace.endedAt = endedAt;
+          trace.durationMs = durationMs(startedAt, endedAt);
+          streamStats.add(stepIdx, 'tool_result', 'toolOutputChars', charCount(text), activeTool);
+          await emit(step.id, {
+            type: 'tool_result',
+            step: stepIdx,
+            id: call.id,
+            name: call.name,
+            result: text,
+            startedAt,
+            endedAt,
+            durationMs: trace.durationMs,
+          });
+          const toolMsg = { role: 'tool' as const, content: text, toolCallId: call.id };
+          ctx.add(toolMsg);
+          ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, toolMsg));
+          const signature = toolSignature(call.name, { _invalidArgs: call.arguments.slice(0, 240) });
+          recentToolSignatures.push(signature);
+          if (recentToolSignatures.length > 6) recentToolSignatures.shift();
+          recentFailures.push(`${signature}:${text.slice(0, 240)}`);
+          if (recentFailures.length > 6) recentFailures.shift();
+          continue;
+        }
 
         if (call.name === ASK_USER_TOOL_NAME) {
           const spec = normalizeAskUserSpec(args);
@@ -523,11 +553,24 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
 
         let toolStage: StreamStage = 'tool_running';
         const stopToolHeartbeat = streamStats.startHeartbeat(stepIdx, () => toolStage, () => activeTool);
+        const activatedSkill: { value?: SkillActivation } = {};
         let result = await withSpan(
           'execute_tool',
           { 'gen_ai.tool.name': call.name, 'tool.call_id': call.id },
           async (span) => {
             try {
+              if (call.name === 'skill_activate') {
+                try {
+                  activatedSkill.value = await activateSkill(toolSettings.workspaceRoot, String(args.name ?? ''));
+                } catch (err) {
+                  const out = { text: `激活 skill 失败：${(err as Error).message}` };
+                  span.setAttribute('tool.result.length', out.text.length);
+                  return out;
+                }
+                const out = { text: `已激活 skill ${activatedSkill.value.skill.name}。` };
+                span.setAttribute('tool.result.length', out.text.length);
+                return out;
+              }
               const out = await runTool(call.name, args);
               span.setAttribute('tool.result.length', out.text.length);
               return out;
@@ -560,6 +603,26 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         const toolMsg = { role: 'tool' as const, content: result.text, toolCallId: call.id };
         ctx.add(toolMsg);
         ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, toolMsg));
+
+        const activation = activatedSkill.value;
+        if (activation) {
+          const alreadyActive = activeSkills.some((skill) => skill.id === activation.skill.id);
+          if (!alreadyActive) activeSkills.push(activation.skill);
+          const skillMsg = { role: 'system' as const, content: activation.systemMessage };
+          ctx.add(skillMsg);
+          ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, skillMsg));
+          await emit(step.id, {
+            type: 'skill_activated',
+            step: stepIdx,
+            skillId: activation.skill.id,
+            name: activation.skill.name,
+            source: activation.skill.source,
+            root: activation.skill.root,
+            readonly: activation.skill.readonly,
+            hash: activation.skill.hash,
+            allowedTools: activation.skill.allowedTools,
+          });
+        }
 
         const signature = toolSignature(call.name, args);
         recentToolSignatures.push(signature);

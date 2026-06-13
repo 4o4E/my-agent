@@ -50,12 +50,18 @@ const META: Record<string, ToolMeta> = {
   write_html_artifact: { kind: 'safe' },
   update_plan: { kind: 'safe' },
   finish_conversation: { kind: 'safe' },
+  skill_activate: { kind: 'safe' },
+  datasource_list: { kind: 'safe' },
 };
 
 /** True when `target` resolves to a location at or under `root`. */
 export function isWithin(root: string, target: string): boolean {
   const rel = relative(resolve(root), resolve(target));
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function resolveFromWorkspace(root: string, target: string): string {
+  return isAbsolute(target) ? resolve(target) : resolve(root, target);
 }
 
 export interface ToolPolicy {
@@ -73,16 +79,37 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
     if (cfg.allow.length && !cfg.allow.includes(name)) {
       return { ok: false, reason: `工具 '${name}' 不在允许列表中` };
     }
-    if (cfg.sandbox === 'off') return { ok: true };
-
     const meta = META[name] ?? { kind: 'safe' as const };
+    const materializedSkillRoot = resolve(cfg.workspaceRoot, '.agents/skills');
+
+    // 内置 skill materialize 后是只读运行时资源；写保护不依赖 sandbox 开关。
+    if (meta.kind === 'fs-write' && meta.pathArgs) {
+      for (const key of meta.pathArgs) {
+        const raw = args[key];
+        if (raw == null || raw === '') continue;
+        if (isWithin(materializedSkillRoot, resolveFromWorkspace(cfg.workspaceRoot, String(raw)))) {
+          return { ok: false, reason: `内置 skill 目录只读：${materializedSkillRoot}` };
+        }
+      }
+    }
+
+    if (meta.kind === 'exec') {
+      const command = String(args.command ?? '');
+      const mentionsMaterializedSkills = command.includes('.agents/skills');
+      const writeLike = /(^|[;&|]\s*)(rm|mv|cp)\b|>\s*[^&|;]*\.agents\/skills|tee\b[^&|;]*\.agents\/skills|sed\s+-i\b/.test(command);
+      if (mentionsMaterializedSkills && writeLike) {
+        return { ok: false, reason: `内置 skill 目录只读：${materializedSkillRoot}` };
+      }
+    }
+
+    if (cfg.sandbox === 'off') return { ok: true };
 
     // 2) filesystem confinement.
     if ((meta.kind === 'fs-read' || meta.kind === 'fs-write') && meta.pathArgs) {
       for (const key of meta.pathArgs) {
         const raw = args[key];
         if (raw == null || raw === '') continue; // optional path (e.g. glob/grep default cwd)
-        const target = resolve(String(raw));
+        const target = resolveFromWorkspace(cfg.workspaceRoot, String(raw));
         if (!isWithin(cfg.workspaceRoot, target)) {
           return { ok: false, reason: `路径 '${String(raw)}' 超出 workspace (${cfg.workspaceRoot})` };
         }
@@ -109,11 +136,13 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
   function capOutput(output: string): string {
     if (output.length <= cfg.maxOutput) return output;
     const dropped = output.length - cfg.maxOutput;
-    // Keep both ends — the head holds the start (e.g. a listing's first entries),
-    // the tail often holds the conclusion (error summary, final lines).
-    const head = Math.floor(cfg.maxOutput * 0.7);
-    const tail = cfg.maxOutput - head;
-    return `${output.slice(0, head)}\n…[工具策略已截断 ${dropped} 个字符]…\n${output.slice(output.length - tail)}`;
+    const marker = `\n…[工具策略已截断 ${dropped} 个字符]…\n`;
+    if (cfg.maxOutput <= marker.length) return marker.slice(0, cfg.maxOutput);
+    // 截断提示也计入上限；头部便于看起点，尾部常保留错误摘要或最终结论。
+    const contentBudget = cfg.maxOutput - marker.length;
+    const head = Math.floor(contentBudget * 0.7);
+    const tail = contentBudget - head;
+    return `${output.slice(0, head)}${marker}${output.slice(output.length - tail)}`;
   }
 
   return { config: cfg, check, capOutput };

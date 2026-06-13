@@ -43,12 +43,21 @@ test('toModelMessages: assistant without tool calls is a plain string', () => {
   assert.equal(out[0].content, 'plain');
 });
 
-test('toModelMessages: malformed tool-call args degrade to empty object', () => {
+test('toModelMessages: decodes string-wrapped tool-call object args', () => {
+  const out = toModelMessages([
+    { role: 'assistant', content: null, toolCalls: [{ id: 'x', name: 'shell', arguments: JSON.stringify('{"command":"ls"}') }] },
+  ]);
+  const parts = out[0].content as Array<{ type: string; input?: unknown }>;
+  assert.deepEqual(parts.map((p) => p.type), ['tool-call']);
+  assert.deepEqual(parts[0].input, { command: 'ls' });
+});
+
+test('toModelMessages: malformed tool-call args stay visible to the model', () => {
   const out = toModelMessages([
     { role: 'assistant', content: null, toolCalls: [{ id: 'x', name: 'shell', arguments: 'not json' }] },
   ]);
   const parts = out[0].content as Array<{ type: string; input?: unknown }>;
   // No leading text part (content was null); just the tool-call.
   assert.deepEqual(parts.map((p) => p.type), ['tool-call']);
-  assert.deepEqual(parts[0].input, {});
+  assert.deepEqual((parts[0].input as Record<string, unknown>)._invalidToolArguments, true);
 });

@@ -1,5 +1,8 @@
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { executeRun } from './executor.js';
 import { MemoryStore } from '../store/memoryStore.js';
 import type { Provider } from '../llm/types.js';
@@ -8,18 +11,31 @@ import { config } from '../config.js';
 import { maskPlaceholder } from './compaction.js';
 import type { ToolSettings } from '../settings.js';
 
-const TEST_TOOL_SETTINGS: ToolSettings = {
-  sandbox: 'enforce',
-  sandboxBackend: 'bwrap',
-  workspaceRoot: '/workspace/agent',
-  allow: [],
-  deny: [],
-  shellEnabled: true,
-  shellAllowCommands: ['git', 'ls'],
-  network: 'enabled',
-  shellDeny: [],
-  maxOutput: 40000,
-};
+let testWorkspace = '';
+
+before(async () => {
+  testWorkspace = await mkdtemp(join(tmpdir(), 'my-agent-executor-'));
+});
+
+after(async () => {
+  await rm(testWorkspace, { recursive: true, force: true });
+});
+
+function testToolSettings(overrides: Partial<ToolSettings> = {}): ToolSettings {
+  return {
+    sandbox: 'enforce',
+    sandboxBackend: 'bwrap',
+    workspaceRoot: testWorkspace,
+    allow: [],
+    deny: [],
+    shellEnabled: true,
+    shellAllowCommands: ['git', 'ls', 'sed', 'python', 'node'],
+    network: 'enabled',
+    shellDeny: [],
+    maxOutput: 40000,
+    ...overrides,
+  };
+}
 
 function finishCall(id: string, progress: string, completed = true) {
   return {
@@ -55,6 +71,7 @@ test('executeRun: runs the loop across steps and finalizes', async () => {
     provider: scriptedProvider(),
     publish: (_id, e) => published.push(e),
     hardStepCap: 5,
+    toolSettings: testToolSettings(),
   });
 
   const finished = await store.getRun(run.id);
@@ -100,14 +117,80 @@ test('executeRun: injects the current workspace root into the LLM context', asyn
     },
     publish: () => {},
     hardStepCap: 3,
-    toolSettings: TEST_TOOL_SETTINGS,
+    toolSettings: testToolSettings(),
   });
 
   assert.match(systemText, /持久工作区根目录/);
-  assert.match(systemText, /\/workspace\/agent/);
+  assert.match(systemText, new RegExp(testWorkspace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(systemText, /\/home\/user/);
   assert.match(systemText, /\/tmp/);
   assert.match(systemText, /当前可用目录/);
+});
+
+test('executeRun: activates a skill and trims tools to allowed-tools', async () => {
+  const skillRoot = join(testWorkspace, '.skills', 'sample-skill');
+  await mkdir(skillRoot, { recursive: true });
+  await writeFile(
+    join(skillRoot, 'SKILL.md'),
+    [
+      '---',
+      'name: sample-skill',
+      'description: Use when a test needs a tiny skill.',
+      'allowed-tools: file_read',
+      '---',
+      '',
+      '# Sample Skill',
+      '',
+      'Read `references/details.md` only when needed.',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'use a skill');
+  const published: AgentEvent[] = [];
+  const toolNamesByTurn: string[][] = [];
+  let firstSystemText = '';
+  let secondSystemText = '';
+  let turn = 0;
+
+  await executeRun(run.id, {
+    store,
+    provider: {
+      name: 'skill-aware',
+      async complete(messages, tools) {
+        turn += 1;
+        toolNamesByTurn.push(tools.map((tool) => tool.name).sort());
+        const systemText = messages.filter((m) => m.role === 'system').map((m) => m.content ?? '').join('\n');
+        if (turn === 1) {
+          firstSystemText = systemText;
+          return { content: null, toolCalls: [{ id: 'skill_1', name: 'skill_activate', arguments: '{"name":"sample-skill"}' }] };
+        }
+        secondSystemText = systemText;
+        return { content: 'done', toolCalls: [finishCall('finish_1', 'done')] };
+      },
+    },
+    publish: (_id, e) => published.push(e),
+    hardStepCap: 3,
+    toolSettings: testToolSettings(),
+  });
+
+  assert.match(firstSystemText, /sample-skill: Use when a test needs a tiny skill/);
+  assert.match(secondSystemText, /已激活 Skill/);
+  assert.match(secondSystemText, /root:/);
+  assert.match(secondSystemText, /# Sample Skill/);
+  assert.ok(toolNamesByTurn[0].includes('shell'));
+  assert.ok(toolNamesByTurn[0].includes('skill_activate'));
+  assert.ok(toolNamesByTurn[1].includes('file_read'));
+  assert.ok(toolNamesByTurn[1].includes('finish_conversation'));
+  assert.ok(toolNamesByTurn[1].includes('skill_activate'));
+  assert.equal(toolNamesByTurn[1].includes('shell'), false);
+  const activated = published.find((e) => e.type === 'skill_activated');
+  assert.equal(activated?.type, 'skill_activated');
+  assert.equal(activated?.type === 'skill_activated' ? activated.name : '', 'sample-skill');
+  assert.deepEqual(activated?.type === 'skill_activated' ? activated.allowedTools : [], ['file_read']);
+  assert.equal((await store.getRun(run.id))?.status, 'done');
 });
 
 test('executeRun: streams tool input stats without double counting final tool args', async () => {
@@ -133,6 +216,7 @@ test('executeRun: streams tool input stats without double counting final tool ar
     },
     publish: (_id, e) => published.push(e),
     hardStepCap: 3,
+    toolSettings: testToolSettings(),
   });
 
   const stats = published.filter((e): e is Extract<AgentEvent, { type: 'stream_stats' }> => e.type === 'stream_stats');
@@ -150,6 +234,7 @@ test('executeRun: keeps multi-turn memory within a thread', async () => {
     provider: { name: 's', async complete() { return { content: 'ok1', toolCalls: [finishCall('f1', 'ok1')] }; } },
     publish: () => {},
     hardStepCap: 3,
+    toolSettings: testToolSettings(),
   });
 
   // Second run should see the first run's messages as prior context.
@@ -166,6 +251,7 @@ test('executeRun: keeps multi-turn memory within a thread', async () => {
     },
     publish: () => {},
     hardStepCap: 3,
+    toolSettings: testToolSettings(),
   });
 
   // prior: user(first) + assistant(finish call) + tool(finish result) + new user(second) = 4
@@ -194,6 +280,7 @@ test('executeRun: compacts bulky old history when finishing a run', async () => 
       provider: { name: 's', async complete() { return { content: 'ok', toolCalls: [finishCall('f1', 'ok')] }; } },
       publish: (_id, e) => published.push(e),
       hardStepCap: 3,
+      toolSettings: testToolSettings(),
     });
 
     const msgs = await store.loadThreadMessages(thread.id);
@@ -226,6 +313,7 @@ test('executeRun: text without finish_conversation is not completion', async () 
     },
     publish: () => {},
     hardStepCap: 2,
+    toolSettings: testToolSettings(),
   });
 
   const finished = await store.getRun(run.id);
@@ -249,6 +337,7 @@ test('executeRun: stops and errors at the hard step cap', async () => {
     },
     publish: () => {},
     hardStepCap: 2,
+    toolSettings: testToolSettings(),
   });
 
   const finished = await store.getRun(run.id);
@@ -276,6 +365,7 @@ test('executeRun: cancels cooperatively at a step boundary', async () => {
     },
     publish: () => {},
     hardStepCap: 50,
+    toolSettings: testToolSettings(),
   });
 
   const finished = await store.getRun(run.id);
@@ -308,6 +398,7 @@ test('executeRun: ask_user pauses the run and keeps tool pairing intact', async 
     },
     publish: (_id, e) => published.push(e),
     hardStepCap: 3,
+    toolSettings: testToolSettings(),
   });
 
   const paused = await store.getRun(run.id);
@@ -323,6 +414,45 @@ test('executeRun: ask_user pauses the run and keeps tool pairing intact', async 
   const msgs = await store.loadThreadMessages(thread.id);
   assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool']);
   assert.equal(msgs[2].toolCallId, 'ask_1');
+});
+
+test('executeRun: rejects malformed string-wrapped tool args without running the tool', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'write a file');
+  const published: AgentEvent[] = [];
+  let turn = 0;
+
+  await executeRun(run.id, {
+    store,
+    provider: {
+      name: 'bad-tool-args',
+      async complete() {
+        turn += 1;
+        if (turn === 1) {
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: 'write_1',
+                name: 'file_write',
+                arguments: JSON.stringify('{"path":"/tmp/should-not-exist","content":"broken"'),
+              },
+            ],
+          };
+        }
+        return { content: 'done', toolCalls: [finishCall('finish_1', 'recovered')] };
+      },
+    },
+    publish: (_id, e) => published.push(e),
+    hardStepCap: 3,
+    toolSettings: testToolSettings(),
+  });
+
+  const failedTool = published.find((e) => e.type === 'tool_result' && e.id === 'write_1');
+  assert.equal(failedTool?.type, 'tool_result');
+  assert.match(failedTool?.type === 'tool_result' ? failedTool.result : '', /工具参数无效，未执行 file_write/);
+  assert.equal((await store.getRun(run.id))?.output, 'recovered');
 });
 
 test('executeRun: resumes the same run after a user answer without duplicating input', async () => {
@@ -344,10 +474,10 @@ test('executeRun: resumes the same run after a user answer without duplicating i
     },
   };
 
-  await executeRun(run.id, { store, provider, publish: () => {}, hardStepCap: 3 });
+  await executeRun(run.id, { store, provider, publish: () => {}, hardStepCap: 3, toolSettings: testToolSettings() });
   await store.addMessage(thread.id, run.id, null, { role: 'user', content: '用户回答：\nA' });
   await store.setRunStatus(run.id, 'pending');
-  await executeRun(run.id, { store, provider, publish: () => {}, hardStepCap: 3, resume: true });
+  await executeRun(run.id, { store, provider, publish: () => {}, hardStepCap: 3, resume: true, toolSettings: testToolSettings() });
 
   const finished = await store.getRun(run.id);
   assert.equal(finished?.status, 'done');

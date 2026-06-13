@@ -83,6 +83,17 @@ export type AgentEvent =
   | { type: 'llm_delta'; step: number; text: string }
   | ({ type: 'tool_call'; step: number; name: string; args: unknown; id: string } & Pick<TimedEventFields, 'startedAt'>)
   | ({ type: 'tool_result'; step: number; id: string; name: string; result: string } & TimedEventFields)
+  | {
+      type: 'skill_activated';
+      step: number;
+      skillId: string;
+      name: string;
+      source: 'builtin' | 'user';
+      root: string;
+      readonly: boolean;
+      hash: string;
+      allowedTools: string[];
+    }
   | { type: 'plan_update'; step: number; goal: GoalState }
   | {
       type: 'compaction';

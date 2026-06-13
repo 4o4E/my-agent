@@ -12,6 +12,7 @@ import { globTool } from './glob.js';
 import { grepTool } from './grep.js';
 import { truncateFetchText } from './webFetch.js';
 import { getTool, runTool, toolSchemas } from './registry.js';
+import { publicDatasourceForTool } from './datasourceList.js';
 import type { ToolResult } from './types.js';
 import { normalizeToolSettings } from '../settings.js';
 
@@ -37,8 +38,48 @@ test('registry exposes neutral tool schemas and dispatches by name', async () =>
   assert.ok(schemas.find((s) => s.name === 'shell'));
   assert.ok(schemas.find((s) => s.name === 'finish_conversation'));
   assert.ok(schemas.find((s) => s.name === 'write_html_artifact'));
+  assert.ok(schemas.find((s) => s.name === 'skill_activate'));
+  assert.ok(schemas.find((s) => s.name === 'datasource_list'));
+  assert.ok(toolSchemas(['file_read']).some((s) => s.name === 'file_read'));
+  assert.equal(toolSchemas(['file_read']).some((s) => s.name === 'shell'), false);
+  assert.ok(toolSchemas(['file_read']).some((s) => s.name === 'finish_conversation'));
+  assert.ok(toolSchemas(['datasource_list']).some((s) => s.name === 'datasource_list'));
   assert.ok(getTool('glob'));
   assert.match((await runTool('does_not_exist', {})).text, /未知工具/);
+});
+
+test('datasource_list public view redacts secrets and admin config', () => {
+  const view = publicDatasourceForTool(
+    {
+      id: 'ds_1',
+      name: 'sales',
+      type: 'postgres',
+      status: 'active',
+      connection: { host: 'db.example.com', port: 5432, database: 'sales', password: 'secret' },
+      admin_config: { connectionUrl: 'postgres://admin:secret@db.example.com/sales' },
+      pool_config: {},
+      created_at: '2026-06-13T00:00:00.000Z',
+      updated_at: '2026-06-13T00:00:00.000Z',
+    },
+    [
+      {
+        id: 'dp_1',
+        datasource_id: 'ds_1',
+        name: 'readonly',
+        mode: 'readonly',
+        template_role: 'sales_readonly',
+        grants: {},
+        pool_config: {},
+        created_at: '2026-06-13T00:00:00.000Z',
+        updated_at: '2026-06-13T00:00:00.000Z',
+      },
+    ],
+  );
+  assert.equal(view.hasAdminConfig, true);
+  assert.deepEqual(view.profiles, [{ name: 'readonly', mode: 'readonly', templateRole: 'sales_readonly' }]);
+  assert.equal((view.connection as Record<string, unknown>).password, '[redacted]');
+  assert.equal(JSON.stringify(view).includes('connectionUrl'), false);
+  assert.equal(JSON.stringify(view).includes('postgres://admin'), false);
 });
 
 test('finish_conversation records progress and validates required progress', async () => {
