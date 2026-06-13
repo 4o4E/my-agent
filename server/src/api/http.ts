@@ -3,12 +3,17 @@ import { executeRun } from '../agent/executor.js';
 import { store } from '../store/index.js';
 import { filesApi } from './files.js';
 import { settingsApi } from './settings.js';
+import { datasourcesApi } from './datasources.js';
+import { runtimeApi } from './runtime.js';
+import { releaseRunLeases } from '../datasources/accountPool.js';
 import type { AskUserAnswer, AskUserOption, AskUserSpec } from '../agent/types.js';
 
 export const api = Router();
 
 api.use('/files', filesApi);
 api.use('/settings', settingsApi);
+api.use('/datasources', datasourcesApi);
+api.use('/runtime', runtimeApi);
 
 // --- Threads ---
 
@@ -74,6 +79,7 @@ api.post('/runs/:id/cancel', async (req, res) => {
     const step = (await store.getLastStepIndex(run.id)) + 1;
     await store.addEvent(run.id, null, { type: 'user_cancel', step, reason: '用户已取消 run。' });
     await store.setRunStatus(run.id, 'canceled', { error: '用户已取消 run。' });
+    await releaseRunLeases(run.id);
     return res.json({ id: run.id, status: 'canceled' });
   }
   if (run.status === 'pending' || run.status === 'running') {

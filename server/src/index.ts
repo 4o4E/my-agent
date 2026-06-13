@@ -14,6 +14,7 @@ import { attachWebSocket } from './api/ws.js';
 import { describeShellSandbox } from './tools/sandbox.js';
 import { getToolSettings } from './settings.js';
 import { recoverInterruptedRuns } from './agent/recovery.js';
+import { startDatasourceLeaseReconciler } from './datasources/reconciler.js';
 
 const app = express();
 app.use(cors());
@@ -24,6 +25,7 @@ app.use('/api', api);
 
 const server = createServer(app);
 attachWebSocket(server);
+startDatasourceLeaseReconciler();
 
 const displayHost = config.host.includes(':') ? `[${config.host}]` : config.host;
 

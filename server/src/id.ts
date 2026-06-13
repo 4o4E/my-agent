@@ -10,6 +10,11 @@ const ID_PREFIXES = {
   run: 'ru',
   thread: 'th',
   step: 'st',
+  datasource: 'ds',
+  datasourceProfile: 'dp',
+  datasourceAccount: 'da',
+  datasourceLease: 'dl',
+  workloadToken: 'wt',
 } as const;
 
 export type EntityIdKind = keyof typeof ID_PREFIXES;
@@ -86,4 +91,24 @@ export function newThreadId(): string {
 
 export function newStepId(): string {
   return newEntityId('step');
+}
+
+export function newDatasourceId(): string {
+  return newEntityId('datasource');
+}
+
+export function newDatasourceProfileId(): string {
+  return newEntityId('datasourceProfile');
+}
+
+export function newDatasourceAccountId(): string {
+  return newEntityId('datasourceAccount');
+}
+
+export function newDatasourceLeaseId(): string {
+  return newEntityId('datasourceLease');
+}
+
+export function newWorkloadTokenId(): string {
+  return newEntityId('workloadToken');
 }
