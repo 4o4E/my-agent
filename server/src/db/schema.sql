@@ -163,3 +163,80 @@ CREATE TABLE IF NOT EXISTS datasource_account_leases (
 
 CREATE INDEX IF NOT EXISTS idx_datasource_leases_run ON datasource_account_leases(run_id, status);
 CREATE INDEX IF NOT EXISTS idx_datasource_leases_expiry ON datasource_account_leases(status, expires_at);
+
+-- 托管 shell session。session 是 thread/workspace 级资源，可跨 run 复用；
+-- command 是一次具体命令执行，可前台等待或后台运行。
+CREATE TABLE IF NOT EXISTS shell_sessions (
+  id              TEXT PRIMARY KEY,
+  thread_id       TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  workspace_root  TEXT NOT NULL,
+  cwd             TEXT NOT NULL,
+  backend         TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'idle' CHECK (status IN ('opening', 'idle', 'busy', 'attached_by_user', 'closing', 'closed', 'orphaned')),
+  lease_actor     TEXT,
+  lease_run_id    TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  pinned          BOOLEAN NOT NULL DEFAULT false,
+  idle_expires_at TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE shell_sessions ADD COLUMN IF NOT EXISTS cwd TEXT;
+UPDATE shell_sessions SET cwd = workspace_root WHERE cwd IS NULL;
+ALTER TABLE shell_sessions ALTER COLUMN cwd SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_shell_sessions_thread ON shell_sessions(thread_id, workspace_root, status);
+
+CREATE TABLE IF NOT EXISTS shell_commands (
+  id               TEXT PRIMARY KEY,
+  session_id       TEXT NOT NULL REFERENCES shell_sessions(id) ON DELETE CASCADE,
+  run_id           TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  step_id          TEXT REFERENCES steps(id) ON DELETE SET NULL,
+  actor            TEXT NOT NULL DEFAULT 'agent' CHECK (actor IN ('agent', 'user', 'system')),
+  command          TEXT NOT NULL,
+  cwd              TEXT NOT NULL,
+  wait_mode        TEXT NOT NULL DEFAULT 'foreground' CHECK (wait_mode IN ('foreground', 'background')),
+  status           TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'killed', 'timed_out', 'orphaned')),
+  attention        TEXT,
+  host_pid         INTEGER,
+  child_pid        INTEGER,
+  exit_code        INTEGER,
+  signal           TEXT,
+  soft_timeout_ms  INTEGER,
+  hard_timeout_ms  INTEGER,
+  soft_timeout_at  TIMESTAMPTZ,
+  hard_timeout_at  TIMESTAMPTZ,
+  last_output_at   TIMESTAMPTZ,
+  output_bytes     BIGINT NOT NULL DEFAULT 0,
+  error            TEXT,
+  started_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at         TIMESTAMPTZ,
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shell_commands_session ON shell_commands(session_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_shell_commands_run ON shell_commands(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_shell_commands_status ON shell_commands(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS shell_command_logs (
+  id          BIGSERIAL PRIMARY KEY,
+  command_id  TEXT NOT NULL REFERENCES shell_commands(id) ON DELETE CASCADE,
+  seq         BIGINT NOT NULL,
+  stream      TEXT NOT NULL CHECK (stream IN ('stdout', 'stderr', 'system')),
+  chunk       TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (command_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_shell_command_logs_command ON shell_command_logs(command_id, seq);
+
+CREATE TABLE IF NOT EXISTS shell_session_events (
+  id          BIGSERIAL PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES shell_sessions(id) ON DELETE CASCADE,
+  actor       TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  data        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_shell_session_events_session ON shell_session_events(session_id, id);

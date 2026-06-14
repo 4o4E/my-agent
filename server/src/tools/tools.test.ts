@@ -13,7 +13,7 @@ import { grepTool } from './grep.js';
 import { truncateFetchText } from './webFetch.js';
 import { getTool, runTool, toolSchemas } from './registry.js';
 import { publicDatasourceForTool } from './datasourceList.js';
-import type { ToolResult } from './types.js';
+import type { ToolResult, ToolRunContext } from './types.js';
 import { normalizeToolSettings } from '../settings.js';
 
 /** Tools may return a string or a ToolResult; tests assert on the text. */
@@ -88,6 +88,37 @@ test('finish_conversation records progress and validates required progress', asy
     /对话已完成/,
   );
   assert.match((await runTool('finish_conversation', { completed: true })).text, /必须填写.*progress/);
+});
+
+test('registry forwards run context to tool implementations', async () => {
+  const tool = getTool('shell');
+  assert.ok(tool);
+  const originalRun = tool.run;
+  let seen: ToolRunContext | undefined;
+  try {
+    tool.run = async (_args, ctx) => {
+      seen = ctx;
+      return 'context-ok';
+    };
+    const settings = normalizeToolSettings({ workspaceRoot: dir, shellUseHostPath: true });
+    const out = await runTool('shell', { command: 'printf context-ok' }, {
+      settings,
+      env: { DB_WORKLOAD_TOKEN: 'wat_test' },
+      threadId: 'th_test',
+      runId: 'ru_test',
+      stepId: 'st_test',
+      step: 7,
+    });
+    assert.equal(out.text, 'context-ok');
+    assert.equal(seen?.settings, settings);
+    assert.deepEqual(seen?.env, { DB_WORKLOAD_TOKEN: 'wat_test' });
+    assert.equal(seen?.threadId, 'th_test');
+    assert.equal(seen?.runId, 'ru_test');
+    assert.equal(seen?.stepId, 'st_test');
+    assert.equal(seen?.step, 7);
+  } finally {
+    tool.run = originalRun;
+  }
 });
 
 test('shell runs a command (PowerShell on Windows, sh elsewhere)', async () => {

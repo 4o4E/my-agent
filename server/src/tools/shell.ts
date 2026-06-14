@@ -1,21 +1,11 @@
 import { getToolSettings } from '../settings.js';
+import { formatCommandResult, shellManager } from '../shell/manager.js';
+import { redactShellOutput } from '../shell/redact.js';
 import { runShellCommand } from './sandbox.js';
 import type { Tool } from './types.js';
 
 const isWindows = process.platform === 'win32';
-const SECRET_OUTPUT_REPLACEMENTS: Array<[RegExp, string]> = [
-  [/"(password|passwd|token|secret|credential|connectionUrl)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"'],
-  [/\b([A-Z0-9_]*(?:PASSWORD|TOKEN|SECRET|KEY|DATABASE_URL|CONNECTION_URL)[A-Z0-9_]*)=('[^']*'|"[^"]*"|[^\s;&|]+)/gi, '$1=[redacted]'],
-  [/\b([A-Z0-9_]*(?:PASSWORD|TOKEN|SECRET|KEY)[A-Z0-9_]*)=('[^']*'|"[^"]*"|[^\s;&|]+)/gi, '$1=[redacted]'],
-  [/(postgres(?:ql)?:\/\/)([^:\s/@]+):([^@\s]+)@/gi, '$1$2:[redacted]@'],
-  [/(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[redacted]'],
-  [/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[redacted]'],
-];
 const DATABASE_CLI_RE = /(^|[\s;&|()])(?:psql|mysql|mongosh|beeline|duckdb|sqlite3)\b|\$DATABASE_URL|\$\{DATABASE_URL[}:+-]?/;
-
-function redactShellOutput(output: string): string {
-  return SECRET_OUTPUT_REPLACEMENTS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), output);
-}
 
 function requiresDatabaseAccess(command: string): boolean {
   return DATABASE_CLI_RE.test(command);
@@ -45,6 +35,26 @@ export const shellTool: Tool = {
       return '数据库 CLI 需要先激活 database-access skill，由本次 run 的 workload token 换取短期凭证；不要使用宿主 DATABASE_URL 或本机默认数据库账号直连。';
     }
     try {
+      if (ctx?.threadId && ctx.settings) {
+        const session = await shellManager.reuseSession({
+          threadId: ctx.threadId,
+          settings,
+          runId: ctx.runId,
+          step: ctx.step,
+        });
+        const result = await shellManager.exec({
+          sessionId: session.id,
+          command,
+          settings,
+          context: { threadId: ctx.threadId, runId: ctx.runId, stepId: ctx.stepId, step: ctx.step },
+          waitMode: 'foreground',
+          waitTimeoutMs: timeout,
+          softTimeoutMs: Math.max(timeout, 10 * 60_000),
+          hardTimeoutMs: Math.max(timeout * 3, 30 * 60_000),
+          env: ctx.env,
+        });
+        return formatCommandResult(result);
+      }
       const { stdout, stderr } = await runShellCommand(command, timeout, {
         policyMode: settings.sandbox,
         backend: settings.sandboxBackend,

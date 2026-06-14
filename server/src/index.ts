@@ -15,6 +15,7 @@ import { describeShellSandbox } from './tools/sandbox.js';
 import { getToolSettings } from './settings.js';
 import { recoverInterruptedRuns } from './agent/recovery.js';
 import { startDatasourceLeaseReconciler } from './datasources/reconciler.js';
+import { shellManager } from './shell/manager.js';
 
 const app = express();
 app.use(cors());
@@ -50,4 +51,11 @@ server.listen(config.port, config.host, () => {
   void recoverInterruptedRuns().then((count) => {
     if (count > 0) console.log(`   Recovered interrupted runs: ${count}`);
   });
+  void shellManager.markInterruptedCommandsOrphaned()
+    .then((count) => {
+      if (count > 0) console.log(`   Marked orphaned shell commands: ${count}`);
+    })
+    .catch((err) => {
+      console.warn(`   Shell command recovery skipped: ${(err as Error).message}`);
+    });
 });

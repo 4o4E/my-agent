@@ -1,19 +1,39 @@
 import type { Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { runBus } from '../agent/bus.js';
+import { shellBus } from '../shell/bus.js';
 import { store } from '../store/index.js';
 import type { AgentEvent } from '../agent/types.js';
 
 /**
- * WebSocket 端点：ws://host/ws?runId=<id>
- * 先回放已持久化事件，再继续推送该 run 的实时事件。
+ * WebSocket 端点:
+ * - ws://host/ws?runId=<id> 回放并推送 run 事件。
+ * - ws://host/ws?channel=shell&threadId=<id> 推送 thread 级 shell 事件。
  */
 export function attachWebSocket(server: Server): void {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   wss.on('connection', async (socket, req) => {
     const url = new URL(req.url ?? '', 'http://localhost');
+    const channel = url.searchParams.get('channel');
+    const threadId = url.searchParams.get('threadId');
     const runId = url.searchParams.get('runId');
+
+    if (channel === 'shell') {
+      if (!threadId) {
+        socket.close(1008, '缺少 threadId 查询参数');
+        return;
+      }
+
+      const send = (event: AgentEvent) => {
+        if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(event));
+      };
+      const unsubscribe = shellBus.subscribe(threadId, send);
+      socket.on('close', unsubscribe);
+      socket.on('error', unsubscribe);
+      return;
+    }
+
     if (!runId) {
       socket.close(1008, '缺少 runId 查询参数');
       return;

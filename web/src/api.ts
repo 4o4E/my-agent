@@ -23,6 +23,15 @@ export type AgentEvent =
   | { type: 'tool_result'; step: number; id: string; name: string; result: string; startedAt: string; endedAt: string; durationMs: number }
   | { type: 'plan_update'; step: number; goal: GoalState }
   | { type: 'compaction'; step: number; estBefore: number; estAfter: number; masked: number; summarized?: number; dropped: number; reason?: string }
+  | { type: 'shell_session_opened'; step: number; sessionId: string; backend: string; workspaceRoot: string }
+  | { type: 'shell_session_closed'; step: number; sessionId: string; reason?: string }
+  | { type: 'shell_lease_changed'; step: number; sessionId: string; actor: 'agent' | 'user' | 'system' | null; runId?: string | null }
+  | { type: 'shell_command_started'; step: number; sessionId: string; commandId: string; command: string; waitMode: 'foreground' | 'background'; startedAt: string }
+  | { type: 'shell_command_output'; step: number; sessionId: string; commandId: string; stream: 'stdout' | 'stderr' | 'system'; seq: number; text: string }
+  | { type: 'shell_command_timeout'; step: number; sessionId: string; commandId: string; soft: boolean; runtimeMs: number; message: string }
+  | { type: 'shell_command_attention'; step: number; sessionId: string; commandId: string; attention: string; message: string }
+  | { type: 'shell_command_finished'; step: number; sessionId: string; commandId: string; status: 'succeeded' | 'failed' | 'killed' | 'timed_out' | 'orphaned'; exitCode?: number | null; signal?: string | null; durationMs?: number }
+  | { type: 'shell_command_killed'; step: number; sessionId: string; commandId: string; signal: string; reason?: string }
   | { type: 'user_question'; step: number; question: string; toolCallId?: string; spec?: AskUserSpec }
   | { type: 'user_answer'; step: number; answer: AskUserAnswer }
   | { type: 'user_cancel'; step: number; reason?: string }
@@ -245,6 +254,54 @@ export interface DatasourceTestResult {
   tables: DatasourceTableInfo[];
 }
 
+export type ShellActor = 'agent' | 'user' | 'system';
+export type ShellSessionStatus = 'opening' | 'idle' | 'busy' | 'attached_by_user' | 'closing' | 'closed' | 'orphaned';
+export type ShellCommandStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'killed' | 'timed_out' | 'orphaned';
+
+export interface ShellSession {
+  id: string;
+  thread_id: string;
+  workspace_root: string;
+  cwd: string;
+  backend: string;
+  status: ShellSessionStatus;
+  lease_actor: ShellActor | null;
+  lease_run_id: string | null;
+  pinned: boolean;
+  idle_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+  commands?: ShellCommand[];
+}
+
+export interface ShellCommand {
+  id: string;
+  session_id: string;
+  run_id: string | null;
+  step_id: string | null;
+  actor: ShellActor;
+  command: string;
+  cwd: string;
+  wait_mode: 'foreground' | 'background';
+  status: ShellCommandStatus;
+  attention: string | null;
+  exit_code: number | null;
+  signal: string | null;
+  output_bytes: string | number;
+  started_at: string;
+  ended_at: string | null;
+  updated_at: string;
+}
+
+export interface ShellCommandLog {
+  id: number;
+  command_id: string;
+  seq: number;
+  stream: 'stdout' | 'stderr' | 'system';
+  chunk: string;
+  created_at: string;
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = '';
@@ -376,6 +433,46 @@ export const answerRun = (runId: string, answer: AskUserAnswer) =>
     body: JSON.stringify({ answer }),
   }).then(json<{ id: string; threadId: string; status: 'running' }>);
 
+export const listShellSessions = (threadId: string) =>
+  fetch(`/api/shell-sessions?threadId=${encodeURIComponent(threadId)}`).then(json<{ sessions: ShellSession[] }>);
+
+export const createShellSession = (threadId: string, pinned = true) =>
+  fetch('/api/shell-sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threadId, pinned }),
+  }).then(json<{ session: ShellSession }>);
+
+export const closeShellSession = (sessionId: string, force = false) =>
+  fetch(`/api/shell-sessions/${sessionId}/close`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  }).then(json<{ session: ShellSession | null }>);
+
+export const runShellCommand = (sessionId: string, command: string) =>
+  fetch(`/api/shell-sessions/${sessionId}/commands`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, wait: 'background' }),
+  }).then(json<{ command: ShellCommand; timedOutWaiting: boolean; tail: string }>);
+
+export const killShellCommand = (commandId: string, reason = 'user_requested_kill', signal: 'SIGINT' | 'SIGTERM' | 'SIGKILL' = 'SIGINT') =>
+  fetch(`/api/shell-commands/${commandId}/kill`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason, signal }),
+  }).then(json<{ command: ShellCommand }>);
+
+export const getShellCommandLogs = (commandId: string, sinceSeq = 0, limit = 200) =>
+  fetch(`/api/shell-commands/${commandId}/logs?sinceSeq=${sinceSeq}&limit=${limit}`).then(json<{ command: ShellCommand; logs: ShellCommandLog[] }>);
+
+export const takeoverShellSession = (sessionId: string) =>
+  fetch(`/api/shell-sessions/${sessionId}/takeover`, { method: 'POST' }).then(json<{ session: ShellSession }>);
+
+export const releaseShellSession = (sessionId: string) =>
+  fetch(`/api/shell-sessions/${sessionId}/release`, { method: 'POST' }).then(json<{ session: ShellSession }>);
+
 /** Subscribe to a run's live event stream over WebSocket. */
 export function subscribeRun(
   runId: string,
@@ -389,6 +486,25 @@ export function subscribeRun(
       onEvent(JSON.parse(m.data) as AgentEvent);
     } catch {
       /* ignore malformed frame */
+    }
+  };
+  ws.onclose = () => onClose?.();
+  return () => ws.close();
+}
+
+/** 订阅当前 thread 的 shell 事件，右侧 Shell 面板用它触发实时刷新。 */
+export function subscribeShell(
+  threadId: string,
+  onEvent: (event: AgentEvent) => void,
+  onClose?: () => void,
+): () => void {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws?channel=shell&threadId=${encodeURIComponent(threadId)}`);
+  ws.onmessage = (message) => {
+    try {
+      onEvent(JSON.parse(message.data) as AgentEvent);
+    } catch {
+      /* 忽略异常帧。 */
     }
   };
   ws.onclose = () => onClose?.();

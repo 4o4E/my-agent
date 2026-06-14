@@ -553,10 +553,23 @@ test('memory store: deleteThread removes dependent run data', async () => {
   const run = await store.createRun(thread.id, 'delete me');
   await store.addMessage(thread.id, run.id, null, { role: 'user', content: 'delete me' });
   await store.addEvent(run.id, null, { type: 'final', step: 1, output: 'done' });
+  const session = await store.createShellSession({ threadId: thread.id, workspaceRoot: '/tmp/ws', backend: 'none' });
+  const command = await store.createShellCommand({
+    sessionId: session.id,
+    runId: run.id,
+    actor: 'agent',
+    command: 'printf ok',
+    cwd: '/tmp/ws',
+    waitMode: 'foreground',
+  });
+  await store.appendShellCommandLog(command.id, 'stdout', 'ok');
 
   assert.equal(await store.deleteThread(thread.id), true);
   assert.equal(await store.getThread(thread.id), null);
   assert.deepEqual(await store.listRuns(thread.id), []);
   assert.deepEqual(await store.loadThreadMessages(thread.id), []);
   assert.deepEqual(await store.getEvents(run.id), []);
+  assert.deepEqual(await store.listShellSessions(thread.id), []);
+  assert.deepEqual(await store.getShellCommand(command.id), null);
+  assert.deepEqual(await store.getShellCommandLogs(command.id), []);
 });

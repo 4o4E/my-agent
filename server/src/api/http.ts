@@ -7,6 +7,10 @@ import { datasourcesApi } from './datasources.js';
 import { runtimeApi } from './runtime.js';
 import { releaseRunLeases } from '../datasources/accountPool.js';
 import type { AskUserAnswer, AskUserOption, AskUserSpec } from '../agent/types.js';
+import { shellManager } from '../shell/manager.js';
+import { shellBus } from '../shell/bus.js';
+import { getToolSettings } from '../settings.js';
+import { createPolicy } from '../tools/policy.js';
 
 export const api = Router();
 
@@ -14,6 +18,21 @@ api.use('/files', filesApi);
 api.use('/settings', settingsApi);
 api.use('/datasources', datasourcesApi);
 api.use('/runtime', runtimeApi);
+
+async function killRunShellCommands(runId: string): Promise<void> {
+  try {
+    await shellManager.killRunCommands(runId, 'run_cancel');
+  } catch (err) {
+    const message = (err as Error).message;
+    if (!message.includes('relation "shell_commands" does not exist')) {
+      console.warn(`shell command cleanup during cancel failed: ${message}`);
+    }
+  }
+}
+
+function normalizeShellSignal(value: unknown, fallback: NodeJS.Signals): NodeJS.Signals {
+  return value === 'SIGINT' || value === 'SIGTERM' || value === 'SIGKILL' ? value : fallback;
+}
 
 // --- Threads ---
 
@@ -77,12 +96,14 @@ api.post('/runs/:id/cancel', async (req, res) => {
   if (!run) return res.status(404).json({ error: 'run 不存在' });
   if (run.status === 'waiting_for_user') {
     const step = (await store.getLastStepIndex(run.id)) + 1;
+    await killRunShellCommands(run.id);
     await store.addEvent(run.id, null, { type: 'user_cancel', step, reason: '用户已取消 run。' });
     await store.setRunStatus(run.id, 'canceled', { error: '用户已取消 run。' });
     await releaseRunLeases(run.id);
     return res.json({ id: run.id, status: 'canceled' });
   }
   if (run.status === 'pending' || run.status === 'running') {
+    await killRunShellCommands(run.id);
     await store.setRunStatus(run.id, 'canceling');
     return res.json({ id: run.id, status: 'canceling' });
   }
@@ -107,6 +128,118 @@ api.post('/runs/:id/answer', async (req, res) => {
   await store.setRunStatus(run.id, 'pending');
   void executeRun(run.id, { resume: true });
   res.json({ id: run.id, threadId: run.thread_id, status: 'running' });
+});
+
+// --- Managed shell ---
+
+api.get('/shell-sessions', async (req, res) => {
+  const threadId = String(req.query.threadId ?? '').trim();
+  if (!threadId) return res.status(400).json({ error: 'threadId 为必填' });
+  const settings = await getToolSettings();
+  const sessions = await store.listShellSessions(threadId, settings.workspaceRoot);
+  const result = await Promise.all(
+    sessions.map(async (session) => ({
+      ...session,
+      commands: await store.listShellCommandsBySession(session.id, 50),
+    })),
+  );
+  res.json({ sessions: result });
+});
+
+api.post('/shell-sessions', async (req, res) => {
+  const threadId = String(req.body?.threadId ?? '').trim();
+  if (!threadId) return res.status(400).json({ error: 'threadId 为必填' });
+  const thread = await store.getThread(threadId);
+  if (!thread) return res.status(404).json({ error: 'thread 不存在' });
+  const settings = await getToolSettings();
+  const decision = createPolicy(settings).check('shell_session_open', { command: '' });
+  if (!decision.ok) return res.status(403).json({ error: decision.reason });
+  const session = await shellManager.openSession({
+    threadId,
+    settings,
+    pinned: req.body?.pinned === true,
+    ttlMs: typeof req.body?.ttl_ms === 'number' ? req.body.ttl_ms : null,
+  });
+  res.status(201).json({ session });
+});
+
+api.get('/shell-sessions/:id/commands', async (req, res) => {
+  const session = await store.getShellSession(req.params.id);
+  if (!session) return res.status(404).json({ error: 'shell session 不存在' });
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+  res.json({ session, commands: await store.listShellCommandsBySession(session.id, limit) });
+});
+
+api.post('/shell-sessions/:id/close', async (req, res) => {
+  const session = await store.getShellSession(req.params.id);
+  if (!session) return res.status(404).json({ error: 'shell session 不存在' });
+  const commands = await store.listShellCommandsBySession(session.id, 50);
+  const running = commands.filter((cmd) => cmd.status === 'queued' || cmd.status === 'running');
+  if (running.length && req.body?.force !== true) {
+    return res.status(409).json({ error: `shell session 仍有运行中命令：${running.map((cmd) => cmd.id).join(', ')}` });
+  }
+  for (const command of running) {
+    await shellManager.kill(command.id, 'session_close', 'SIGTERM');
+  }
+  await store.updateShellSession(session.id, { status: 'closed', lease_actor: null, lease_run_id: null });
+  await store.addShellSessionEvent(session.id, 'user', 'closed', { force: req.body?.force === true });
+  shellBus.publish(session.thread_id, { type: 'shell_session_closed', step: 0, sessionId: session.id, reason: '用户关闭 session。' });
+  res.json({ session: await store.getShellSession(session.id) });
+});
+
+api.post('/shell-sessions/:id/commands', async (req, res) => {
+  const session = await store.getShellSession(req.params.id);
+  if (!session) return res.status(404).json({ error: 'shell session 不存在' });
+  const command = String(req.body?.command ?? '').trim();
+  if (!command) return res.status(400).json({ error: 'command 为必填' });
+  const settings = await getToolSettings();
+  const policy = createPolicy(settings);
+  const decision = policy.check('shell_exec', { command });
+  if (!decision.ok) return res.status(403).json({ error: decision.reason });
+  const result = await shellManager.exec({
+    sessionId: session.id,
+    command,
+    settings,
+    context: { threadId: session.thread_id },
+    waitMode: req.body?.wait === 'foreground' ? 'foreground' : 'background',
+    waitTimeoutMs: Number(req.body?.timeout_ms ?? 1000),
+    softTimeoutMs: typeof req.body?.soft_timeout_ms === 'number' ? req.body.soft_timeout_ms : null,
+    hardTimeoutMs: typeof req.body?.hard_timeout_ms === 'number' ? req.body.hard_timeout_ms : null,
+    actor: 'user',
+  });
+  res.status(201).json({ command: result.command, timedOutWaiting: result.timedOutWaiting, tail: result.tail });
+});
+
+api.get('/shell-commands/:id/logs', async (req, res) => {
+  const command = await store.getShellCommand(req.params.id);
+  if (!command) return res.status(404).json({ error: 'shell command 不存在' });
+  const sinceSeq = Math.max(0, Number(req.query.sinceSeq ?? 0));
+  const limit = Math.min(1000, Math.max(1, Number(req.query.limit ?? 200)));
+  res.json({ command, logs: await store.getShellCommandLogs(command.id, sinceSeq, limit) });
+});
+
+api.post('/shell-commands/:id/kill', async (req, res) => {
+  const signal = normalizeShellSignal(req.body?.signal, 'SIGTERM');
+  const command = await shellManager.kill(req.params.id, String(req.body?.reason ?? 'user_requested_kill'), signal);
+  res.json({ command });
+});
+
+api.post('/shell-sessions/:id/takeover', async (req, res) => {
+  const session = await store.getShellSession(req.params.id);
+  if (!session) return res.status(404).json({ error: 'shell session 不存在' });
+  await store.updateShellSession(session.id, { status: 'attached_by_user', lease_actor: 'user', lease_run_id: null });
+  await store.addShellSessionEvent(session.id, 'user', 'takeover', {});
+  shellBus.publish(session.thread_id, { type: 'shell_lease_changed', step: 0, sessionId: session.id, actor: 'user', runId: null });
+  res.json({ session: await store.getShellSession(session.id) });
+});
+
+api.post('/shell-sessions/:id/release', async (req, res) => {
+  const session = await store.getShellSession(req.params.id);
+  if (!session) return res.status(404).json({ error: 'shell session 不存在' });
+  await store.updateShellSession(session.id, { status: 'idle', lease_actor: null, lease_run_id: null });
+  await store.addShellSessionEvent(session.id, 'user', 'release', {});
+  shellBus.publish(session.thread_id, { type: 'shell_lease_changed', step: 0, sessionId: session.id, actor: null, runId: null });
+  res.json({ session: await store.getShellSession(session.id) });
 });
 
 function latestAskUserSpec(events: Awaited<ReturnType<typeof store.getEvents>>): AskUserSpec | null {

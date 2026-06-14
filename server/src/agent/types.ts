@@ -105,6 +105,79 @@ export type AgentEvent =
       dropped: number;
       reason?: string;
     }
+  | {
+      type: 'shell_session_opened';
+      step: number;
+      sessionId: string;
+      backend: string;
+      workspaceRoot: string;
+    }
+  | {
+      type: 'shell_session_closed';
+      step: number;
+      sessionId: string;
+      reason?: string;
+    }
+  | {
+      type: 'shell_lease_changed';
+      step: number;
+      sessionId: string;
+      actor: 'agent' | 'user' | 'system' | null;
+      runId?: string | null;
+    }
+  | {
+      type: 'shell_command_started';
+      step: number;
+      sessionId: string;
+      commandId: string;
+      command: string;
+      waitMode: 'foreground' | 'background';
+      startedAt: string;
+    }
+  | {
+      type: 'shell_command_output';
+      step: number;
+      sessionId: string;
+      commandId: string;
+      stream: 'stdout' | 'stderr' | 'system';
+      seq: number;
+      text: string;
+    }
+  | {
+      type: 'shell_command_timeout';
+      step: number;
+      sessionId: string;
+      commandId: string;
+      soft: boolean;
+      runtimeMs: number;
+      message: string;
+    }
+  | {
+      type: 'shell_command_attention';
+      step: number;
+      sessionId: string;
+      commandId: string;
+      attention: string;
+      message: string;
+    }
+  | {
+      type: 'shell_command_finished';
+      step: number;
+      sessionId: string;
+      commandId: string;
+      status: 'succeeded' | 'failed' | 'killed' | 'timed_out' | 'orphaned';
+      exitCode?: number | null;
+      signal?: string | null;
+      durationMs?: number;
+    }
+  | {
+      type: 'shell_command_killed';
+      step: number;
+      sessionId: string;
+      commandId: string;
+      signal: string;
+      reason?: string;
+    }
   | { type: 'user_question'; step: number; question: string; toolCallId?: string; spec?: AskUserSpec }
   | { type: 'user_answer'; step: number; answer: AskUserAnswer }
   | { type: 'user_cancel'; step: number; reason?: string }

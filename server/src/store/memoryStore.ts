@@ -2,8 +2,19 @@ import type { AgentEvent, RunStatus } from '../agent/types.js';
 import type { LlmMessage } from '../llm/types.js';
 import { maskPlaceholder, maskToolCallArguments } from '../agent/compaction.js';
 import type { GoalState } from '../agent/goal.js';
-import type { RunRow, Store, StepRow, ThreadMessage, ThreadRow } from './types.js';
-import { newRunId, newStepId, newThreadId } from '../id.js';
+import type {
+  RunRow,
+  ShellActor,
+  ShellCommandLogRow,
+  ShellCommandRow,
+  ShellLogStream,
+  ShellSessionRow,
+  Store,
+  StepRow,
+  ThreadMessage,
+  ThreadRow,
+} from './types.js';
+import { newRunId, newShellCommandId, newShellSessionId, newStepId, newThreadId } from '../id.js';
 
 function isEphemeralSystemMessage(role: LlmMessage['role'], content: string | null): boolean {
   return role === 'system' && typeof content === 'string' && content.startsWith('已激活 Skill / Activated Skill:');
@@ -29,7 +40,11 @@ export class MemoryStore implements Store {
   private steps: StepRow[] = [];
   private messages: StoredMsg[] = [];
   private events = new Map<string, AgentEvent[]>();
+  private shellSessions = new Map<string, ShellSessionRow>();
+  private shellCommands = new Map<string, ShellCommandRow>();
+  private shellLogs = new Map<string, ShellCommandLogRow[]>();
   private seq = 0;
+  private shellLogSeq = 0;
   private now = () => new Date().toISOString();
 
   async createThread(title?: string): Promise<ThreadRow> {
@@ -50,6 +65,13 @@ export class MemoryStore implements Store {
     for (const runId of runIds) {
       this.runs.delete(runId);
       this.events.delete(runId);
+    }
+    const sessionIds = new Set([...this.shellSessions.values()].filter((s) => s.thread_id === id).map((s) => s.id));
+    const commandIds = new Set([...this.shellCommands.values()].filter((c) => sessionIds.has(c.session_id)).map((c) => c.id));
+    for (const sessionId of sessionIds) this.shellSessions.delete(sessionId);
+    for (const commandId of commandIds) {
+      this.shellCommands.delete(commandId);
+      this.shellLogs.delete(commandId);
     }
     this.steps = this.steps.filter((s) => !runIds.has(s.run_id));
     this.messages = this.messages.filter((m) => m.thread_id !== id);
@@ -164,5 +186,158 @@ export class MemoryStore implements Store {
   }
   async getEvents(runId: string) {
     return this.events.get(runId) ?? [];
+  }
+
+  async createShellSession(input: {
+    threadId: string;
+    workspaceRoot: string;
+    cwd?: string;
+    backend: string;
+    pinned?: boolean;
+    idleExpiresAt?: string | null;
+  }): Promise<ShellSessionRow> {
+    const row: ShellSessionRow = {
+      id: newShellSessionId(),
+      thread_id: input.threadId,
+      workspace_root: input.workspaceRoot,
+      cwd: input.cwd ?? input.workspaceRoot,
+      backend: input.backend,
+      status: 'idle',
+      lease_actor: null,
+      lease_run_id: null,
+      pinned: input.pinned === true,
+      idle_expires_at: input.idleExpiresAt ?? null,
+      created_at: this.now(),
+      updated_at: this.now(),
+    };
+    this.shellSessions.set(row.id, row);
+    return row;
+  }
+
+  async getShellSession(id: string): Promise<ShellSessionRow | null> {
+    return this.shellSessions.get(id) ?? null;
+  }
+
+  async listShellSessions(threadId: string, workspaceRoot?: string): Promise<ShellSessionRow[]> {
+    return [...this.shellSessions.values()]
+      .filter((session) => session.thread_id === threadId && (!workspaceRoot || session.workspace_root === workspaceRoot))
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  }
+
+  async updateShellSession(
+    id: string,
+    fields: Partial<Pick<ShellSessionRow, 'status' | 'lease_actor' | 'lease_run_id' | 'pinned' | 'idle_expires_at' | 'cwd'>>,
+  ): Promise<void> {
+    const row = this.shellSessions.get(id);
+    if (!row) return;
+    Object.assign(row, fields, { updated_at: this.now() });
+  }
+
+  async createShellCommand(input: {
+    sessionId: string;
+    runId?: string | null;
+    stepId?: string | null;
+    actor: ShellActor;
+    command: string;
+    cwd: string;
+    waitMode: 'foreground' | 'background';
+    softTimeoutMs?: number | null;
+    hardTimeoutMs?: number | null;
+    softTimeoutAt?: string | null;
+    hardTimeoutAt?: string | null;
+  }): Promise<ShellCommandRow> {
+    const row: ShellCommandRow = {
+      id: newShellCommandId(),
+      session_id: input.sessionId,
+      run_id: input.runId ?? null,
+      step_id: input.stepId ?? null,
+      actor: input.actor,
+      command: input.command,
+      cwd: input.cwd,
+      wait_mode: input.waitMode,
+      status: 'queued',
+      attention: null,
+      host_pid: null,
+      child_pid: null,
+      exit_code: null,
+      signal: null,
+      soft_timeout_ms: input.softTimeoutMs ?? null,
+      hard_timeout_ms: input.hardTimeoutMs ?? null,
+      soft_timeout_at: input.softTimeoutAt ?? null,
+      hard_timeout_at: input.hardTimeoutAt ?? null,
+      last_output_at: null,
+      output_bytes: 0,
+      error: null,
+      started_at: this.now(),
+      ended_at: null,
+      updated_at: this.now(),
+    };
+    this.shellCommands.set(row.id, row);
+    return row;
+  }
+
+  async getShellCommand(id: string): Promise<ShellCommandRow | null> {
+    return this.shellCommands.get(id) ?? null;
+  }
+
+  async listShellCommandsBySession(sessionId: string, limit = 20): Promise<ShellCommandRow[]> {
+    return [...this.shellCommands.values()]
+      .filter((cmd) => cmd.session_id === sessionId)
+      .sort((a, b) => b.started_at.localeCompare(a.started_at))
+      .slice(0, limit);
+  }
+
+  async listRunningShellCommandsByRun(runId: string): Promise<ShellCommandRow[]> {
+    return [...this.shellCommands.values()].filter((cmd) => cmd.run_id === runId && cmd.status === 'running');
+  }
+
+  async listRunningShellCommands(): Promise<ShellCommandRow[]> {
+    return [...this.shellCommands.values()].filter((cmd) => cmd.status === 'queued' || cmd.status === 'running');
+  }
+
+  async updateShellCommand(
+    id: string,
+    fields: Partial<
+      Pick<
+        ShellCommandRow,
+        | 'status'
+        | 'attention'
+        | 'host_pid'
+        | 'child_pid'
+        | 'exit_code'
+        | 'signal'
+        | 'last_output_at'
+        | 'output_bytes'
+        | 'error'
+        | 'ended_at'
+      >
+    >,
+  ): Promise<void> {
+    const row = this.shellCommands.get(id);
+    if (!row) return;
+    Object.assign(row, fields, { updated_at: this.now() });
+  }
+
+  async appendShellCommandLog(commandId: string, stream: ShellLogStream, chunk: string): Promise<ShellCommandLogRow> {
+    const list = this.shellLogs.get(commandId) ?? [];
+    const row: ShellCommandLogRow = {
+      id: ++this.shellLogSeq,
+      command_id: commandId,
+      seq: list.length ? list[list.length - 1].seq + 1 : 1,
+      stream,
+      chunk,
+      created_at: this.now(),
+    };
+    list.push(row);
+    this.shellLogs.set(commandId, list);
+    return row;
+  }
+
+  async getShellCommandLogs(commandId: string, sinceSeq = 0, limit = 200): Promise<ShellCommandLogRow[]> {
+    return (this.shellLogs.get(commandId) ?? []).filter((row) => row.seq > sinceSeq).slice(0, limit);
+  }
+
+  async addShellSessionEvent(_sessionId: string, _actor: ShellActor, _kind: string, _data: unknown): Promise<void> {
+    // 内存 Store 只服务单测和离线演示；session 事件的可视化依赖 AgentEvent。
   }
 }

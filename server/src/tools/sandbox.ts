@@ -23,6 +23,14 @@ export interface ShellExecResult {
   stderr: string;
 }
 
+export interface ShellSpawnSpec {
+  file: string;
+  args: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  backend: 'host' | 'bwrap';
+}
+
 export interface ResolvedCommand {
   name: string;
   source: string;
@@ -169,8 +177,8 @@ export function buildBwrapArgs(opts: BwrapOptions): string[] {
   return args;
 }
 
-function hostShell(command: string, timeout: number, workspaceRoot: string, env?: Record<string, string>): Promise<ShellExecResult> {
-  const childEnv = {
+function hostShellEnv(workspaceRoot: string, env?: Record<string, string>): NodeJS.ProcessEnv {
+  return {
     PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
     ...(process.env.LANG ? { LANG: process.env.LANG } : {}),
     ...(process.env.LC_ALL ? { LC_ALL: process.env.LC_ALL } : {}),
@@ -178,6 +186,10 @@ function hostShell(command: string, timeout: number, workspaceRoot: string, env?
     HOME: workspaceRoot,
     PWD: workspaceRoot,
   };
+}
+
+function hostShell(command: string, timeout: number, workspaceRoot: string, env?: Record<string, string>): Promise<ShellExecResult> {
+  const childEnv = hostShellEnv(workspaceRoot, env);
   if (isWindows) {
     return execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
       timeout,
@@ -233,6 +245,37 @@ export async function runShellCommand(command: string, timeout: number, cfg: She
     env: cfg.env,
   });
   return execFileAsync(selected.bwrapPath, args, { timeout, maxBuffer: 1024 * 1024 * 10 });
+}
+
+/** 生成可供 spawn() 使用的 shell 执行规格；托管 shell 用它启动前台/后台命令。 */
+export function buildShellSpawnSpec(command: string, cfg: ShellSandboxConfig): ShellSpawnSpec {
+  const selected = shouldUseBwrap(cfg);
+  if (!selected.use) {
+    return isWindows
+      ? {
+          file: 'powershell.exe',
+          args: ['-NoProfile', '-NonInteractive', '-Command', command],
+          cwd: cfg.workspaceRoot,
+          env: hostShellEnv(cfg.workspaceRoot, cfg.env),
+          backend: 'host',
+        }
+      : {
+          file: '/bin/sh',
+          args: ['-c', command],
+          cwd: cfg.workspaceRoot,
+          env: hostShellEnv(cfg.workspaceRoot, cfg.env),
+          backend: 'host',
+        };
+  }
+
+  const args = buildBwrapArgs({
+    workspaceRoot: cfg.workspaceRoot,
+    command,
+    allowCommands: cfg.allowCommands,
+    shareNet: cfg.shareNet,
+    env: cfg.env,
+  });
+  return { file: selected.bwrapPath, args, backend: 'bwrap' };
 }
 
 export function describeShellSandbox(cfg: ShellSandboxConfig): string {

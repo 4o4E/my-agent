@@ -52,7 +52,9 @@ export function renderRuntimeContext(info: RuntimeContextInfo): string {
 - 请把这个目录视为本次 run 当前可用目录。clone 仓库、创建报告、写入任何需要保留的文件，都必须放在这个目录下。
 - 不要把需要保留的文件写到 /home/user、/tmp、应用仓库根目录或 workspace 之外的路径，除非用户明确要求且工具策略允许。
 - Python 依赖必须安装在虚拟环境中；优先在工作区创建 .venv 并使用 uv 管理依赖，不要全局安装 pip 包。
-- 工具沙箱: ${info.sandbox}; shell 后端: ${info.sandboxBackend}; shell 使用宿主机 PATH: ${info.shellUseHostPath ? '是' : '否'}; 网络: ${info.network}.`;
+- 工具沙箱: ${info.sandbox}; shell 后端: ${info.sandboxBackend}; shell 使用宿主机 PATH: ${info.shellUseHostPath ? '是' : '否'}; 网络: ${info.network}.
+- shell 是托管资源 / Shell is a managed resource: 优先用 shell_session_reuse/open 获取 session，再用 shell_exec 执行命令；短命令用 wait=foreground，长命令用 wait=background 后用 shell_poll 观察，必要时 shell_kill 终止。
+- shell session 会长期记住当前目录 / The shell session remembers cwd across commands: 需要切目录时直接执行 cd，不要给每次命令单独传 cwd。旧 shell 工具只是兼容入口。`;
 }
 
 /** What a compaction pass did, surfaced for events/telemetry. */

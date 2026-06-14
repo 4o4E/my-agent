@@ -18,6 +18,7 @@ import type { ToolSettings } from '../settings.js';
 import { withSpan } from '../telemetry.js';
 import type { AskUserAnswer, AskUserMode, AskUserOption, AskUserSpec, StreamStage, StreamStats } from './types.js';
 import { renderRuntimeContext } from './context.js';
+import { shellManager } from '../shell/manager.js';
 
 const FINISH_TOOL_NAME = 'finish_conversation';
 const ASK_USER_TOOL_NAME = 'ask_user';
@@ -413,6 +414,14 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       // we observe it at the top of each step and stop cleanly.
       const current = await store.getRun(runId);
       if (current?.status === 'canceling') {
+        try {
+          await shellManager.killRunCommands(runId, 'run_cancel');
+        } catch (err) {
+          const message = (err as Error).message;
+          if (!message.includes('relation "shell_commands" does not exist')) {
+            console.warn(`shell command cleanup during cancel failed: ${message}`);
+          }
+        }
         await emit(null, { type: 'error', step: stepIdx, message: '用户已取消 run。' });
         await store.setRunStatus(runId, 'canceled');
         return;
@@ -645,7 +654,14 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
                 span.setAttribute('tool.result.length', out.text.length);
                 return out;
               }
-              const out = await runTool(call.name, args, { settings: toolSettings, env: toolEnv });
+              const out = await runTool(call.name, args, {
+                settings: toolSettings,
+                env: toolEnv,
+                threadId,
+                runId,
+                stepId: step.id,
+                step: stepIdx,
+              });
               span.setAttribute('tool.result.length', out.text.length);
               return out;
             } finally {

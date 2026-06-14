@@ -34,6 +34,63 @@ export interface StoredEvent {
   event: AgentEvent;
 }
 
+export type ShellActor = 'agent' | 'user' | 'system';
+export type ShellSessionStatus = 'opening' | 'idle' | 'busy' | 'attached_by_user' | 'closing' | 'closed' | 'orphaned';
+export type ShellCommandStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'killed' | 'timed_out' | 'orphaned';
+export type ShellCommandWaitMode = 'foreground' | 'background';
+export type ShellLogStream = 'stdout' | 'stderr' | 'system';
+
+export interface ShellSessionRow {
+  id: string;
+  thread_id: string;
+  workspace_root: string;
+  cwd: string;
+  backend: string;
+  status: ShellSessionStatus;
+  lease_actor: ShellActor | null;
+  lease_run_id: string | null;
+  pinned: boolean;
+  idle_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ShellCommandRow {
+  id: string;
+  session_id: string;
+  run_id: string | null;
+  step_id: string | null;
+  actor: ShellActor;
+  command: string;
+  cwd: string;
+  wait_mode: ShellCommandWaitMode;
+  status: ShellCommandStatus;
+  attention: string | null;
+  host_pid: number | null;
+  child_pid: number | null;
+  exit_code: number | null;
+  signal: string | null;
+  soft_timeout_ms: number | null;
+  hard_timeout_ms: number | null;
+  soft_timeout_at: string | null;
+  hard_timeout_at: string | null;
+  last_output_at: string | null;
+  output_bytes: string | number;
+  error: string | null;
+  started_at: string;
+  ended_at: string | null;
+  updated_at: string;
+}
+
+export interface ShellCommandLogRow {
+  id: number;
+  command_id: string;
+  seq: number;
+  stream: ShellLogStream;
+  chunk: string;
+  created_at: string;
+}
+
 /** A thread message as stored, carrying its DB id so the executor can mark it
  *  collapsed during compaction. `content` is the LLM-facing view (already the
  *  placeholder for masked rows); the original is preserved in the DB. */
@@ -81,4 +138,58 @@ export interface Store {
 
   addEvent(runId: string, stepId: string | null, event: AgentEvent): Promise<void>;
   getEvents(runId: string): Promise<AgentEvent[]>;
+
+  createShellSession(input: {
+    threadId: string;
+    workspaceRoot: string;
+    cwd?: string;
+    backend: string;
+    pinned?: boolean;
+    idleExpiresAt?: string | null;
+  }): Promise<ShellSessionRow>;
+  getShellSession(id: string): Promise<ShellSessionRow | null>;
+  listShellSessions(threadId: string, workspaceRoot?: string): Promise<ShellSessionRow[]>;
+  updateShellSession(
+    id: string,
+    fields: Partial<Pick<ShellSessionRow, 'status' | 'lease_actor' | 'lease_run_id' | 'pinned' | 'idle_expires_at' | 'cwd'>>,
+  ): Promise<void>;
+
+  createShellCommand(input: {
+    sessionId: string;
+    runId?: string | null;
+    stepId?: string | null;
+    actor: ShellActor;
+    command: string;
+    cwd: string;
+    waitMode: ShellCommandWaitMode;
+    softTimeoutMs?: number | null;
+    hardTimeoutMs?: number | null;
+    softTimeoutAt?: string | null;
+    hardTimeoutAt?: string | null;
+  }): Promise<ShellCommandRow>;
+  getShellCommand(id: string): Promise<ShellCommandRow | null>;
+  listShellCommandsBySession(sessionId: string, limit?: number): Promise<ShellCommandRow[]>;
+  listRunningShellCommandsByRun(runId: string): Promise<ShellCommandRow[]>;
+  listRunningShellCommands(): Promise<ShellCommandRow[]>;
+  updateShellCommand(
+    id: string,
+    fields: Partial<
+      Pick<
+        ShellCommandRow,
+        | 'status'
+        | 'attention'
+        | 'host_pid'
+        | 'child_pid'
+        | 'exit_code'
+        | 'signal'
+        | 'last_output_at'
+        | 'output_bytes'
+        | 'error'
+        | 'ended_at'
+      >
+    >,
+  ): Promise<void>;
+  appendShellCommandLog(commandId: string, stream: ShellLogStream, chunk: string): Promise<ShellCommandLogRow>;
+  getShellCommandLogs(commandId: string, sinceSeq?: number, limit?: number): Promise<ShellCommandLogRow[]>;
+  addShellSessionEvent(sessionId: string, actor: ShellActor, kind: string, data: unknown): Promise<void>;
 }

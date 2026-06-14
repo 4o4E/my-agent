@@ -3,7 +3,7 @@ import { Conversation } from './Conversation';
 import { Composer, type ComposerAttachment } from './Composer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { FolderTree, PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
+import { FolderTree, PanelRightClose, PanelRightOpen, Square, Terminal } from 'lucide-react';
 import type { AskUserAnswer } from '@/api';
 import type { AskUserDraft } from './AskUserCard';
 
@@ -23,7 +23,9 @@ interface Props {
   onToggleWide: () => void;
   onRemoveAttachment: (path: string) => void;
   filesOpen: boolean;
+  shellOpen: boolean;
   onToggleRemoteFiles: () => void;
+  onToggleShell: () => void;
   onOpenRemoteFiles: () => void;
   onUploadLocal: (file: File, path: string) => Promise<void>;
   onOpenRemoteFile: (path: string) => void;
@@ -48,7 +50,9 @@ export function ChatView({
   onToggleWide,
   onRemoveAttachment,
   filesOpen,
+  shellOpen,
   onToggleRemoteFiles,
+  onToggleShell,
   onOpenRemoteFiles,
   onUploadLocal,
   onOpenRemoteFile,
@@ -80,6 +84,17 @@ export function ChatView({
             <FolderTree className="size-4" />
             文件
             {filesOpen ? <PanelRightClose className="size-3.5" /> : <PanelRightOpen className="size-3.5" />}
+          </Button>
+          <Button
+            type="button"
+            variant={shellOpen ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={onToggleShell}
+            title={shellOpen ? '关闭 Shell' : '打开 Shell'}
+          >
+            <Terminal className="size-4" />
+            Shell
+            {shellOpen ? <PanelRightClose className="size-3.5" /> : <PanelRightOpen className="size-3.5" />}
           </Button>
         </div>
       </header>

@@ -3,8 +3,19 @@ import type { AgentEvent, RunStatus } from '../agent/types.js';
 import type { LlmMessage } from '../llm/types.js';
 import { maskPlaceholder, maskToolCallArguments } from '../agent/compaction.js';
 import type { GoalState } from '../agent/goal.js';
-import type { RunRow, Store, StepRow, ThreadMessage, ThreadRow } from './types.js';
-import { newRunId, newStepId, newThreadId } from '../id.js';
+import type {
+  RunRow,
+  ShellActor,
+  ShellCommandLogRow,
+  ShellCommandRow,
+  ShellLogStream,
+  ShellSessionRow,
+  Store,
+  StepRow,
+  ThreadMessage,
+  ThreadRow,
+} from './types.js';
+import { newRunId, newShellCommandId, newShellSessionId, newStepId, newThreadId } from '../id.js';
 
 function isEphemeralSystemMessage(role: LlmMessage['role'], content: string | null): boolean {
   return role === 'system' && typeof content === 'string' && content.startsWith('已激活 Skill / Activated Skill:');
@@ -191,5 +202,175 @@ export class PgStore implements Store {
       [runId],
     );
     return rows.map((r) => r.data);
+  }
+
+  async createShellSession(input: {
+    threadId: string;
+    workspaceRoot: string;
+    cwd?: string;
+    backend: string;
+    pinned?: boolean;
+    idleExpiresAt?: string | null;
+  }): Promise<ShellSessionRow> {
+    const id = newShellSessionId();
+    const { rows } = await query<ShellSessionRow>(
+      `INSERT INTO shell_sessions (id, thread_id, workspace_root, cwd, backend, status, pinned, idle_expires_at)
+       VALUES ($1, $2, $3, $4, $5, 'idle', $6, $7) RETURNING *`,
+      [id, input.threadId, input.workspaceRoot, input.cwd ?? input.workspaceRoot, input.backend, input.pinned === true, input.idleExpiresAt ?? null],
+    );
+    return rows[0];
+  }
+
+  async getShellSession(id: string): Promise<ShellSessionRow | null> {
+    const { rows } = await query<ShellSessionRow>(`SELECT * FROM shell_sessions WHERE id = $1`, [id]);
+    return rows[0] ?? null;
+  }
+
+  async listShellSessions(threadId: string, workspaceRoot?: string): Promise<ShellSessionRow[]> {
+    const { rows } = workspaceRoot
+      ? await query<ShellSessionRow>(
+          `SELECT * FROM shell_sessions WHERE thread_id = $1 AND workspace_root = $2 ORDER BY updated_at DESC, created_at DESC`,
+          [threadId, workspaceRoot],
+        )
+      : await query<ShellSessionRow>(
+          `SELECT * FROM shell_sessions WHERE thread_id = $1 ORDER BY updated_at DESC, created_at DESC`,
+          [threadId],
+        );
+    return rows;
+  }
+
+  async updateShellSession(
+    id: string,
+    fields: Partial<Pick<ShellSessionRow, 'status' | 'lease_actor' | 'lease_run_id' | 'pinned' | 'idle_expires_at' | 'cwd'>>,
+  ): Promise<void> {
+    const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
+    if (!entries.length) return;
+    const sets = entries.map(([key], i) => `${key} = $${i + 2}`);
+    await query(`UPDATE shell_sessions SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, [
+      id,
+      ...entries.map(([, value]) => value),
+    ]);
+  }
+
+  async createShellCommand(input: {
+    sessionId: string;
+    runId?: string | null;
+    stepId?: string | null;
+    actor: ShellActor;
+    command: string;
+    cwd: string;
+    waitMode: 'foreground' | 'background';
+    softTimeoutMs?: number | null;
+    hardTimeoutMs?: number | null;
+    softTimeoutAt?: string | null;
+    hardTimeoutAt?: string | null;
+  }): Promise<ShellCommandRow> {
+    const id = newShellCommandId();
+    const { rows } = await query<ShellCommandRow>(
+      `INSERT INTO shell_commands (
+         id, session_id, run_id, step_id, actor, command, cwd, wait_mode, status,
+         soft_timeout_ms, hard_timeout_ms, soft_timeout_at, hard_timeout_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', $9, $10, $11, $12)
+       RETURNING *`,
+      [
+        id,
+        input.sessionId,
+        input.runId ?? null,
+        input.stepId ?? null,
+        input.actor,
+        input.command,
+        input.cwd,
+        input.waitMode,
+        input.softTimeoutMs ?? null,
+        input.hardTimeoutMs ?? null,
+        input.softTimeoutAt ?? null,
+        input.hardTimeoutAt ?? null,
+      ],
+    );
+    return rows[0];
+  }
+
+  async getShellCommand(id: string): Promise<ShellCommandRow | null> {
+    const { rows } = await query<ShellCommandRow>(`SELECT * FROM shell_commands WHERE id = $1`, [id]);
+    return rows[0] ?? null;
+  }
+
+  async listShellCommandsBySession(sessionId: string, limit = 20): Promise<ShellCommandRow[]> {
+    const { rows } = await query<ShellCommandRow>(
+      `SELECT * FROM shell_commands WHERE session_id = $1 ORDER BY started_at DESC LIMIT $2`,
+      [sessionId, limit],
+    );
+    return rows;
+  }
+
+  async listRunningShellCommandsByRun(runId: string): Promise<ShellCommandRow[]> {
+    const { rows } = await query<ShellCommandRow>(
+      `SELECT * FROM shell_commands WHERE run_id = $1 AND status = 'running' ORDER BY started_at`,
+      [runId],
+    );
+    return rows;
+  }
+
+  async listRunningShellCommands(): Promise<ShellCommandRow[]> {
+    const { rows } = await query<ShellCommandRow>(
+      `SELECT * FROM shell_commands WHERE status IN ('queued', 'running') ORDER BY updated_at`,
+    );
+    return rows;
+  }
+
+  async updateShellCommand(
+    id: string,
+    fields: Partial<
+      Pick<
+        ShellCommandRow,
+        | 'status'
+        | 'attention'
+        | 'host_pid'
+        | 'child_pid'
+        | 'exit_code'
+        | 'signal'
+        | 'last_output_at'
+        | 'output_bytes'
+        | 'error'
+        | 'ended_at'
+      >
+    >,
+  ): Promise<void> {
+    const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
+    if (!entries.length) return;
+    const sets = entries.map(([key], i) => `${key} = $${i + 2}`);
+    await query(`UPDATE shell_commands SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, [
+      id,
+      ...entries.map(([, value]) => value),
+    ]);
+  }
+
+  async appendShellCommandLog(commandId: string, stream: ShellLogStream, chunk: string): Promise<ShellCommandLogRow> {
+    const { rows } = await query<ShellCommandLogRow>(
+      `WITH next_seq AS (
+         SELECT COALESCE(max(seq), 0) + 1 AS seq FROM shell_command_logs WHERE command_id = $1
+       )
+       INSERT INTO shell_command_logs (command_id, seq, stream, chunk)
+       SELECT $1, seq, $2, $3 FROM next_seq
+       RETURNING *`,
+      [commandId, stream, chunk],
+    );
+    return rows[0];
+  }
+
+  async getShellCommandLogs(commandId: string, sinceSeq = 0, limit = 200): Promise<ShellCommandLogRow[]> {
+    const { rows } = await query<ShellCommandLogRow>(
+      `SELECT * FROM shell_command_logs WHERE command_id = $1 AND seq > $2 ORDER BY seq LIMIT $3`,
+      [commandId, sinceSeq, limit],
+    );
+    return rows;
+  }
+
+  async addShellSessionEvent(sessionId: string, actor: ShellActor, kind: string, data: unknown): Promise<void> {
+    await query(
+      `INSERT INTO shell_session_events (session_id, actor, kind, data) VALUES ($1, $2, $3, $4)`,
+      [sessionId, actor, kind, JSON.stringify(data ?? {})],
+    );
   }
 }

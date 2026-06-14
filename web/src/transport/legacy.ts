@@ -60,6 +60,16 @@ export function toUiEvent(e: AgentEvent): UiEvent | null {
       };
     case 'plan_update':
       return { kind: 'plan_update', step: e.step, goal: e.goal };
+    case 'shell_session_opened':
+    case 'shell_session_closed':
+    case 'shell_lease_changed':
+    case 'shell_command_started':
+    case 'shell_command_output':
+    case 'shell_command_timeout':
+    case 'shell_command_attention':
+    case 'shell_command_finished':
+    case 'shell_command_killed':
+      return null;
     case 'user_question':
       return { kind: 'ask_user_question', step: e.step, spec: e.spec ?? defaultAskSpec(e.question) };
     case 'user_answer':

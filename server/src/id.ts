@@ -15,6 +15,8 @@ const ID_PREFIXES = {
   datasourceAccount: 'da',
   datasourceLease: 'dl',
   workloadToken: 'wt',
+  shellSession: 'ss',
+  shellCommand: 'sc',
 } as const;
 
 export type EntityIdKind = keyof typeof ID_PREFIXES;
@@ -111,4 +113,12 @@ export function newDatasourceLeaseId(): string {
 
 export function newWorkloadTokenId(): string {
   return newEntityId('workloadToken');
+}
+
+export function newShellSessionId(): string {
+  return newEntityId('shellSession');
+}
+
+export function newShellCommandId(): string {
+  return newEntityId('shellCommand');
 }

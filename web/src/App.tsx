@@ -23,6 +23,7 @@ import { toUiEvent } from './transport/legacy';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { RemoteFilesPanel } from './components/RemoteFilesPanel';
+import { ShellPanel } from './components/ShellPanel';
 import { SettingsView } from './components/SettingsView';
 import type { ComposerAttachment } from './components/Composer';
 import type { AskUserDraft } from './components/AskUserCard';
@@ -116,6 +117,7 @@ export function App() {
   const [draft, setDraft] = useState(route.draft);
   const [wide, setWide] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [rightPanelMode, setRightPanelMode] = useState<'files' | 'shell'>('files');
   const [sidebarWidth, setSidebarWidth] = useState(256);
   const [filesPanelWidth, setFilesPanelWidth] = useState(720);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
@@ -372,6 +374,7 @@ export function App() {
 
   function openRemoteFile(path: string) {
     setPreviewPath(path);
+    setRightPanelMode('files');
     setRightPanelOpen(true);
   }
 
@@ -436,13 +439,21 @@ export function App() {
           onCancel={cancelActiveRun}
           onToggleWide={() => setWide((v) => !v)}
           onRemoveAttachment={(path) => setAttachments((current) => current.filter((a) => a.path !== path))}
-          filesOpen={rightPanelOpen}
+          filesOpen={rightPanelOpen && rightPanelMode === 'files'}
+          shellOpen={rightPanelOpen && rightPanelMode === 'shell'}
           onToggleRemoteFiles={() => {
             setPreviewPath(null);
-            setRightPanelOpen((open) => !open);
+            setRightPanelMode('files');
+            setRightPanelOpen((open) => !(open && rightPanelMode === 'files'));
+          }}
+          onToggleShell={() => {
+            setPreviewPath(null);
+            setRightPanelMode('shell');
+            setRightPanelOpen((open) => !(open && rightPanelMode === 'shell'));
           }}
           onOpenRemoteFiles={() => {
             setPreviewPath(null);
+            setRightPanelMode('files');
             setRightPanelOpen(true);
           }}
           onUploadLocal={uploadLocalAttachment}
@@ -455,7 +466,7 @@ export function App() {
       {activeView === 'chat' && rightPanelOpen && (
         <div
           role="separator"
-          aria-label="调整文件区域宽度"
+          aria-label={rightPanelMode === 'files' ? '调整文件区域宽度' : '调整 Shell 区域宽度'}
           className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/60"
           onPointerDown={(event) =>
             beginHorizontalResize(event, {
@@ -469,11 +480,17 @@ export function App() {
         />
       )}
       <RemoteFilesPanel
-        open={activeView === 'chat' && rightPanelOpen}
+        open={activeView === 'chat' && rightPanelOpen && rightPanelMode === 'files'}
         width={filesPanelWidth}
         previewPath={previewPath}
         onClose={() => setRightPanelOpen(false)}
         onAttach={addAttachment}
+      />
+      <ShellPanel
+        open={activeView === 'chat' && rightPanelOpen && rightPanelMode === 'shell'}
+        width={filesPanelWidth}
+        threadId={activeThreadId}
+        onClose={() => setRightPanelOpen(false)}
       />
     </div>
   );
