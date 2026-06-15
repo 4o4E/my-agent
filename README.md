@@ -169,6 +169,7 @@ pnpm --filter server typecheck
 - [托管 Shell 资源设计](docs/background-shell-design.md)：shell session、前台/后台命令、轮询、接管和跨 run 生命周期。
 - [工具沙箱设计](docs/tool-sandbox.md)：工具权限、bwrap 沙箱选型、读写范围与命令限制。
 - [Skill 系统设计](docs/skill-system-design.md)：内置/用户 skill、bash 资源暴露、allowed-tools、激活生命周期和安全边界。
+- [Subagent 与 Gene Memory 设计](docs/subagent-memory-design.md)：subagent 协作、runtime profile、gene 读写、RAG 召回、经验提升和退化流程。
 - [题面验收报告](docs/acceptance-report.md)：当前完成范围、未实现边界和后续平台化设计。
 - [架构改造方案](docs/refactor-plan.md)：AI SDK、AI Elements、Streamdown、HTML artifact、可观测和沙箱路线。
 - [实施日志](docs/impl-log/)：各阶段落地记录、验证结果和遗留事项。
