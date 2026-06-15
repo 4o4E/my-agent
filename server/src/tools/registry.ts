@@ -14,7 +14,6 @@ import { webSearchTool } from './webSearch.js';
 import { askUserTool } from './askUser.js';
 import { htmlArtifactTool } from './htmlArtifact.js';
 import { updatePlanTool } from './updatePlan.js';
-import { finishConversationTool } from './finishConversation.js';
 import { skillActivateTool } from './skillActivate.js';
 import { datasourceListTool } from './datasourceList.js';
 import { managedShellTools } from './managedShell.js';
@@ -31,14 +30,13 @@ const TOOLS: Tool[] = [
   askUserTool,
   htmlArtifactTool,
   updatePlanTool,
-  finishConversationTool,
   skillActivateTool,
   datasourceListTool,
   ...managedShellTools,
 ];
 
 const byName = new Map(TOOLS.map((t) => [t.name, t]));
-const CORE_TOOL_NAMES = new Set(['ask_user', 'update_plan', 'finish_conversation', 'skill_activate']);
+const CORE_TOOL_NAMES = new Set(['ask_user', 'update_plan', 'skill_activate']);
 
 export function toolSchemas(allowedTools?: string[]): LlmTool[] {
   if (!allowedTools) return TOOLS.map(toLlmTool);

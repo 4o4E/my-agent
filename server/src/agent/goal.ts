@@ -10,6 +10,8 @@ export interface PlanItem {
 export interface GoalState {
   /** 原始目标：run 开始时设置一次，agent 不应修改。 */
   intent: string;
+  /** 当前 run 阶段：执行中、汇报中或已完成。 */
+  phase: 'working' | 'reporting' | 'completed';
   /** 当前工作计划：agent 通过 update_plan 整体替换。 */
   plan: PlanItem[];
   /** 需要长期记住的关键决策：只追加，避免压缩后丢失。 */
@@ -20,16 +22,18 @@ export interface GoalState {
 
 /** agent 通过 update_plan 工具提交的目标补丁。 */
 export interface GoalPatch {
+  phase?: GoalState['phase'];
   plan?: PlanItem[];
   decisions?: string[];
   next?: string;
 }
 
 export function initGoal(intent: string): GoalState {
-  return { intent, plan: [], decisions: [], next: '' };
+  return { intent, phase: 'working', plan: [], decisions: [], next: '' };
 }
 
 const PLAN_STATUSES = ['todo', 'doing', 'done', 'failed'] as const;
+const GOAL_PHASES = ['working', 'reporting', 'completed'] as const;
 
 function planKey(text: string): string {
   return text.trim().replace(/\s+/g, ' ');
@@ -50,6 +54,7 @@ function reconcilePlan(current: PlanItem[], incoming: PlanItem[]): PlanItem[] {
 export function mergeGoal(goal: GoalState, patch: GoalPatch): GoalState {
   return {
     intent: goal.intent,
+    phase: patch.phase ?? goal.phase ?? 'working',
     plan: patch.plan ? reconcilePlan(goal.plan, patch.plan) : goal.plan,
     decisions: patch.decisions?.length ? [...goal.decisions, ...patch.decisions] : goal.decisions,
     next: patch.next ?? goal.next,
@@ -61,6 +66,7 @@ export function finishGoal(goal: GoalState): GoalState {
   const hasFailed = goal.plan.some((p) => p.status === 'failed');
   return {
     intent: goal.intent,
+    phase: 'completed',
     plan: goal.plan,
     decisions: goal.decisions,
     next: hasFailed ? '已结束（存在失败项）' : '已完成',
@@ -73,23 +79,27 @@ export function unfinishedPlanItems(goal: GoalState): PlanItem[] {
   return goal.plan.filter((p) => p.status === 'todo' || p.status === 'doing');
 }
 
-export function canFinishGoal(goal: GoalState): boolean {
-  return unfinishedPlanItems(goal).length === 0;
+export function canReportGoal(goal: GoalState): boolean {
+  if (unfinishedPlanItems(goal).length > 0) return false;
+  return goal.plan.length === 0 || (goal.phase ?? 'working') === 'reporting';
 }
 
-export function finishBlockedMessage(goal: GoalState): string {
+export function reportBlockedMessage(goal: GoalState): string {
   const unfinished = unfinishedPlanItems(goal);
+  if (goal.plan.length > 0 && !unfinished.length && (goal.phase ?? 'working') !== 'reporting') {
+    return '最终汇报已被暂缓：当前 goal 仍处于 working，请先调用 update_plan 把 phase 设置为 reporting，再输出最终汇报。';
+  }
   if (!unfinished.length) return '';
   return [
-    'finish_conversation 已被拒绝：当前计划仍有未收口条目。',
+    '最终汇报已被暂缓：当前计划仍有未收口条目。',
     ...unfinished.map((item) => `- [${BOX[item.status]}] ${item.text}`),
-    '请先继续执行，或调用 update_plan 把真实失败的条目标记为 failed、把已完成的条目标记为 done；计划没有 todo/doing 后才能结束。',
+    '请先继续执行，或调用 update_plan 把真实失败的条目标记为 failed、把已完成的条目标记为 done；计划没有 todo/doing 后，把 phase 设置为 reporting 并输出最终汇报。',
   ].join('\n');
 }
 
 /** 把目标渲染成紧凑的 system message，固定放在上下文顶部。 */
 export function renderGoal(goal: GoalState): string {
-  const lines = ['## 当前目标：每一步都要保持聚焦', `意图：${goal.intent}`];
+  const lines = ['## 当前目标：每一步都要保持聚焦', `意图：${goal.intent}`, `阶段：${goal.phase ?? 'working'}`];
   if (goal.plan.length) {
     lines.push('计划：');
     for (const p of goal.plan) lines.push(`- [${BOX[p.status] ?? ' '}] ${p.text}`);
@@ -102,6 +112,7 @@ export function renderGoal(goal: GoalState): string {
 /** 把 update_plan 原始参数尽力规整为有效的 GoalPatch。 */
 export function parseGoalPatch(args: Record<string, unknown>): GoalPatch {
   const patch: GoalPatch = {};
+  if (GOAL_PHASES.includes(args.phase as never)) patch.phase = args.phase as GoalState['phase'];
   if (Array.isArray(args.plan)) {
     patch.plan = args.plan
       .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object')

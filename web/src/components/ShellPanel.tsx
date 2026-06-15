@@ -22,6 +22,8 @@ interface Props {
   open: boolean;
   width: number;
   threadId: string | null;
+  embedded?: boolean;
+  previewSessionId?: string | null;
   onClose: () => void;
 }
 
@@ -91,7 +93,7 @@ function sortedCommands(session: ShellSession | null): ShellCommand[] {
   return [...(session?.commands ?? [])].sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
 }
 
-export function ShellPanel({ open, width, threadId, onClose }: Props) {
+export function ShellPanel({ open, width, threadId, embedded = false, previewSessionId = null, onClose }: Props) {
   const [sessions, setSessions] = useState<ShellSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [logsByCommand, setLogsByCommand] = useState<Record<string, ShellCommandLog[]>>({});
@@ -104,8 +106,8 @@ export function ShellPanel({ open, width, threadId, onClose }: Props) {
 
   const liveSessions = useMemo(() => sessions.filter((session) => session.status !== 'closed'), [sessions]);
   const selectedSession = useMemo(
-    () => liveSessions.find((session) => session.id === selectedSessionId) ?? liveSessions[0] ?? null,
-    [liveSessions, selectedSessionId],
+    () => liveSessions.find((session) => session.id === (previewSessionId ?? selectedSessionId)) ?? liveSessions[0] ?? null,
+    [liveSessions, previewSessionId, selectedSessionId],
   );
   const commands = useMemo(() => sortedCommands(selectedSession), [selectedSession]);
   const runningCommand = useMemo(() => commands.find((command) => isRunning(command)) ?? null, [commands]);
@@ -160,6 +162,10 @@ export function ShellPanel({ open, width, threadId, onClose }: Props) {
   useEffect(() => {
     if (open) void refresh();
   }, [open, refresh]);
+
+  useEffect(() => {
+    if (previewSessionId) setSelectedSessionId(previewSessionId);
+  }, [previewSessionId]);
 
   useEffect(() => {
     if (!open || !threadId) return;
@@ -281,7 +287,7 @@ export function ShellPanel({ open, width, threadId, onClose }: Props) {
   const leaseByUser = selectedSession?.lease_actor === 'user';
 
   return (
-    <aside className="flex h-full shrink-0 flex-col border-l bg-card" style={{ width }}>
+    <aside className={cn('flex h-full shrink-0 flex-col bg-card', !embedded && 'border-l')} style={embedded ? undefined : { width }}>
       <div className="flex h-14 items-center gap-2 border-b px-3">
         <Terminal className="size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
@@ -291,9 +297,11 @@ export function ShellPanel({ open, width, threadId, onClose }: Props) {
         <Button variant="ghost" size="icon" onClick={() => void refresh()} title="刷新">
           <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
         </Button>
-        <Button variant="ghost" size="icon" onClick={onClose} title="关闭面板">
-          <X className="size-4" />
-        </Button>
+        {!embedded && (
+          <Button variant="ghost" size="icon" onClick={onClose} title="关闭面板">
+            <X className="size-4" />
+          </Button>
+        )}
       </div>
 
       {error && <div className="border-b px-3 py-2 text-xs text-destructive">{error}</div>}
@@ -305,22 +313,29 @@ export function ShellPanel({ open, width, threadId, onClose }: Props) {
       ) : (
         <>
           <div className="flex h-11 shrink-0 items-center gap-2 border-b bg-muted/20 px-3">
-            <div className="scrollbar-thin flex min-w-0 flex-1 gap-1 overflow-x-auto">
-              {liveSessions.map((session) => (
-                <button
-                  key={session.id}
-                  className={cn(
-                    'flex h-8 min-w-28 max-w-48 items-center gap-1.5 rounded-md border px-2 text-left text-xs hover:bg-accent',
-                    session.id === selectedSession?.id ? 'border-primary bg-background text-foreground' : 'border-transparent text-muted-foreground',
-                  )}
-                  onClick={() => setSelectedSessionId(session.id)}
-                  title={session.id}
-                >
-                  <Circle className={cn('size-2.5 shrink-0 fill-current', sessionTone(session.status))} />
-                  <span className="min-w-0 flex-1 truncate">{session.id}</span>
-                </button>
-              ))}
-            </div>
+            {!previewSessionId && (
+              <div className="scrollbar-thin flex min-w-0 flex-1 gap-1 overflow-x-auto">
+                {liveSessions.map((session) => (
+                  <button
+                    key={session.id}
+                    className={cn(
+                      'flex h-8 min-w-28 max-w-48 items-center gap-1.5 rounded-md border px-2 text-left text-xs hover:bg-accent',
+                      session.id === selectedSession?.id ? 'border-primary bg-background text-foreground' : 'border-transparent text-muted-foreground',
+                    )}
+                    onClick={() => setSelectedSessionId(session.id)}
+                    title={session.id}
+                  >
+                    <Circle className={cn('size-2.5 shrink-0 fill-current', sessionTone(session.status))} />
+                    <span className="min-w-0 flex-1 truncate">{session.id}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {previewSessionId && (
+              <div className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                预览 {previewSessionId}
+              </div>
+            )}
             <Button variant="ghost" size="icon-sm" onClick={() => void createSession()} disabled={acting} title="创建 session">
               <Plug className="size-3.5" />
             </Button>

@@ -2,6 +2,7 @@ import type { Tool, ToolRunContext } from './types.js';
 import { formatCommandResult, parseShellActor, parseWaitMode, shellManager } from '../shell/manager.js';
 import { shellBus } from '../shell/bus.js';
 import { store } from '../store/index.js';
+import { requiresDatabaseAccess } from './databaseAccessGuard.js';
 
 function requireShellContext(ctx: ToolRunContext | undefined): { threadId: string; runId?: string; stepId?: string; step?: number } {
   if (!ctx?.threadId) throw new Error('托管 shell 需要当前 threadId，上下文缺失。');
@@ -107,10 +108,14 @@ export const shellExecTool: Tool = {
   async run(args, ctx) {
     const settings = ctx?.settings;
     if (!settings) throw new Error('缺少工具配置');
+    const command = String(args.command ?? '');
+    if (requiresDatabaseAccess(command) && !ctx?.env?.DB_WORKLOAD_TOKEN) {
+      return '数据库 CLI 或 database-access SDK 脚本需要先激活 database-access skill，由本次 run 的 workload token 换取短期凭证；不要跨 run 复用旧凭证。';
+    }
     const shellCtx = requireShellContext(ctx);
     const result = await shellManager.exec({
       sessionId: String(args.sessionId ?? '').trim(),
-      command: String(args.command ?? ''),
+      command,
       settings,
       context: shellCtx,
       waitMode: parseWaitMode(args.wait),

@@ -6,14 +6,17 @@ import {
   answerRun,
   cancelRun,
   deleteThread,
+  getPageState,
   getRemoteFileInfo,
   getThread,
   listThreads,
   subscribeRun,
+  updatePageState,
   uploadLocalFile,
   type AskUserAnswer,
   type AskUserSpec,
   type AgentEvent,
+  type PageState,
   type RunWithEvents,
   type Thread,
 } from './api';
@@ -22,8 +25,7 @@ import { foldUiEventsToParts, runsToUiMessages } from './history';
 import { toUiEvent } from './transport/legacy';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
-import { RemoteFilesPanel } from './components/RemoteFilesPanel';
-import { ShellPanel } from './components/ShellPanel';
+import { RightSidebar, type RightTabId } from './components/RightSidebar';
 import { SettingsView } from './components/SettingsView';
 import type { ComposerAttachment } from './components/Composer';
 import type { AskUserDraft } from './components/AskUserCard';
@@ -95,6 +97,24 @@ function waitingRunFrom(runs: RunWithEvents[]): { id: string; spec: AskUserSpec 
   return { id: run.id, spec: event?.spec ?? defaultAskSpec(question) };
 }
 
+function isRightTabId(value: unknown): value is RightTabId {
+  return value === 'files'
+    || (typeof value === 'string' && (value.startsWith('file:') || value.startsWith('shell:')));
+}
+
+function numberInRange(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? clamp(value, min, max) : fallback;
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function rightTabsValue(value: unknown): RightTabId[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRightTabId).slice(0, 30);
+}
+
 function assistantMessageFromEvents(runId: string, events: AgentEvent[]): UIMessage {
   const parts = foldUiEventsToParts(events.map(toUiEvent).filter((e): e is NonNullable<ReturnType<typeof toUiEvent>> => e !== null));
   parts.unshift({ type: 'data-run-id', id: runId, data: { runId } } as unknown as UIMessage['parts'][number]);
@@ -117,18 +137,22 @@ export function App() {
   const [draft, setDraft] = useState(route.draft);
   const [wide, setWide] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
-  const [rightPanelMode, setRightPanelMode] = useState<'files' | 'shell'>('files');
+  const [rightPanelTabs, setRightPanelTabs] = useState<RightTabId[]>([]);
+  const [rightPanelMode, setRightPanelMode] = useState<RightTabId | null>(null);
+  const [statusCardOpen, setStatusCardOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(256);
   const [filesPanelWidth, setFilesPanelWidth] = useState(720);
-  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [waitingRun, setWaitingRun] = useState<{ id: string; spec: AskUserSpec } | null>(null);
   const [resumingRunId, setResumingRunId] = useState<string | null>(null);
   const [askUserDrafts, setAskUserDrafts] = useState<Record<string, AskUserDraft>>({});
+  const [pageStateLoaded, setPageStateLoaded] = useState(false);
   const { theme, toggle: toggleTheme } = useThemeCtx();
   const activeThreadId = route.threadId;
+  const initialThreadIdRef = useRef(activeThreadId);
+  const conversationContentRef = useRef<HTMLDivElement>(null);
 
   // 活跃会话 ID 放在 ref 中，稳定的 transport 可以读取和更新它，
   // 不需要在每次选择会话时重新创建 transport。
@@ -145,6 +169,62 @@ export function App() {
     getRemoteFileInfo().then((info) => setWorkspaceRoot(info.workspaceRoot)).catch(() => setWorkspaceRoot(null));
   }, []);
   useEffect(refreshWorkspaceRoot, [refreshWorkspaceRoot]);
+
+  useEffect(() => {
+    let canceled = false;
+    getPageState()
+      .then((state) => {
+        if (canceled) return;
+        const layout = objectValue(state.layout);
+        const chat = objectValue(state.chat);
+        const savedThreadId = typeof chat.threadId === 'string' ? chat.threadId : null;
+        const canRestoreThreadScopedState = savedThreadId === initialThreadIdRef.current;
+
+        setSidebarWidth((current) => numberInRange(layout.sidebarWidth, current, 200, 420));
+        setFilesPanelWidth((current) => numberInRange(layout.rightPanelWidth, current, 360, 1200));
+        setWide(typeof chat.wide === 'boolean' ? chat.wide : false);
+
+        if (canRestoreThreadScopedState) {
+          const tabs = rightTabsValue(chat.rightPanelTabs);
+          const activeTab = isRightTabId(chat.rightPanelMode) && tabs.includes(chat.rightPanelMode) ? chat.rightPanelMode : tabs[0] ?? null;
+          setRightPanelTabs(tabs);
+          setRightPanelMode(activeTab);
+          setRightPanelOpen(typeof chat.rightPanelOpen === 'boolean' ? chat.rightPanelOpen && tabs.length > 0 : false);
+          setStatusCardOpen(typeof chat.statusCardOpen === 'boolean' ? chat.statusCardOpen : false);
+        }
+      })
+      .catch((err) => console.error('load page state failed', err))
+      .finally(() => {
+        if (!canceled) setPageStateLoaded(true);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pageStateLoaded) return undefined;
+    const state: PageState = {
+      version: 1,
+      view: activeView,
+      layout: {
+        sidebarWidth,
+        rightPanelWidth: filesPanelWidth,
+      },
+      chat: {
+        threadId: activeThreadId,
+        wide,
+        rightPanelOpen,
+        rightPanelTabs,
+        rightPanelMode,
+        statusCardOpen,
+      },
+    };
+    const timer = window.setTimeout(() => {
+      void updatePageState(state).catch((err) => console.error('save page state failed', err));
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [activeThreadId, activeView, filesPanelWidth, pageStateLoaded, rightPanelMode, rightPanelOpen, rightPanelTabs, sidebarWidth, statusCardOpen, wide]);
 
   const navigateChatRoute = useCallback((next: ChatRoute, mode: 'push' | 'replace' = 'push') => {
     const path = buildChatPath(next);
@@ -257,6 +337,8 @@ export function App() {
   function newChat() {
     stop();
     setRightPanelOpen(false);
+    setRightPanelTabs([]);
+    setRightPanelMode(null);
     navigateChatRoute({ draft: '', threadId: null });
     setMessages([]);
   }
@@ -264,12 +346,16 @@ export function App() {
   function selectThread(id: string) {
     stop();
     setRightPanelOpen(false);
+    setRightPanelTabs([]);
+    setRightPanelMode(null);
     navigateChatRoute({ draft: '', threadId: id });
   }
 
   function openSettings() {
     stop();
     setRightPanelOpen(false);
+    setRightPanelTabs([]);
+    setRightPanelMode(null);
     navigateSettings();
   }
 
@@ -372,10 +458,33 @@ export function App() {
     addAttachment({ kind: 'local', path: uploaded.path, name: file.name, size: uploaded.size });
   }
 
-  function openRemoteFile(path: string) {
-    setPreviewPath(path);
-    setRightPanelMode('files');
+  function openRightTab(tab: RightTabId) {
+    setRightPanelTabs((current) => current.includes(tab) ? current : [...current, tab]);
+    setRightPanelMode(tab);
     setRightPanelOpen(true);
+    setStatusCardOpen(false);
+  }
+
+  function closeRightTab(tab: RightTabId) {
+    setRightPanelTabs((current) => {
+      const next = current.filter((item) => item !== tab);
+      if (rightPanelMode === tab) {
+        const currentIndex = current.indexOf(tab);
+        const replacement = next[currentIndex] ?? next[currentIndex - 1] ?? next[0] ?? null;
+        setRightPanelMode(replacement);
+        if (!replacement) setRightPanelOpen(false);
+      }
+      return next;
+    });
+  }
+
+  function toggleRightPanel() {
+    setRightPanelOpen((open) => !open);
+    setStatusCardOpen(false);
+  }
+
+  function openRemoteFile(path: string) {
+    openRightTab(`file:${path}`);
   }
 
   function cancelActiveRun() {
@@ -432,6 +541,8 @@ export function App() {
           draft={draft}
           wide={wide}
           workspaceRoot={workspaceRoot}
+          threadId={activeThreadId}
+          contentRef={conversationContentRef}
           askUserDrafts={askUserDrafts}
           attachments={attachments}
           onDraftChange={changeDraft}
@@ -439,23 +550,12 @@ export function App() {
           onCancel={cancelActiveRun}
           onToggleWide={() => setWide((v) => !v)}
           onRemoveAttachment={(path) => setAttachments((current) => current.filter((a) => a.path !== path))}
-          filesOpen={rightPanelOpen && rightPanelMode === 'files'}
-          shellOpen={rightPanelOpen && rightPanelMode === 'shell'}
-          onToggleRemoteFiles={() => {
-            setPreviewPath(null);
-            setRightPanelMode('files');
-            setRightPanelOpen((open) => !(open && rightPanelMode === 'files'));
-          }}
-          onToggleShell={() => {
-            setPreviewPath(null);
-            setRightPanelMode('shell');
-            setRightPanelOpen((open) => !(open && rightPanelMode === 'shell'));
-          }}
-          onOpenRemoteFiles={() => {
-            setPreviewPath(null);
-            setRightPanelMode('files');
-            setRightPanelOpen(true);
-          }}
+          rightPanelOpen={rightPanelOpen}
+          statusCardOpen={statusCardOpen}
+          onToggleStatusCard={() => setStatusCardOpen((open) => !open)}
+          onToggleRightPanel={toggleRightPanel}
+          onOpenShellPreview={(sessionId) => openRightTab(`shell:${sessionId}`)}
+          onOpenRemoteFiles={() => openRightTab('files')}
           onUploadLocal={uploadLocalAttachment}
           onOpenRemoteFile={openRemoteFile}
           onAskUserDraftChange={(runId, next) => setAskUserDrafts((current) => ({ ...current, [runId]: next }))}
@@ -466,7 +566,7 @@ export function App() {
       {activeView === 'chat' && rightPanelOpen && (
         <div
           role="separator"
-          aria-label={rightPanelMode === 'files' ? '调整文件区域宽度' : '调整 Shell 区域宽度'}
+          aria-label="调整右侧工作区宽度"
           className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/60"
           onPointerDown={(event) =>
             beginHorizontalResize(event, {
@@ -479,18 +579,19 @@ export function App() {
           }
         />
       )}
-      <RemoteFilesPanel
-        open={activeView === 'chat' && rightPanelOpen && rightPanelMode === 'files'}
+      <RightSidebar
+        open={activeView === 'chat' && rightPanelOpen}
         width={filesPanelWidth}
-        previewPath={previewPath}
+        tabs={rightPanelTabs}
+        activeTab={rightPanelMode}
+        threadId={activeThreadId}
+        onTabChange={setRightPanelMode}
+        onOpenFileBrowser={() => openRightTab('files')}
+        onOpenFileTab={openRemoteFile}
+        onOpenShellTab={(sessionId) => openRightTab(`shell:${sessionId}`)}
+        onCloseTab={closeRightTab}
         onClose={() => setRightPanelOpen(false)}
         onAttach={addAttachment}
-      />
-      <ShellPanel
-        open={activeView === 'chat' && rightPanelOpen && rightPanelMode === 'shell'}
-        width={filesPanelWidth}
-        threadId={activeThreadId}
-        onClose={() => setRightPanelOpen(false)}
       />
     </div>
   );

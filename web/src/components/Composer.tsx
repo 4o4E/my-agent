@@ -20,6 +20,7 @@ import {
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { listRemoteFiles, type RemoteFileEntry } from '@/api';
+import type { UsageSnapshot } from './Conversation';
 
 export interface ComposerAttachment {
   kind: 'remote' | 'local';
@@ -34,6 +35,7 @@ interface Props {
   draft: string;
   wide: boolean;
   attachments: ComposerAttachment[];
+  usage: UsageSnapshot | null;
   onDraftChange: (text: string) => void;
   onSend: (text: string) => void;
   onCancel: () => void;
@@ -50,12 +52,58 @@ function formatSize(size?: number): string {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function formatCompactNumber(value?: number): string {
+  if (value == null) return '--';
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return value.toLocaleString();
+}
+
+function ContextUsageMeter({ usage }: { usage: UsageSnapshot | null }) {
+  const used = usage?.estContextTokens;
+  const budget = usage?.contextBudget;
+  const ratio = used != null && budget && budget > 0 ? Math.min(1, Math.max(0, used / budget)) : 0;
+  const percent = used != null && budget && budget > 0 ? Math.round(ratio * 100) : null;
+  const radius = 9;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference * (1 - ratio);
+  const title = used != null
+    ? `上下文占用：${used.toLocaleString()}${budget ? ` / ${budget.toLocaleString()} token` : ' token'}${percent != null ? `，${percent}%` : ''}`
+    : '上下文占用暂无数据';
+
+  return (
+    <div
+      className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border bg-background px-2 text-xs text-muted-foreground"
+      title={title}
+      aria-label={title}
+    >
+      <svg className="size-6 -rotate-90" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r={radius} fill="none" stroke="currentColor" strokeWidth="2" opacity="0.18" />
+        <circle
+          cx="12"
+          cy="12"
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          className={cn(percent != null && percent >= 85 ? 'text-destructive' : percent != null && percent >= 65 ? 'text-amber-600 dark:text-amber-400' : 'text-primary')}
+        />
+      </svg>
+      <span className="tabular-nums">{percent != null ? `${percent}%` : used != null ? formatCompactNumber(used) : '0%'}</span>
+    </div>
+  );
+}
+
 export function Composer({
   disabled,
   waitingQuestion,
   draft,
   wide,
   attachments,
+  usage,
   onDraftChange,
   onSend,
   onCancel,
@@ -188,16 +236,19 @@ export function Composer({
                     {wide ? '正常宽度' : '加宽对话'}
                   </Button>
                 </PromptInputTools>
-                <PromptInputSubmit
-                  status={disabled && !waitingForAskUser ? 'streaming' : undefined}
-                  disabled={waitingForAskUser || (!disabled && !draft.trim())}
-                  onStop={onCancel}
-                />
+                <div className="ml-auto flex shrink-0 items-center gap-1">
+                  <ContextUsageMeter usage={usage} />
+                  <PromptInputSubmit
+                    status={disabled && !waitingForAskUser ? 'streaming' : undefined}
+                    disabled={waitingForAskUser || (!disabled && !draft.trim())}
+                    onStop={onCancel}
+                  />
+                </div>
               </PromptInputFooter>
             </PromptInput>
           </div>
         </div>
-        <div className="hidden w-56 shrink-0 xl:block" />
+        <div className="hidden w-7 shrink-0 xl:block" />
       </div>
       <Dialog open={!!localFile} onOpenChange={(open) => !open && setLocalFile(null)}>
         <DialogContent>

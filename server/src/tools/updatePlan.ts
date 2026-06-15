@@ -9,10 +9,15 @@ import type { Tool } from './types.js';
 export const updatePlanTool: Tool = {
   name: 'update_plan',
   description:
-    '记录或刷新当前任务的工作计划：包含步骤及状态、需要记住的关键决策、马上要做的下一步。多步骤任务开始时调用；计划变化时也要调用。decisions 会追加，plan 和 next 会替换旧值。执行失败的步骤必须保留并标记为 failed，不要删除。',
+    '记录或刷新当前任务的工作计划：包含 run 阶段、步骤及状态、需要记住的关键决策、马上要做的下一步。多步骤任务开始时调用；计划变化时也要调用。decisions 会追加，plan 和 next 会替换旧值。执行失败的步骤必须保留并标记为 failed，不要删除。准备最终回答前，把 phase 设置为 reporting。',
   parameters: {
     type: 'object',
     properties: {
+      phase: {
+        type: 'string',
+        enum: ['working', 'reporting', 'completed'],
+        description: '当前 run 阶段。working=执行中，reporting=计划已收口并准备最终汇报，completed=已完成。',
+      },
       plan: {
         type: 'array',
         description: '完整的当前计划，会替换旧计划。',

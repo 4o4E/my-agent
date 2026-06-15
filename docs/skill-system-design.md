@@ -318,7 +318,7 @@ node /workspace/.skills/data-query/scripts/query.js --help
 建议第一阶段支持的工具名沿用现有 registry 名称：
 
 ```text
-shell file_read file_write file_edit glob grep web_fetch web_search ask_user update_plan finish_conversation
+shell file_read file_write file_edit glob grep web_fetch web_search ask_user update_plan
 ```
 
 后续如果引入业务工具，可以让业务工具只在特定 skill 激活后暴露给模型，避免常驻工具 schema 膨胀。

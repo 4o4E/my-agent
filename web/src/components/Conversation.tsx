@@ -1,6 +1,7 @@
 import type { UIMessage } from 'ai';
-import { Activity, Bot, CheckCircle2, ChevronDown, Circle, Copy, Fingerprint, FileText, ListChecks, LoaderCircle, Workflow, XCircle } from 'lucide-react';
+import { Activity, Bot, ChevronDown, Copy, Fingerprint, FileText, Workflow } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import {
   Conversation as AIConversation,
   ConversationContent,
@@ -17,7 +18,7 @@ import { cn } from '@/lib/utils';
 import { MarkdownContent } from './MarkdownContent';
 import type { StreamdownProps } from 'streamdown';
 import { AskUserQuestionCard, emptyAskUserDraft, type AskUserDraft } from './AskUserCard';
-import type { AskUserAnswer, AskUserSpec, GoalState, PlanItem, StreamStats } from '@/api';
+import type { AskUserAnswer, AskUserSpec, GoalState, StreamStats } from '@/api';
 
 type Part = UIMessage['parts'][number];
 type Timing = { startedAt?: string; endedAt?: string; durationMs?: number };
@@ -45,7 +46,13 @@ function isActivityPart(p: Part): boolean {
 }
 
 function isHiddenDataPart(p: Part): boolean {
-  return p.type === 'data-run-id' || p.type === 'data-tool-timing' || p.type === 'data-reasoning-timing' || p.type === 'data-stream-stats' || p.type === 'data-plan-state';
+  return p.type === 'data-run-id'
+    || p.type === 'data-tool-timing'
+    || p.type === 'data-reasoning-timing'
+    || p.type === 'data-stream-stats'
+    || p.type === 'data-usage-update'
+    || p.type === 'data-final-output'
+    || p.type === 'data-plan-state';
 }
 
 function durationFromTiming(t?: Timing): number | undefined {
@@ -154,10 +161,36 @@ function StreamStatusBar({ parts, active }: { parts: Part[]; active: boolean }) 
   );
 }
 
-function latestStreamStats(parts: Part[]): StreamStats | null {
+export function latestStreamStats(parts: Part[]): StreamStats | null {
   for (let i = parts.length - 1; i >= 0; i--) {
     const part = parts[i] as { type: string; data?: StreamStats };
     if (part.type === 'data-stream-stats' && part.data) return part.data;
+  }
+  return null;
+}
+
+export interface UsageSnapshot {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  estContextTokens?: number;
+  contextBudget?: number;
+}
+
+export function latestUsageSnapshot(parts: Part[]): UsageSnapshot | null {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i] as { type: string; data?: UsageSnapshot };
+    if (part.type === 'data-usage-update' && part.data) return part.data;
+  }
+  return null;
+}
+
+function finalTextIndex(parts: Part[]): number | null {
+  const finalIndex = parts.findIndex((part) => part.type === 'data-final-output');
+  if (finalIndex < 0) return null;
+  for (let i = finalIndex - 1; i >= 0; i--) {
+    const part = parts[i] as { type: string; text?: string };
+    if (part.type === 'text' && part.text) return i;
   }
   return null;
 }
@@ -174,7 +207,7 @@ function streamStageLabel(stats: StreamStats): string {
   return '输出完成';
 }
 
-function latestPlanState(messages: UIMessage[]): GoalState | null {
+export function latestPlanState(messages: UIMessage[]): GoalState | null {
   for (let mi = messages.length - 1; mi >= 0; mi--) {
     const message = messages[mi];
     if (message.role !== 'assistant') continue;
@@ -184,55 +217,6 @@ function latestPlanState(messages: UIMessage[]): GoalState | null {
     }
   }
   return null;
-}
-
-function planStatusMeta(item: PlanItem): { label: string; className: string; icon: JSX.Element } {
-  if (item.status === 'done') {
-    return { label: '完成', className: 'text-emerald-600 dark:text-emerald-400', icon: <CheckCircle2 className="size-3.5" /> };
-  }
-  if (item.status === 'doing') {
-    return { label: '进行中', className: 'text-sky-600 dark:text-sky-400', icon: <LoaderCircle className="size-3.5 animate-spin" /> };
-  }
-  if (item.status === 'failed') {
-    return { label: '失败', className: 'text-destructive', icon: <XCircle className="size-3.5" /> };
-  }
-  return { label: '待办', className: 'text-muted-foreground', icon: <Circle className="size-3.5" /> };
-}
-
-function PinnedPlan({ goal, wide }: { goal: GoalState | null; wide: boolean }) {
-  if (!goal?.plan?.length) return null;
-  const done = goal.plan.filter((item) => item.status === 'done').length;
-  const failed = goal.plan.filter((item) => item.status === 'failed').length;
-  const open = goal.plan.length - done - failed;
-  const summary = open > 0 ? `${done}/${goal.plan.length} 完成 · ${open} 未收口` : failed > 0 ? `${done}/${goal.plan.length} 完成 · ${failed} 失败` : '计划已收口';
-
-  return (
-    <div className="shrink-0 border-b border-border/70 bg-background/95 backdrop-blur">
-      <div className={cn('mx-auto flex min-h-0 flex-col gap-2 px-4 py-3', wide ? 'max-w-5xl' : 'max-w-3xl')}>
-        <div className="flex min-w-0 items-center gap-2 text-sm">
-          <ListChecks className="size-4 shrink-0 text-primary" />
-          <span className="shrink-0 font-medium">任务计划</span>
-          <span className="min-w-0 truncate text-xs text-muted-foreground">{summary}</span>
-        </div>
-        <div className="flex max-h-28 flex-col gap-1 overflow-auto pr-1">
-          {goal.plan.map((item, index) => {
-            const meta = planStatusMeta(item);
-            return (
-              <div key={`${item.text}:${index}`} className="flex min-h-6 min-w-0 items-start gap-2 text-xs">
-                <span className={cn('mt-0.5 inline-flex shrink-0 items-center gap-1', meta.className)} title={meta.label}>
-                  {meta.icon}
-                </span>
-                <span className={cn('min-w-0 flex-1 break-words', item.status === 'done' && 'text-muted-foreground line-through decoration-border')}>
-                  {item.text}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-        {goal.next && <div className="truncate text-xs text-muted-foreground">下一步：{goal.next}</div>}
-      </div>
-    </div>
-  );
 }
 
 function formatDuration(ms?: number): string | undefined {
@@ -620,12 +604,20 @@ function parseFileTokens(text: string): { text: string; files: FileToken[] } {
 
 function compactTocText(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
-  return compact.length > 80 ? `${compact.slice(0, 80)}...` : compact;
+  return compact.length > 360 ? `${compact.slice(0, 360)}...` : compact;
 }
 
 function userTocTitle(message: UIMessage): string {
   const parsed = parseFileTokens(userText(message));
   return compactTocText(parsed.text || parsed.files[0]?.name || parsed.files[0]?.path || '对话');
+}
+
+function assistantTocTitle(message: UIMessage): string {
+  const text = message.parts
+    .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
+    .map((part) => part.text)
+    .join(' ');
+  return compactTocText(text || '回复');
 }
 
 function UserMessageText({ message, onOpenRemoteFile }: { message: UIMessage; onOpenRemoteFile: (path: string) => void }) {
@@ -693,6 +685,7 @@ function AssistantMessage({
 }) {
   const timingMaps = buildTimingMaps(message.parts);
   const runId = runIdFromAssistant(message);
+  const finalIndex = finalTextIndex(message.parts);
   const nodes: JSX.Element[] = [];
   let group: { entries: ActivityEntry[]; start: number } | null = null;
   const flushGroup = () => {
@@ -720,6 +713,11 @@ function AssistantMessage({
 
   message.parts.forEach((part, i) => {
     if (isHiddenDataPart(part)) return;
+    if (finalIndex != null && i < finalIndex) {
+      group ??= { entries: [], start: i };
+      group.entries.push({ part, index: i });
+      return;
+    }
     if (isActivityPart(part)) {
       group ??= { entries: [], start: i };
       group.entries.push({ part, index: i });
@@ -764,19 +762,19 @@ export function Conversation({
   onAskUserDraftChange,
   onAskUserSubmit,
   onAskUserCancel,
+  contentRef,
 }: {
   messages: UIMessage[];
   busy: boolean;
   wide: boolean;
   workspaceRoot: string | null;
+  contentRef: RefObject<HTMLDivElement | null>;
   onOpenRemoteFile: (path: string) => void;
   askUserDrafts: Record<string, AskUserDraft>;
   onAskUserDraftChange: (runId: string, draft: AskUserDraft) => void;
   onAskUserSubmit: (runId: string, answer: AskUserAnswer) => void;
   onAskUserCancel: (runId: string) => void;
 }) {
-  const contentRef = useRef<HTMLDivElement>(null);
-
   // 记录整段对话里最后一个工具调用，只保持它展开，其余默认折叠。
   let lastToolKey: string | null = null;
   let lastActivityKey: string | null = null;
@@ -791,15 +789,12 @@ export function Conversation({
       });
     }
   }
-  const plan = latestPlanState(messages);
-
   return (
-    <div className="relative flex h-full min-h-0">
-      <div className="flex h-full min-w-0 flex-1 flex-col">
-        <PinnedPlan goal={plan} wide={wide} />
-      <AIConversation className="min-h-0 flex-1">
-        <ConversationContent className={cn('mx-auto', wide ? 'max-w-5xl' : 'max-w-3xl')}>
-          <div ref={contentRef} className="flex flex-col gap-8">
+    <div className="relative flex h-full min-h-0 justify-center">
+      <div className={cn('flex h-full min-h-0 w-full min-w-0', wide ? 'max-w-[calc(64rem+1.75rem)]' : 'max-w-[calc(48rem+1.75rem)]')}>
+      <AIConversation className="min-h-0 min-w-0 flex-1">
+        <ConversationContent>
+          <div ref={contentRef as RefObject<HTMLDivElement>} className="flex flex-col gap-8">
             {messages.length === 0 ? (
               <ConversationEmptyState
                 icon={<Bot className="size-6" />}
@@ -812,7 +807,7 @@ export function Conversation({
                   from={m.role}
                   key={m.id}
                   data-toc-message={m.role}
-                  data-toc-title={m.role === 'user' ? userTocTitle(m) : '回复'}
+                  data-toc-title={m.role === 'user' ? userTocTitle(m) : assistantTocTitle(m)}
                 >
                   {m.role === 'user' ? (
                     <>
@@ -848,10 +843,10 @@ export function Conversation({
             )}
           </div>
         </ConversationContent>
-        <ConversationScrollButton />
+        <ConversationScrollButton className="left-[calc(50%-0.875rem)]" />
       </AIConversation>
-      </div>
       <TableOfContents contentRef={contentRef} />
+      </div>
     </div>
   );
 }

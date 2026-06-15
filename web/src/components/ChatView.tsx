@@ -1,11 +1,21 @@
 import type { UIMessage } from 'ai';
-import { Conversation } from './Conversation';
+import type { RefObject } from 'react';
+import { Conversation, latestUsageSnapshot } from './Conversation';
 import { Composer, type ComposerAttachment } from './Composer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { FolderTree, PanelRightClose, PanelRightOpen, Square, Terminal } from 'lucide-react';
+import { Gauge, PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
 import type { AskUserAnswer } from '@/api';
 import type { AskUserDraft } from './AskUserCard';
+import { AgentStatusCard } from './StatusCard';
+
+function latestUsageFromMessages(messages: UIMessage[]) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const usage = latestUsageSnapshot(messages[i].parts);
+    if (usage) return usage;
+  }
+  return null;
+}
 
 interface Props {
   title: string;
@@ -15,6 +25,8 @@ interface Props {
   draft: string;
   wide: boolean;
   workspaceRoot: string | null;
+  threadId: string | null;
+  contentRef: RefObject<HTMLDivElement | null>;
   askUserDrafts: Record<string, AskUserDraft>;
   attachments: ComposerAttachment[];
   onDraftChange: (text: string) => void;
@@ -22,10 +34,11 @@ interface Props {
   onCancel: () => void;
   onToggleWide: () => void;
   onRemoveAttachment: (path: string) => void;
-  filesOpen: boolean;
-  shellOpen: boolean;
-  onToggleRemoteFiles: () => void;
-  onToggleShell: () => void;
+  rightPanelOpen: boolean;
+  statusCardOpen: boolean;
+  onToggleStatusCard: () => void;
+  onToggleRightPanel: () => void;
+  onOpenShellPreview: (sessionId: string) => void;
   onOpenRemoteFiles: () => void;
   onUploadLocal: (file: File, path: string) => Promise<void>;
   onOpenRemoteFile: (path: string) => void;
@@ -42,6 +55,8 @@ export function ChatView({
   draft,
   wide,
   workspaceRoot,
+  threadId,
+  contentRef,
   askUserDrafts,
   attachments,
   onDraftChange,
@@ -49,10 +64,11 @@ export function ChatView({
   onCancel,
   onToggleWide,
   onRemoveAttachment,
-  filesOpen,
-  shellOpen,
-  onToggleRemoteFiles,
-  onToggleShell,
+  rightPanelOpen,
+  statusCardOpen,
+  onToggleStatusCard,
+  onToggleRightPanel,
+  onOpenShellPreview,
   onOpenRemoteFiles,
   onUploadLocal,
   onOpenRemoteFile,
@@ -60,8 +76,10 @@ export function ChatView({
   onAskUserSubmit,
   onAskUserCancel,
 }: Props) {
+  const showStatusCard = !rightPanelOpen || statusCardOpen;
+  const usage = latestUsageFromMessages(messages);
   return (
-    <main className="flex h-full min-w-0 flex-1 flex-col bg-background">
+    <main className="relative flex h-full min-w-0 flex-1 flex-col bg-background">
       <header className="flex h-14 shrink-0 items-center border-b bg-card px-6">
         <h1 className="truncate text-sm font-semibold">{title}</h1>
         <Badge variant={busy ? 'default' : 'secondary'} className="ml-3">
@@ -76,28 +94,36 @@ export function ChatView({
           )}
           <Button
             type="button"
-            variant={filesOpen ? 'secondary' : 'ghost'}
+            variant={showStatusCard ? 'secondary' : 'ghost'}
             size="sm"
-            onClick={onToggleRemoteFiles}
-            title={filesOpen ? '关闭文件目录' : '打开文件目录'}
+            onClick={rightPanelOpen ? onToggleStatusCard : undefined}
+            title={rightPanelOpen ? (showStatusCard ? '关闭状态卡片' : '打开状态卡片') : '状态卡片已显示'}
           >
-            <FolderTree className="size-4" />
-            文件
-            {filesOpen ? <PanelRightClose className="size-3.5" /> : <PanelRightOpen className="size-3.5" />}
+            <Gauge className="size-4" />
+            状态
           </Button>
           <Button
             type="button"
-            variant={shellOpen ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={onToggleShell}
-            title={shellOpen ? '关闭 Shell' : '打开 Shell'}
+            variant={rightPanelOpen ? 'secondary' : 'ghost'}
+            size="icon"
+            className="size-9"
+            onClick={onToggleRightPanel}
+            title={rightPanelOpen ? '收起右侧栏' : '展开右侧栏'}
           >
-            <Terminal className="size-4" />
-            Shell
-            {shellOpen ? <PanelRightClose className="size-3.5" /> : <PanelRightOpen className="size-3.5" />}
+            {rightPanelOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />}
           </Button>
         </div>
       </header>
+
+      {showStatusCard && (
+        <AgentStatusCard
+          messages={messages}
+          busy={busy}
+          threadId={threadId}
+          onOpenShellPreview={onOpenShellPreview}
+          className="absolute right-12 top-16 z-30"
+        />
+      )}
 
       <div className="min-h-0 flex-1">
         <Conversation
@@ -105,6 +131,7 @@ export function ChatView({
           busy={busy}
           wide={wide}
           workspaceRoot={workspaceRoot}
+          contentRef={contentRef}
           askUserDrafts={askUserDrafts}
           onOpenRemoteFile={onOpenRemoteFile}
           onAskUserDraftChange={onAskUserDraftChange}
@@ -119,6 +146,7 @@ export function ChatView({
         draft={draft}
         wide={wide}
         attachments={attachments}
+        usage={usage}
         onDraftChange={onDraftChange}
         onSend={onSend}
         onCancel={onCancel}

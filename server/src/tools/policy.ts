@@ -56,7 +56,6 @@ const META: Record<string, ToolMeta> = {
   ask_user: { kind: 'safe' },
   write_html_artifact: { kind: 'safe' },
   update_plan: { kind: 'safe' },
-  finish_conversation: { kind: 'safe' },
   skill_activate: { kind: 'safe' },
   datasource_list: { kind: 'safe' },
 };

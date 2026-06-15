@@ -1,14 +1,13 @@
 import { config } from '../config.js';
 import { getProvider } from '../llm/index.js';
-import type { Provider } from '../llm/types.js';
-import type { LlmMessage } from '../llm/types.js';
+import type { LlmMessage, LlmUsage, Provider } from '../llm/types.js';
 import { parseToolArguments } from '../llm/toolArgs.js';
 import { runTool, toolSchemas } from '../tools/registry.js';
 import { ContextManager } from './context.js';
 import { activateSkill, activeAllowedTools, loadSkillIndex, renderSkillCatalog, renderSkillSystemRules } from '../skills/registry.js';
 import type { SkillIndexItem, SkillActivation } from '../skills/registry.js';
 import { createWorkloadToken, listDatasources, listPermissionProfiles } from '../datasources/accountPool.js';
-import { canFinishGoal, finishBlockedMessage, finishGoal, initGoal, mergeGoal, parseGoalPatch, renderGoal } from './goal.js';
+import { canReportGoal, finishGoal, initGoal, mergeGoal, parseGoalPatch, renderGoal, reportBlockedMessage } from './goal.js';
 import { runBus } from './bus.js';
 import type { AgentEvent } from './types.js';
 import { store as defaultStore } from '../store/index.js';
@@ -19,8 +18,8 @@ import { withSpan } from '../telemetry.js';
 import type { AskUserAnswer, AskUserMode, AskUserOption, AskUserSpec, StreamStage, StreamStats } from './types.js';
 import { renderRuntimeContext } from './context.js';
 import { shellManager } from '../shell/manager.js';
+import { requiresDatabaseAccess } from '../tools/databaseAccessGuard.js';
 
-const FINISH_TOOL_NAME = 'finish_conversation';
 const ASK_USER_TOOL_NAME = 'ask_user';
 const DATABASE_ACCESS_SKILL_NAME = 'database-access';
 const STREAM_STATS_POINTS = 24;
@@ -31,7 +30,7 @@ export interface ExecutorDeps {
   provider: Provider;
   store: Store;
   publish: (runId: string, event: AgentEvent) => void;
-  /** Safety backstop, not the primary control — see config.agent.hardStepCap. */
+  /** 防失控兜底，不是主要流程控制；配置见 config.agent.hardStepCap。 */
   hardStepCap: number;
   stream: boolean;
   resume: boolean;
@@ -121,12 +120,6 @@ class StreamStatsTracker {
   }
 }
 
-function finishOutput(args: Record<string, unknown>): string | null {
-  const progress = typeof args.progress === 'string' ? args.progress.trim() : '';
-  if (args.completed !== true || !progress) return null;
-  return progress;
-}
-
 function defaultDeps(): ExecutorDeps {
   return {
     provider: getProvider(),
@@ -198,6 +191,12 @@ function detectLoopGuard(signatures: string[], failures: string[]): LoopGuardHit
     return { reason, question: blockedQuestion(reason) };
   }
   return null;
+}
+
+function commandFromToolCall(name: string, args: unknown): string | null {
+  if (name !== 'shell' && name !== 'shell_exec') return null;
+  const command = args && typeof args === 'object' ? (args as Record<string, unknown>).command : null;
+  return typeof command === 'string' ? command : null;
 }
 
 function findMissingToolResults(messages: LlmMessage[]): { id: string; name: string }[] {
@@ -288,6 +287,17 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     publish(runId, event);
     await store.addEvent(runId, stepId, event);
   };
+  const emitUsageUpdate = async (stepId: string, step: number, usage?: LlmUsage) => {
+    await emit(stepId, {
+      type: 'usage_update',
+      step,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+      cachedInputTokens: usage?.cachedInputTokens,
+      estContextTokens: currentCtx?.estTokens(),
+      contextBudget: config.agent.contextBudget,
+    });
+  };
 
   const persistCompaction = async (stepId: string | null, compaction: Awaited<ReturnType<ContextManager['maybeCompact']>>) => {
     if (!compaction) return;
@@ -328,8 +338,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     await store.setRunStatus(runId, 'error', { error: message });
   }
 
-  // The agent loop body, kept as a closure so the invoke_agent span wraps it and
-  // the AI SDK chat / execute_tool spans nest underneath.
+  // agent 主循环保持为闭包，让 invoke_agent span 包住内部的模型调用和工具执行 span。
   async function runLoop(): Promise<void> {
     const existingMessageCount = await store.countRunMessages(runId);
     const isResume = resume || existingMessageCount > 0;
@@ -406,12 +415,10 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       return `数据库访问运行环境已注入：${visible.join('；')}。不要输出 token 或短期凭证。`;
     };
 
-    // Long tasks are bounded by completion / cancellation / context budget, not a
-    // fixed step count. hardStepCap is only a runaway-loop backstop.
+    // 长任务由完成、取消、上下文预算决定结束；hardStepCap 只是防死循环兜底。
     for (let stepIdx = nextStepIdx; stepIdx < nextStepIdx + hardStepCap; stepIdx++) {
       currentStepIdx = stepIdx;
-      // Cooperative cancellation: the cancel endpoint flips status to 'canceling';
-      // we observe it at the top of each step and stop cleanly.
+      // 取消接口会把状态改成 canceling；每步开头检查后干净退出。
       const current = await store.getRun(runId);
       if (current?.status === 'canceling') {
         try {
@@ -431,13 +438,13 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       await emit(step.id, { type: 'step_start', step: stepIdx });
       streamStats.mark(stepIdx, 'llm_waiting', undefined, true);
 
-      // Keep the working context under budget before spending a model call. Masking
-      // decisions are persisted so they survive a restart (window drops are not).
+      // 模型调用前先控制工作上下文大小；mask 决策会落库，窗口丢弃只留在内存。
       const compaction = await ctx.maybeCompact(provider);
       await persistCompaction(step.id, compaction);
+      // 每个 step 调模型前先推估算上下文，避免等待模型返回期间占用为空。
+      await emitUsageUpdate(step.id, stepIdx);
 
-      // Stream when supported: publish incremental deltas live (bus only); the
-      // consolidated text is persisted once at the end so replay stays compact.
+      // 支持流式时实时发布增量；完整文本只在末尾落库，历史回放更紧凑。
       let result;
       let liveStreamed = false;
       let publishedDelta = false;
@@ -499,8 +506,8 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
             });
             liveStreamed = true;
           } catch (err) {
-            if (publishedDelta) throw err; // can't cleanly recover after partial output
-            // otherwise fall through to the non-streaming path (which has retry)
+            if (publishedDelta) throw err; // 已经输出部分内容时无法干净回退。
+            // 还没输出时走非流式路径，由 provider 自己处理重试。
           }
         }
         if (!result) result = await provider.complete(ctx.all(), tools);
@@ -509,8 +516,9 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       }
       const llmEndedAt = new Date().toISOString();
 
-      // Calibrate the token estimator from real usage for the next compaction check.
+      // 用真实 token 用量校准估算器，供下一次压缩判断使用。
       ctx.recordUsage(result.usage);
+      if (result.usage) await emitUsageUpdate(step.id, stepIdx, result.usage);
 
       const { content, reasoning, toolCalls } = result;
       if (!liveStreamed) {
@@ -518,7 +526,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         if (content) streamStats.add(stepIdx, 'output', 'outputChars', charCount(content), undefined);
       }
 
-      // Reasoning: surfaced for display only, NOT fed back into context.
+      // reasoning 只给前端展示，不回填到模型上下文。
       if (reasoning) {
         const startedAt = reasoningStartedAt ?? llmStartedAt;
         const timing = { startedAt, endedAt: llmEndedAt, durationMs: durationMs(startedAt, llmEndedAt) };
@@ -541,11 +549,25 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         else await emit(step.id, ev);
       }
 
-      // 没有调用结束工具不算完成；把规则提醒放回上下文，让模型继续收口。
       if (!toolCalls.length) {
+        const finalText = content?.trim() ?? '';
+        if (finalText && canReportGoal(goal)) {
+          goal = finishGoal(goal);
+          await store.setGoalState(runId, goal);
+          ctx.setGoal(renderGoal(goal));
+          if (goal.plan.length) await emit(step.id, { type: 'plan_update', step: stepIdx, goal });
+          await persistCompaction(step.id, ctx.compactForHistory());
+          streamStats.mark(stepIdx, 'done', undefined, true);
+          await emit(step.id, { type: 'final', step: stepIdx, output: finalText });
+          await store.setRunStatus(runId, 'done', { output: finalText });
+          return;
+        }
+
         noActionTurns += 1;
         if (noActionTurns >= 3) {
-          const reason = `连续 ${noActionTurns} 个 step 没有工具调用，也没有 finish_conversation。`;
+          const reason = finalText
+            ? `连续 ${noActionTurns} 个 step 输出了最终文本，但计划没有进入可汇报状态。`
+            : `连续 ${noActionTurns} 个 step 没有工具调用，也没有有效最终汇报。`;
           const question = blockedQuestion(reason);
           await emit(step.id, { type: 'progress_stalled', step: stepIdx, reason, question });
           await emit(step.id, { type: 'user_question', step: stepIdx, question });
@@ -554,17 +576,41 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         }
         ctx.add({
           role: 'system',
-          content: '结束前必须调用 finish_conversation。已有 plan 时必须先调用 update_plan，把全部条目收口为 done 或 failed；失败条目要保留并标记 failed。然后用 Markdown 给出最终回答，或说明 HTML artifact 路径，再调用 finish_conversation，并设置 completed=true 和 progress。',
+          content: reportBlockedMessage(goal),
         });
         continue;
       }
       noActionTurns = 0;
 
       const toolTraces: ToolTrace[] = [];
-      let completedOutput: string | null = null;
       const pendingSkillSystemMessages: LlmMessage[] = [];
+      const applySkillActivation = async (activation: SkillActivation) => {
+        const alreadyActive = activeSkills.some((skill) => skill.id === activation.skill.id);
+        if (!alreadyActive) activeSkills.push(activation.skill);
+        let runtimeEnvMessage = '';
+        if (activation.skill.name === DATABASE_ACCESS_SKILL_NAME) {
+          try {
+            runtimeEnvMessage = `\n\n${await ensureDatabaseToolEnv(activation)}`;
+          } catch (err) {
+            runtimeEnvMessage = `\n\n数据库访问运行环境注入失败：${(err as Error).message}`;
+          }
+        }
+        const skillMsg = { role: 'system' as const, content: `${activation.systemMessage}${runtimeEnvMessage}` };
+        pendingSkillSystemMessages.push(skillMsg);
+        await emit(step.id, {
+          type: 'skill_activated',
+          step: stepIdx,
+          skillId: activation.skill.id,
+          name: activation.skill.name,
+          source: activation.skill.source,
+          root: activation.skill.root,
+          readonly: activation.skill.readonly,
+          hash: activation.skill.hash,
+          allowedTools: activation.skill.allowedTools,
+        });
+      };
 
-      // Execute each requested tool, feed results back.
+      // 执行模型请求的每个工具，并把结果回填给模型。
       for (const call of toolCalls) {
         const parsedArgs = parseToolArguments(call.arguments || '{}');
         const args = parsedArgs.args;
@@ -654,6 +700,17 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
                 span.setAttribute('tool.result.length', out.text.length);
                 return out;
               }
+              const command = commandFromToolCall(call.name, args);
+              if (command && requiresDatabaseAccess(command) && !toolEnv.DB_WORKLOAD_TOKEN) {
+                try {
+                  const activation = await activateSkill(toolSettings.workspaceRoot, DATABASE_ACCESS_SKILL_NAME);
+                  await applySkillActivation(activation);
+                } catch (err) {
+                  const out = { text: `自动激活 database-access 失败：${(err as Error).message}` };
+                  span.setAttribute('tool.result.length', out.text.length);
+                  return out;
+                }
+              }
               const out = await runTool(call.name, args, {
                 settings: toolSettings,
                 env: toolEnv,
@@ -669,10 +726,6 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
             }
           },
         );
-        const finishAttempt = call.name === FINISH_TOOL_NAME ? finishOutput(args) : null;
-        if (finishAttempt && !canFinishGoal(goal)) {
-          result = { text: finishBlockedMessage(goal) };
-        }
         const endedAt = new Date().toISOString();
         trace.result = result.text;
         trace.endedAt = endedAt;
@@ -695,31 +748,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, toolMsg));
 
         const activation = activatedSkill.value;
-        if (activation) {
-          const alreadyActive = activeSkills.some((skill) => skill.id === activation.skill.id);
-          if (!alreadyActive) activeSkills.push(activation.skill);
-          let runtimeEnvMessage = '';
-          if (activation.skill.name === DATABASE_ACCESS_SKILL_NAME) {
-            try {
-              runtimeEnvMessage = `\n\n${await ensureDatabaseToolEnv(activation)}`;
-            } catch (err) {
-              runtimeEnvMessage = `\n\n数据库访问运行环境注入失败：${(err as Error).message}`;
-            }
-          }
-          const skillMsg = { role: 'system' as const, content: `${activation.systemMessage}${runtimeEnvMessage}` };
-          pendingSkillSystemMessages.push(skillMsg);
-          await emit(step.id, {
-            type: 'skill_activated',
-            step: stepIdx,
-            skillId: activation.skill.id,
-            name: activation.skill.name,
-            source: activation.skill.source,
-            root: activation.skill.root,
-            readonly: activation.skill.readonly,
-            hash: activation.skill.hash,
-            allowedTools: activation.skill.allowedTools,
-          });
-        }
+        if (activation) await applySkillActivation(activation);
 
         const signature = toolSignature(call.name, args);
         recentToolSignatures.push(signature);
@@ -732,7 +761,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
           if (recentFailures.length > 6) recentFailures.shift();
         }
 
-        // update_plan refreshes the persisted goal anchor; re-render it into context.
+        // update_plan 会刷新已落库目标锚点，并同步重新注入上下文。
         if (call.name === 'update_plan') {
           goal = mergeGoal(goal, parseGoalPatch(args));
           await store.setGoalState(runId, goal);
@@ -740,32 +769,12 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
           if (goal.plan.length) await emit(step.id, { type: 'plan_update', step: stepIdx, goal });
         }
 
-        if (finishAttempt) {
-          if (canFinishGoal(goal)) {
-            completedOutput = finishAttempt;
-          } else {
-            ctx.add({ role: 'system', content: finishBlockedMessage(goal) });
-            await emit(step.id, { type: 'recovery', step: stepIdx, message: finishBlockedMessage(goal) });
-          }
-        }
       }
 
       // 同一个 assistant turn 里可能有多个 tool_call。Provider 要求这些调用的
       // tool_result 连续出现，所以 skill 的 system 注入必须等本轮工具结果全部回填后再追加。
       for (const msg of pendingSkillSystemMessages) {
         ctx.add(msg);
-      }
-
-      if (completedOutput) {
-        goal = finishGoal(goal);
-        await store.setGoalState(runId, goal);
-        ctx.setGoal(renderGoal(goal));
-        if (goal.plan.length) await emit(step.id, { type: 'plan_update', step: stepIdx, goal });
-        await persistCompaction(step.id, ctx.compactForHistory());
-        streamStats.mark(stepIdx, 'done', undefined, true);
-        await emit(step.id, { type: 'final', step: stepIdx, output: completedOutput });
-        await store.setRunStatus(runId, 'done', { output: completedOutput });
-        return;
       }
 
       const guardHit = detectLoopGuard(recentToolSignatures, recentFailures);

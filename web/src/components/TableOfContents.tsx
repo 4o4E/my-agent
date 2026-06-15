@@ -5,12 +5,13 @@ import { cn } from '@/lib/utils';
 interface TocItem {
   index: number;
   text: string;
-  level: number;
+  role: 'user' | 'assistant';
+  topPct: number;
 }
 
 const MESSAGE_SELECTOR = '[data-toc-message]';
 
-/** Nearest scrollable ancestor — the element the conversation actually scrolls in. */
+/** 找到真实滚动对话内容的最近父容器。 */
 function getScrollParent(node: HTMLElement | null): HTMLElement | null {
   let el = node?.parentElement ?? null;
   while (el) {
@@ -23,9 +24,16 @@ function getScrollParent(node: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
+function scrollInsideContainer(container: HTMLElement, target: HTMLElement) {
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const nextTop = container.scrollTop + targetRect.top - containerRect.top - 12;
+  container.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' });
+}
+
 /**
- * 右侧导航只认对话层级：用户锚点显示用户消息，回复锚点显示回复摘要。
- * 工具参数、工具结果和思考内容即使包含标题元素，也不会进入目录。
+ * 对话锚点轨道只认用户消息和 assistant 回复，贴在真实滚动条旁边。
+ * marker 的位置来自消息在滚动容器里的相对高度，悬浮时显示消息摘要。
  */
 export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElement | null> }) {
   const [items, setItems] = useState<TocItem[]>([]);
@@ -34,17 +42,26 @@ export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElem
   const collectTargets = useCallback((root: HTMLElement) => {
     const targets: HTMLElement[] = [];
     const nextItems: TocItem[] = [];
+    const scrollParent = getScrollParent(root);
+    const scrollRange = Math.max(1, (scrollParent?.scrollHeight ?? root.scrollHeight) - (scrollParent?.clientHeight ?? 0));
 
     for (const message of Array.from(root.querySelectorAll<HTMLElement>(MESSAGE_SELECTOR))) {
       const role = message.dataset.tocMessage;
+      if (role !== 'user' && role !== 'assistant') continue;
+      const containerRect = scrollParent?.getBoundingClientRect();
+      const messageRect = message.getBoundingClientRect();
+      const absoluteTop = scrollParent && containerRect
+        ? scrollParent.scrollTop + messageRect.top - containerRect.top
+        : message.offsetTop;
+      const topPct = Math.min(100, Math.max(0, (absoluteTop / scrollRange) * 100));
       if (role === 'user') {
         const text = message.dataset.tocTitle || '对话';
-        nextItems.push({ index: targets.length, text, level: 1 });
+        nextItems.push({ index: targets.length, text, role, topPct });
         targets.push(message);
         continue;
       }
 
-      nextItems.push({ index: targets.length, text: message.dataset.tocTitle || '回复', level: 1 });
+      nextItems.push({ index: targets.length, text: message.dataset.tocTitle || '回复', role, topPct });
       targets.push(message);
     }
 
@@ -56,10 +73,20 @@ export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElem
     const root = contentRef.current;
     if (!root) return;
     const compute = () => setItems(collectTargets(root).items);
+    const scrollParent = getScrollParent(root);
     compute();
     const mo = new MutationObserver(compute);
     mo.observe(root, { childList: true, subtree: true, characterData: true });
-    return () => mo.disconnect();
+    const ro = new ResizeObserver(compute);
+    ro.observe(root);
+    scrollParent?.addEventListener('scroll', compute, { passive: true });
+    window.addEventListener('resize', compute);
+    return () => {
+      mo.disconnect();
+      ro.disconnect();
+      scrollParent?.removeEventListener('scroll', compute);
+      window.removeEventListener('resize', compute);
+    };
   }, [collectTargets, contentRef]);
 
   // 滚动时高亮最靠近顶部的消息。
@@ -87,7 +114,8 @@ export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElem
       if (!root) return;
       const el = collectTargets(root).targets[index];
       if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const scrollParent = getScrollParent(root);
+        if (scrollParent) scrollInsideContainer(scrollParent, el);
         setActiveIndex(index);
       }
     },
@@ -97,30 +125,31 @@ export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElem
   if (items.length === 0) return null;
 
   return (
-    <nav className="hidden w-56 shrink-0 overflow-y-auto border-l py-4 pr-2 pl-3 xl:block">
-      <p className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        目录
-      </p>
-      <ul className="space-y-0.5">
+    <nav className="hidden w-7 shrink-0 border-l bg-background/80 py-3 xl:block" aria-label="对话锚点">
+      <div className="relative mx-auto h-full w-3 rounded-full bg-border/50">
         {items.map((item) => (
-          <li key={item.index}>
-            <button
-              type="button"
-              onClick={() => handleClick(item.index)}
-              title={item.text}
-              style={{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }}
-              className={cn(
-                'block w-full truncate rounded py-1 pr-2 text-left text-xs transition-colors hover:bg-muted',
-                activeIndex === item.index
-                  ? 'font-medium text-foreground'
-                  : 'text-muted-foreground',
-              )}
-            >
-              {item.text}
-            </button>
-          </li>
+          <button
+            key={item.index}
+            type="button"
+            onClick={() => handleClick(item.index)}
+            title={item.text}
+            style={{ top: `${item.topPct}%` }}
+            className={cn(
+              'group absolute left-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border transition-all hover:z-20 hover:scale-125',
+              item.role === 'user' ? 'bg-primary/80' : 'bg-muted-foreground/70',
+              activeIndex === item.index ? 'border-primary bg-background ring-2 ring-primary/70' : 'border-background',
+            )}
+            aria-label={item.text}
+          >
+            <span className="pointer-events-none absolute right-4 top-1/2 hidden w-96 max-w-[min(24rem,calc(100vw-6rem))] -translate-y-1/2 rounded-md border bg-popover px-3 py-2 text-left text-xs text-popover-foreground shadow-lg group-hover:block">
+              <span className="block whitespace-nowrap text-[10px] text-muted-foreground">
+                {item.role === 'user' ? '用户消息' : 'LLM 回复'}
+              </span>
+              <span className="line-clamp-8 break-words leading-5">{item.text}</span>
+            </span>
+          </button>
         ))}
-      </ul>
+      </div>
     </nav>
   );
 }

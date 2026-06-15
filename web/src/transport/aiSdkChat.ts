@@ -80,6 +80,9 @@ export function uiEventStreamToChunks(
           case 'stream_stats':
             safe({ type: 'data-stream-stats', id: `stats-${runId}`, data: e.stats } as unknown as UIMessageChunk);
             break;
+          case 'usage_update':
+            safe({ type: 'data-usage-update', id: `usage-${e.step}`, data: e.usage } as unknown as UIMessageChunk);
+            break;
           case 'notice': {
             closeReason();
             const id = `t-${e.step}`;
@@ -179,6 +182,7 @@ export function uiEventStreamToChunks(
             }
             closeText();
             closeReason();
+            safe({ type: 'data-final-output', id: `final-${e.step}`, data: { step: e.step, output: e.output } } as unknown as UIMessageChunk);
             break;
           }
           case 'error': {

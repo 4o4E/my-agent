@@ -13,10 +13,11 @@ import { grepTool } from './grep.js';
 import { truncateFetchText } from './webFetch.js';
 import { getTool, runTool, toolSchemas } from './registry.js';
 import { publicDatasourceForTool } from './datasourceList.js';
+import { shellExecTool } from './managedShell.js';
 import type { ToolResult, ToolRunContext } from './types.js';
 import { normalizeToolSettings } from '../settings.js';
 
-/** Tools may return a string or a ToolResult; tests assert on the text. */
+/** 工具可能返回 string 或 ToolResult，测试统一取文本断言。 */
 const text = (r: string | ToolResult): string => (typeof r === 'string' ? r : r.text);
 
 let dir: string;
@@ -36,13 +37,13 @@ after(async () => {
 test('registry exposes neutral tool schemas and dispatches by name', async () => {
   const schemas = toolSchemas();
   assert.ok(schemas.find((s) => s.name === 'shell'));
-  assert.ok(schemas.find((s) => s.name === 'finish_conversation'));
+  assert.equal(schemas.some((s) => s.name === 'finish_conversation'), false);
   assert.ok(schemas.find((s) => s.name === 'write_html_artifact'));
   assert.ok(schemas.find((s) => s.name === 'skill_activate'));
   assert.ok(schemas.find((s) => s.name === 'datasource_list'));
   assert.ok(toolSchemas(['file_read']).some((s) => s.name === 'file_read'));
   assert.equal(toolSchemas(['file_read']).some((s) => s.name === 'shell'), false);
-  assert.ok(toolSchemas(['file_read']).some((s) => s.name === 'finish_conversation'));
+  assert.ok(toolSchemas(['file_read']).some((s) => s.name === 'update_plan'));
   assert.ok(toolSchemas(['datasource_list']).some((s) => s.name === 'datasource_list'));
   assert.ok(getTool('glob'));
   assert.match((await runTool('does_not_exist', {})).text, /未知工具/);
@@ -80,14 +81,6 @@ test('datasource_list public view redacts secrets and admin config', () => {
   assert.equal((view.connection as Record<string, unknown>).password, '[redacted]');
   assert.equal(JSON.stringify(view).includes('connectionUrl'), false);
   assert.equal(JSON.stringify(view).includes('postgres://admin'), false);
-});
-
-test('finish_conversation records progress and validates required progress', async () => {
-  assert.match(
-    (await runTool('finish_conversation', { progress: 'tests passed', completed: true })).text,
-    /对话已完成/,
-  );
-  assert.match((await runTool('finish_conversation', { completed: true })).text, /必须填写.*progress/);
 });
 
 test('registry forwards run context to tool implementations', async () => {
@@ -164,6 +157,23 @@ test('shell blocks database CLI before database-access injects a workload token'
     { settings: normalizeToolSettings({ workspaceRoot: dir, shellUseHostPath: true }), env: { DB_WORKLOAD_TOKEN: 'wat_test' } },
   ));
   assert.equal(allowed, 'ok');
+});
+
+test('shell blocks database-access SDK scripts before workload token injection', async () => {
+  const command = 'python3 .agents/skills/database-access/scripts/psql_query.py --sql "select 1"';
+  const blockedShell = text(await shellTool.run(
+    { command },
+    { settings: normalizeToolSettings({ workspaceRoot: dir, shellUseHostPath: true }) },
+  ));
+  assert.match(blockedShell, /database-access/);
+  assert.match(blockedShell, /workload token/);
+
+  const blockedManaged = text(await shellExecTool.run(
+    { sessionId: 'ss_test', command, wait: 'foreground' },
+    { settings: normalizeToolSettings({ workspaceRoot: dir, shellUseHostPath: true }), threadId: 'th_test' },
+  ));
+  assert.match(blockedManaged, /database-access/);
+  assert.match(blockedManaged, /workload token/);
 });
 
 test('file_read reads content', async () => {

@@ -32,6 +32,7 @@ export interface LlmTool {
 export interface LlmUsage {
   inputTokens?: number;
   outputTokens?: number;
+  cachedInputTokens?: number;
 }
 
 export interface LlmResult {

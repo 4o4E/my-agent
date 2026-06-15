@@ -1,7 +1,7 @@
 ---
 name: database-access
 description: 使用当前环境已有的数据库 CLI 连接数据库、探查 schema、执行只读 SQL、导出小样本数据。Use when the task needs database inspection, read-only querying, schema discovery, or datasource CLI access.
-allowed-tools: datasource_list shell grep file_read file_write
+allowed-tools: datasource_list shell shell_session_reuse shell_exec shell_poll shell_kill grep file_read file_write
 metadata:
   my-agent.tool-scope: readonly
 ---

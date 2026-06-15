@@ -56,7 +56,7 @@ export function Sidebar({ threads, activeId, activeView, width, theme, onToggleT
           <div
             key={t.id}
             className={cn(
-              'group/thread flex items-center rounded-md transition-colors',
+              'group/thread relative flex items-center rounded-md transition-colors',
               activeView === 'chat' && t.id === activeId
                 ? 'bg-accent font-medium text-accent-foreground'
                 : 'text-foreground hover:bg-accent/60',
@@ -65,7 +65,7 @@ export function Sidebar({ threads, activeId, activeView, width, theme, onToggleT
             <button
               onClick={() => onSelect(t.id)}
               title={threadLabel(t)}
-              className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm"
+              className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm transition-[padding] group-hover/thread:pr-9"
             >
               {threadLabel(t)}
             </button>
@@ -76,7 +76,7 @@ export function Sidebar({ threads, activeId, activeView, width, theme, onToggleT
                 event.stopPropagation();
                 onDelete(t.id);
               }}
-              className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover/thread:opacity-100"
+              className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md bg-accent text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover/thread:opacity-100"
             >
               <Trash2 className="size-3.5" />
               <span className="sr-only">删除会话</span>

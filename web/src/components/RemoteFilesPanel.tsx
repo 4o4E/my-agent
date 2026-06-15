@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { BundledLanguage } from 'shiki';
-import { Code2, Eye, ChevronRight, FileText, Folder, FolderOpen, Paperclip, RefreshCw, X } from 'lucide-react';
+import { Code2, Eye, ChevronRight, FileText, Folder, FolderOpen, PanelRightClose, PanelRightOpen, Paperclip, RefreshCw, X } from 'lucide-react';
 import { listRemoteFiles, previewRemoteFile, type FilePreview, type RemoteFileEntry } from '@/api';
 import { CodeBlock } from '@/components/ai-elements/code-block';
+import { MarkdownContent } from '@/components/MarkdownContent';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -21,8 +22,10 @@ interface Props {
   open: boolean;
   width: number;
   previewPath: string | null;
+  embedded?: boolean;
   onClose: () => void;
   onAttach: (entry: { kind: 'remote'; path: string; name: string; size?: number }) => void;
+  onOpenFile?: (path: string) => void;
 }
 
 const LANGUAGE_BY_EXT: Record<string, BundledLanguage> = {
@@ -87,7 +90,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function startTreeResize(event: ReactPointerEvent, width: number, onChange: (width: number) => void) {
+function startTreeResize(event: ReactPointerEvent, width: number, onChange: (width: number) => void, direction: 1 | -1 = 1) {
   event.preventDefault();
   const startX = event.clientX;
   const startWidth = width;
@@ -97,7 +100,7 @@ function startTreeResize(event: ReactPointerEvent, width: number, onChange: (wid
   document.body.style.userSelect = 'none';
 
   const onMove = (moveEvent: PointerEvent) => {
-    onChange(clamp(startWidth + moveEvent.clientX - startX, 220, 420));
+    onChange(clamp(startWidth + (moveEvent.clientX - startX) * direction, 220, 420));
   };
   const onUp = () => {
     document.body.style.cursor = previousCursor;
@@ -110,16 +113,17 @@ function startTreeResize(event: ReactPointerEvent, width: number, onChange: (wid
   window.addEventListener('pointerup', onUp, { once: true });
 }
 
-export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }: Props) {
+export function RemoteFilesPanel({ open, width, previewPath, embedded = false, onClose, onAttach, onOpenFile }: Props) {
   const [currentPath, setCurrentPath] = useState('.');
   const [treeWidth, setTreeWidth] = useState(270);
+  const [showTree, setShowTree] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['.']));
   const [treeEntries, setTreeEntries] = useState<Record<string, RemoteFileEntry[]>>({});
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedSize, setSelectedSize] = useState<number | undefined>();
   const [preview, setPreview] = useState<FilePreview | null>(null);
   const [chunks, setChunks] = useState<PreviewChunk[]>([]);
-  const [htmlMode, setHtmlMode] = useState<'preview' | 'source'>('preview');
+  const [previewMode, setPreviewMode] = useState<'preview' | 'source'>('source');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const previewRequestRef = useRef(0);
@@ -149,7 +153,7 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
       setSelectedSize(size);
       setPreview(null);
       setChunks([]);
-      setHtmlMode(extOf(path) === 'html' || extOf(path) === 'htm' ? 'preview' : 'source');
+      setPreviewMode(['html', 'htm', 'md'].includes(extOf(path)) ? 'preview' : 'source');
     } else {
       pendingPreviewStartsRef.current.add(startLine);
     }
@@ -185,6 +189,14 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
     if (willOpen && !treeEntries[path]) await loadDir(path, false);
   }
 
+  function selectFile(entry: RemoteFileEntry) {
+    if (onOpenFile) {
+      onOpenFile(entry.path);
+      return;
+    }
+    void openFile(entry.path, entry.size);
+  }
+
   useEffect(() => {
     if (open) void loadDir(currentPath);
     // 打开面板时刷新当前目录，保留用户所在位置。
@@ -195,7 +207,10 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
   }, [open, previewPath]);
 
   const previewLanguage = selectedPath ? languageForPath(selectedPath) : 'log';
-  const selectedIsHtml = selectedPath ? ['html', 'htm'].includes(extOf(selectedPath)) : false;
+  const selectedExt = selectedPath ? extOf(selectedPath) : '';
+  const selectedIsHtml = ['html', 'htm'].includes(selectedExt);
+  const selectedIsMarkdown = selectedExt === 'md';
+  const selectedCanRender = selectedIsHtml || selectedIsMarkdown;
   const previewRows = useMemo<PreviewRow[]>(() => {
     const byLine = new Map<number, string>();
     const sortedChunks = [...chunks].sort((a, b) => a.startLine - b.startLine);
@@ -239,7 +254,7 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
             selected && 'bg-accent text-accent-foreground',
           )}
           style={{ paddingLeft: 8 + depth * 14 }}
-          onClick={() => isDir ? void toggleDir(entry.path) : void openFile(entry.path, entry.size)}
+          onClick={() => isDir ? void toggleDir(entry.path) : selectFile(entry)}
           title={entry.path}
         >
           {isDir ? (
@@ -261,78 +276,61 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
     });
 
   return (
-    <aside className="flex h-full shrink-0 flex-col border-l bg-card" style={{ width }}>
+    <aside className={cn('flex h-full shrink-0 flex-col bg-card', !embedded && 'border-l')} style={embedded ? undefined : { width }}>
       <div className="flex h-14 items-center gap-2 border-b px-3">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">远程文件</div>
-          <div className="truncate text-xs text-muted-foreground">{currentPath}</div>
+          <div className="truncate text-xs text-muted-foreground" title={selectedPath ?? currentPath}>
+            {selectedPath ?? currentPath}
+          </div>
         </div>
         <Button variant="ghost" size="icon" onClick={() => void loadDir(currentPath)} title="刷新">
           <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
         </Button>
-        <Button variant="ghost" size="icon" onClick={onClose} title="关闭">
-          <X className="size-4" />
+        <Button
+          variant={showTree ? 'secondary' : 'ghost'}
+          size="icon"
+          onClick={() => setShowTree((value) => !value)}
+          title={showTree ? '隐藏文件树' : '显示文件树'}
+        >
+          {showTree ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />}
         </Button>
+        {!embedded && (
+          <Button variant="ghost" size="icon" onClick={onClose} title="关闭">
+            <X className="size-4" />
+          </Button>
+        )}
       </div>
 
       {error && <div className="border-b px-3 py-2 text-xs text-destructive">{error}</div>}
 
       <div className="flex min-h-0 flex-1">
-        <div className="flex min-h-0 shrink-0 flex-col border-r bg-muted/20" style={{ width: treeWidth }}>
-          <div className="flex h-9 items-center justify-between border-b px-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Explorer</span>
-            <Button variant="ghost" size="icon" className="size-7" onClick={() => void loadDir(currentPath)} title="刷新目录">
-              <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-            </Button>
-          </div>
-          <div className="scrollbar-thin min-h-0 flex-1 overflow-auto py-1">
-            <button
-              className={cn(
-                'flex h-7 w-full items-center gap-1.5 px-2 text-left text-[13px] hover:bg-accent/70',
-                currentPath === '.' && 'bg-accent text-accent-foreground',
-              )}
-              onClick={() => void toggleDir('.')}
-              title="workspace"
-            >
-              <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded.has('.') && 'rotate-90')} />
-              {expanded.has('.') ? <FolderOpen className="size-4 shrink-0 text-sky-500" /> : <Folder className="size-4 shrink-0 text-sky-500" />}
-              <span className="min-w-0 flex-1 truncate">workspace</span>
-            </button>
-            {expanded.has('.') && renderRows(treeEntries['.'], 1)}
-          </div>
-        </div>
-        <div
-          role="separator"
-          aria-label="调整文件树宽度"
-          className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/60"
-          onPointerDown={(event) => startTreeResize(event, treeWidth, setTreeWidth)}
-        />
-
         <div className="min-w-0 flex-1 overflow-hidden p-3">
           {selectedPath ? (
             <div className="flex h-full min-h-0 flex-col gap-3">
               <div className="flex shrink-0 items-center gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{selectedPath}</div>
-                  <div className="text-xs text-muted-foreground">{formatSize(selectedSize)}</div>
-                  {totalLines != null && <div className="text-xs text-muted-foreground">{totalLines} 行</div>}
+                  <div className="text-xs text-muted-foreground">
+                    {formatSize(selectedSize)}{totalLines != null ? ` · ${totalLines} 行` : ''}
+                  </div>
                 </div>
-                {selectedIsHtml && (
+                {selectedCanRender && (
                   <div className="flex rounded-md border bg-background p-0.5">
                     <Button
-                      variant={htmlMode === 'preview' ? 'secondary' : 'ghost'}
+                      variant={previewMode === 'preview' ? 'secondary' : 'ghost'}
                       size="sm"
                       className="h-8 px-2"
-                      onClick={() => setHtmlMode('preview')}
-                      title="预览 HTML"
+                      onClick={() => setPreviewMode('preview')}
+                      title={selectedIsHtml ? '渲染 HTML' : '渲染 Markdown'}
                     >
                       <Eye className="size-4" />
                     </Button>
                     <Button
-                      variant={htmlMode === 'source' ? 'secondary' : 'ghost'}
+                      variant={previewMode === 'source' ? 'secondary' : 'ghost'}
                       size="sm"
                       className="h-8 px-2"
-                      onClick={() => setHtmlMode('source')}
+                      onClick={() => setPreviewMode('source')}
                       title="查看源码"
                     >
                       <Code2 className="size-4" />
@@ -353,7 +351,7 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
                   <div className="flex h-full items-center justify-center rounded-md border bg-muted/20 px-3 py-8 text-center text-sm text-muted-foreground">
                     正在加载前 {INITIAL_PREVIEW_LINES} 行…
                   </div>
-                ) : chunks.length > 0 && selectedIsHtml && htmlMode === 'preview' ? (
+                ) : chunks.length > 0 && selectedIsHtml && previewMode === 'preview' ? (
                   <iframe
                     title={selectedPath}
                     className="h-full w-full rounded-md border bg-white"
@@ -361,6 +359,10 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
                     referrerPolicy="no-referrer"
                     srcDoc={previewCode}
                   />
+                ) : chunks.length > 0 && selectedIsMarkdown && previewMode === 'preview' ? (
+                  <div className="h-full overflow-auto rounded-md border bg-background px-5 py-4">
+                    <MarkdownContent text={previewCode} />
+                  </div>
                 ) : chunks.length > 0 ? (
                   <CodeBlock
                     className="h-full"
@@ -372,7 +374,7 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
                     showLineNumbers
                     startLineNumber={previewStartLine}
                     showGlance
-                    showRenderToggle
+                    showRenderToggle={false}
                     showWrapToggle
                     maxHighlightChars={80_000}
                   />
@@ -392,6 +394,36 @@ export function RemoteFilesPanel({ open, width, previewPath, onClose, onAttach }
             <div className="py-10 text-center text-sm text-muted-foreground">选择一个文件查看预览</div>
           )}
         </div>
+        {showTree && (
+          <>
+            <div
+              role="separator"
+              aria-label="调整文件树宽度"
+              className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/60"
+              onPointerDown={(event) => startTreeResize(event, treeWidth, setTreeWidth, -1)}
+            />
+            <div className="flex min-h-0 shrink-0 flex-col border-l bg-muted/20" style={{ width: treeWidth }}>
+              <div className="flex h-9 items-center border-b px-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Explorer</span>
+              </div>
+              <div className="scrollbar-thin min-h-0 flex-1 overflow-auto py-1">
+                <button
+                  className={cn(
+                    'flex h-7 w-full items-center gap-1.5 px-2 text-left text-[13px] hover:bg-accent/70',
+                    currentPath === '.' && 'bg-accent text-accent-foreground',
+                  )}
+                  onClick={() => void toggleDir('.')}
+                  title="workspace"
+                >
+                  <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded.has('.') && 'rotate-90')} />
+                  {expanded.has('.') ? <FolderOpen className="size-4 shrink-0 text-sky-500" /> : <Folder className="size-4 shrink-0 text-sky-500" />}
+                  <span className="min-w-0 flex-1 truncate">workspace</span>
+                </button>
+                {expanded.has('.') && renderRows(treeEntries['.'], 1)}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </aside>
   );

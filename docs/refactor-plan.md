@@ -10,7 +10,7 @@
   Mermaid 使用 ```mermaid 代码块；LaTeX 行内公式使用 `$...$`，独立公式块使用 `$$...$$`。
 - 复杂报告/页面：使用 `write_html_artifact` 写入完整 HTML 文件，前端文件面板用沙箱 iframe 预览。
 - 工具结果：保持纯文本，便于 LLM 消化、压缩和持久化；不再返回 UI JSON。
-- 结束规则：任务完成时调用 `finish_conversation`，最终回答说明 Markdown 结论或 HTML artifact 路径。
+- 结束规则：任务完成时先用 `update_plan` 收口计划并进入 `reporting`，随后最终回答说明 Markdown 结论或 HTML artifact 路径。
 
 ## 2. 目标架构
 
@@ -23,7 +23,7 @@
 └─ 传输边界        当前 REST + WebSocket，适配为 UIMessage stream
 
 后端
-├─ Agent 引擎      多 step 工具循环 + finish_conversation 收口
+├─ Agent 引擎      多 step 工具循环 + reporting 后自然最终汇报
 ├─ Provider        AI SDK / OpenAI-compatible / Anthropic
 ├─ 工具层          shell / file / glob / grep / web / ask_user / write_html_artifact
 ├─ 沙箱/权限       allow/deny、路径围栏、shell/network 开关、输出截断

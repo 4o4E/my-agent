@@ -144,7 +144,7 @@ pnpm run restart
 
 - 前端能看到多轮 step、reasoning、tool_call、tool_result 和 final。
 - 任务过程会使用文件读取、grep 或 shell 等工具。
-- 最终输出默认使用 Markdown/Mermaid/LaTeX；复杂报告可写入 HTML artifact，再调用 `finish_conversation` 完成。
+- 最终输出默认使用 Markdown/Mermaid/LaTeX；复杂报告可写入 HTML artifact，计划收口后直接以最终汇报完成。
 - 数据库中能查到对应 run、step、message 和 event。
 - 人为降低 `LLM_CONTEXT_BUDGET` 时，可以观察到 `compaction` 事件。
 

@@ -1,4 +1,4 @@
-// Agent-level types. LLM message/tool types live in ../llm/types.ts.
+// agent 层类型；LLM 消息和工具类型在 ../llm/types.ts。
 
 import type { GoalState } from './goal.js';
 
@@ -72,12 +72,21 @@ export interface StreamStats {
 }
 
 /**
- * Events streamed to the client and persisted. `step` is the 1-based step index
- * within a run (one LLM turn + its tool calls).
+ * 推送给客户端并落库的事件。step 是 run 内从 1 开始的步骤序号，
+ * 一步包含一次模型调用及其工具调用。
  */
 export type AgentEvent =
   | { type: 'step_start'; step: number }
   | ({ type: 'stream_stats'; step: number } & StreamStats)
+  | {
+      type: 'usage_update';
+      step: number;
+      inputTokens?: number;
+      outputTokens?: number;
+      cachedInputTokens?: number;
+      estContextTokens?: number;
+      contextBudget?: number;
+    }
   | ({ type: 'reasoning'; step: number; text: string } & Partial<TimedEventFields>)
   | ({ type: 'reasoning_timing'; step: number } & TimedEventFields)
   | { type: 'llm_delta'; step: number; text: string }

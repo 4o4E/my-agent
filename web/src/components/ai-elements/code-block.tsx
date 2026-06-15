@@ -628,15 +628,18 @@ function CodeBlockGlance({
   const scrollToPointer = useCallback((clientY: number, target: HTMLDivElement) => {
     const node = scrollRef.current;
     if (!node) return;
+    const scrollable = Math.max(0, node.scrollHeight - node.clientHeight);
+    if (scrollable <= 0) return;
     const rect = target.getBoundingClientRect();
     const relative = Math.max(0, Math.min(1, (clientY - rect.top) / Math.max(1, rect.height)));
     const targetTop = Math.max(0, Math.min(1, relative - sliderHeight / 2));
-    node.scrollTop = targetTop / Math.max(0.001, 1 - sliderHeight) * Math.max(0, node.scrollHeight - node.clientHeight);
+    node.scrollTop = targetTop / Math.max(0.001, 1 - sliderHeight) * scrollable;
   }, [scrollRef, sliderHeight]);
 
   const startDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     const track = event.currentTarget;
+    track.setPointerCapture?.(event.pointerId);
     scrollToPointer(event.clientY, track);
     const onMove = (moveEvent: PointerEvent) => scrollToPointer(moveEvent.clientY, track);
     const onUp = () => {
@@ -648,11 +651,14 @@ function CodeBlockGlance({
   }, [scrollToPointer]);
 
   return (
-    <div className="hidden max-h-full w-14 shrink-0 overflow-hidden border-l bg-background/95 px-1.5 py-2 sm:block" aria-hidden="true">
+    <div className="hidden max-h-full w-14 shrink-0 overflow-hidden border-l bg-background/95 px-1.5 py-2 sm:block">
       <div
         ref={trackRef}
-        className="relative h-full min-h-0 cursor-pointer overflow-hidden rounded-sm bg-muted/40 py-1"
+        className="relative h-full min-h-0 cursor-pointer touch-none select-none overflow-hidden rounded-sm bg-muted/40 py-1"
         onPointerDown={startDrag}
+        role="scrollbar"
+        aria-label="代码缩略图滚动条"
+        aria-orientation="vertical"
       >
         <div
           className="absolute left-0 right-0 space-y-px"
@@ -670,12 +676,13 @@ function CodeBlockGlance({
                   visibleTokens.map(({ token, key }) => (
                     <span
                       key={key}
-                      className="h-full min-w-1 rounded-full"
+                      className="dark:!bg-[var(--shiki-dark)] h-full min-w-1 rounded-full"
                       style={{
                         backgroundColor: token.color ?? "currentColor",
                         flexGrow: Math.max(1, Math.min(10, token.content.length)),
-                        opacity: token.color ? 0.85 : 0.25,
-                      }}
+                        opacity: token.color ? 0.9 : 0.25,
+                        ...token.htmlStyle,
+                      } as CSSProperties}
                     />
                   ))
                 )}
@@ -839,6 +846,7 @@ export const CodeBlock = memo(({
   const contextValue = useMemo(() => ({ code }), [code]);
   const [wrap, setWrap] = useState(defaultWrap);
   const [viewMode, setViewMode] = useState<CodeViewMode>("source");
+  const [glanceOpen, setGlanceOpen] = useState(showGlance);
   const canRender = showRenderToggle && isRenderableLanguage(language);
   const showDefaultHeader = showGlance || showWrapToggle || canRender;
 
@@ -884,10 +892,17 @@ export const CodeBlock = memo(({
                 </div>
               )}
               {showGlance && (
-                <span className="inline-flex items-center gap-1 text-muted-foreground">
+                <Button
+                  type="button"
+                  variant={glanceOpen ? "secondary" : "ghost"}
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setGlanceOpen((value) => !value)}
+                  title={glanceOpen ? "关闭代码缩略图" : "打开代码缩略图"}
+                >
                   <MapIcon className="size-3.5" />
                   缩略图
-                </span>
+                </Button>
               )}
               {showWrapToggle && (
                 <Button
@@ -917,7 +932,7 @@ export const CodeBlock = memo(({
             onReachEnd={onReachEnd}
             showLineNumbers={showLineNumbers}
             startLineNumber={startLineNumber}
-            showGlance={showGlance}
+            showGlance={showGlance && glanceOpen}
             wrap={wrap}
             maxHighlightChars={maxHighlightChars}
           />

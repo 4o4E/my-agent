@@ -21,7 +21,7 @@
 
 - 使用 `thread -> run -> step` 组织一次用户任务。
 - run 在当前 server 进程内异步执行，由 `executeRun` 串联 LLM 决策、工具调用、结果回填和最终完成。
-- 任务必须调用 `finish_conversation` 才算完成，避免只输出文本就结束。
+- 任务以最终汇报自然完成；已有 plan 时必须先收口所有条目并进入 `reporting` 阶段，避免未完成计划被误标 done。
 - 支持 `update_plan` 维护 Goal 锚点，降低长任务目标漂移。
 - 支持取消 run、无进展检测、`ask_user` 暂停等待用户输入。
 - 支持服务启动后恢复 `pending` / `running` run，并补齐中断前缺失的 tool result，保证 `tool_call` 与 `tool_result` 配对。

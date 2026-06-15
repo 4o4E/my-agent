@@ -6,12 +6,11 @@ import { MemoryStore } from '../store/memoryStore.js';
 import { maskPlaceholder } from './compaction.js';
 import type { ThreadMessage } from '../store/types.js';
 
-// Durable compaction (long-task design §4): masking decisions are persisted and the
-// store returns the compacted view on reload, so a restart loses no data.
+// 持久压缩：mask 决策会落库，重载时 store 返回压缩视图，重启也不会丢原始数据。
 
 test('maybeCompact reports the DB ids of newly-masked tool results', async () => {
   const { contextBudget, keepRecentMessages } = config.agent;
-  config.agent.contextBudget = 100; // tiny budget → force compaction
+  config.agent.contextBudget = 100; // 极小预算用于强制触发压缩。
   config.agent.keepRecentMessages = 1;
   try {
     const prior: ThreadMessage[] = [
@@ -22,9 +21,9 @@ test('maybeCompact reports the DB ids of newly-masked tool results', async () =>
     const res = await ctx.maybeCompact();
 
     assert.ok(res, 'expected compaction to run');
-    assert.deepEqual(res.collapsedIds, [11]); // the big tool result's DB id
+    assert.deepEqual(res.collapsedIds, [11]); // 大工具结果对应的 DB id。
     assert.ok(res.info.masked >= 1);
-    // The working view now shows the placeholder for that tool message.
+    // 工作视图现在显示这条工具消息的占位内容。
     const view = ctx.all();
     assert.ok(view.some((m) => m.content === maskPlaceholder('x'.repeat(4000))));
   } finally {
@@ -41,7 +40,7 @@ test('compactForHistory masks old bulky payloads even below live threshold', () 
     const prior: ThreadMessage[] = [
       { id: 20, role: 'assistant', content: null, toolCalls: [{ id: 'html1', name: 'write_html_artifact', arguments: bigArgs }] },
       { id: 21, role: 'tool', content: 'x'.repeat(4000), toolCallId: 'html1' },
-      { id: 22, role: 'assistant', content: null, toolCalls: [{ id: 'f1', name: 'finish_conversation', arguments: '{}' }] },
+      { id: 22, role: 'assistant', content: null, toolCalls: [{ id: 'p1', name: 'update_plan', arguments: '{}' }] },
     ];
     const ctx = new ContextManager(prior, 'continue');
     const res = ctx.compactForHistory();
@@ -73,11 +72,10 @@ test('store persists collapsed flag and returns the masked view on reload', asyn
     toolCallId: 'c1',
   });
 
-  // Compaction marks the tool result masked (what the executor persists).
+  // 压缩会把工具结果标记为 masked，executor 持久化的就是这个决策。
   await store.markMessagesCollapsed([toolId], 'masked');
 
-  // Reload (as a fresh run / after a restart would) → masked view, pairing intact,
-  // and the original is NOT destroyed (placeholder length matches the original).
+  // 重载后得到 masked 视图，工具配对仍完整，原文不会被销毁。
   const reloaded = await store.loadThreadMessages(thread.id);
   assert.deepEqual(reloaded.map((m) => m.role), ['user', 'assistant', 'tool']);
   const toolMsg = reloaded.find((m) => m.role === 'tool')!;
@@ -85,7 +83,7 @@ test('store persists collapsed flag and returns the masked view on reload', asyn
   assert.equal(toolMsg.content, maskPlaceholder('y'.repeat(3000)));
   assert.equal(toolMsg.toolCallId, 'c1');
 
-  // A ContextManager rebuilt from the reloaded view does NOT re-mask the placeholder.
+  // 从重载视图重建 ContextManager 时，不会再次 mask 已经是占位符的内容。
   const ctx = new ContextManager(reloaded, 'next');
   assert.ok(ctx.all().some((m) => m.content === maskPlaceholder('y'.repeat(3000))));
 });

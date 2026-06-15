@@ -73,7 +73,7 @@ Web 创建 thread
 -> LLM 请求工具时执行工具
 -> 工具结果回填上下文
 -> 事件经 WebSocket 实时推送并写入 events
--> Agent 调用 finish_conversation 后 run done
+-> Agent 输出最终汇报且计划已进入 reporting 后 run done
 ```
 
 当前关键设计：
@@ -121,7 +121,7 @@ Web 创建 thread
 - `registry.ts`：工具注册表和统一执行入口。
 - `policy.ts`：工具 allow/deny、路径围栏、shell 开关、网络开关、输出截断。
 - `sandbox.ts`：shell 子进程执行后端，支持宿主执行和 bwrap。
-- 具体工具：`shell`、`file_read`、`file_write`、`file_edit`、`glob`、`grep`、`web_fetch`、`web_search`、`ask_user`、`write_html_artifact`、`update_plan`、`finish_conversation`。
+- 具体工具：`shell`、`file_read`、`file_write`、`file_edit`、`glob`、`grep`、`web_fetch`、`web_search`、`ask_user`、`write_html_artifact`、`update_plan`。
 
 `server/src/store/`
 

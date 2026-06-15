@@ -1,18 +1,14 @@
-// Convert persisted run history (loaded over REST) into AI SDK `UIMessage`s, so
-// useChat can restore a thread on selection. Each run becomes a user message
-// (the input) plus an assistant message whose parts are folded from the run's
-// events — mirroring how the live stream produces parts (Phase 3).
+// 把 REST 加载的持久化 run 历史转换成 AI SDK UIMessage，便于切换/刷新会话后恢复。
+// 每个 run 会变成一条用户消息和一条由事件折叠出来的 assistant 消息。
 
 import type { UIMessage } from 'ai';
-import type { RunWithEvents } from './api';
+import type { RunWithEvents, StreamStats } from './api';
 import { toUiEvent } from './transport/legacy';
 import type { UiEvent } from './transport/types';
 
 type Part = UIMessage['parts'][number];
 
-/** Fold an ordered `UiEvent` list into linear message parts (text / reasoning /
- *  tool). Contiguous text and reasoning deltas coalesce; tool input/output merge
- *  by call id. */
+/** 把有序 UiEvent 折叠成线性 parts；连续文本/思考会合并，工具输入输出按 id 合并。 */
 export function foldUiEventsToParts(events: UiEvent[]): Part[] {
   const parts: Part[] = [];
   const toolById = new Map<string, Record<string, unknown>>();
@@ -20,6 +16,7 @@ export function foldUiEventsToParts(events: UiEvent[]): Part[] {
   let reasonBuf = '';
   let reasonStep: number | null = null;
   let reasonTiming: { startedAt?: string; endedAt?: string; durationMs?: number } = {};
+  let latestStats: StreamStats | null = null;
 
   const flushText = () => {
     if (textBuf) {
@@ -47,6 +44,10 @@ export function foldUiEventsToParts(events: UiEvent[]): Part[] {
   for (const e of events) {
     switch (e.kind) {
       case 'stream_stats':
+        latestStats = e.stats;
+        break;
+      case 'usage_update':
+        parts.push({ type: 'data-usage-update', id: `usage-${e.step}`, data: e.usage } as unknown as Part);
         break;
       case 'reasoning':
         flushText();
@@ -133,6 +134,7 @@ export function foldUiEventsToParts(events: UiEvent[]): Part[] {
         flushReason();
         if (textBuf) flushText();
         else if (e.output) parts.push({ type: 'text', text: e.output, state: 'done' });
+        parts.push({ type: 'data-final-output', id: `final-${e.step}`, data: { step: e.step, output: e.output } } as unknown as Part);
         break;
       case 'error':
         flushReason();
@@ -145,10 +147,32 @@ export function foldUiEventsToParts(events: UiEvent[]): Part[] {
   }
   flushReason();
   flushText();
+  if (latestStats) {
+    parts.push({ type: 'data-stream-stats', id: `stats-${latestStats.updatedAt}`, data: latestStats } as unknown as Part);
+  }
   return parts;
 }
 
-/** Map persisted runs (oldest→newest) to a flat UIMessage list. */
+function terminalStats(run: RunWithEvents): StreamStats | null {
+  const terminalStage = run.status === 'done' ? 'done' : run.status === 'error' || run.status === 'canceled' ? 'error' : null;
+  if (!terminalStage) return null;
+  const outputChars = run.output?.length ?? 0;
+  const errorChars = run.error?.length ?? 0;
+  return {
+    stage: terminalStage,
+    updatedAt: run.created_at,
+    totals: {
+      outputChars,
+      reasoningChars: 0,
+      toolInputChars: 0,
+      toolOutputChars: 0,
+      totalChars: outputChars + errorChars,
+    },
+    rate: { charsPerSecond: 0, history: [] },
+  };
+}
+
+/** 把按时间排序的持久化 runs 映射成扁平 UIMessage 列表。 */
 export function runsToUiMessages(runs: RunWithEvents[]): UIMessage[] {
   const messages: UIMessage[] = [];
   for (const run of runs) {
@@ -158,6 +182,10 @@ export function runsToUiMessages(runs: RunWithEvents[]): UIMessage[] {
     );
     if (run.goal_state?.plan?.length && !parts.some((part) => part.type === 'data-plan-state')) {
       parts.unshift({ type: 'data-plan-state', id: `plan-${run.id}`, data: run.goal_state } as unknown as Part);
+    }
+    if (!parts.some((part) => part.type === 'data-stream-stats')) {
+      const stats = terminalStats(run);
+      if (stats) parts.push({ type: 'data-stream-stats', id: `stats-${run.id}`, data: stats } as unknown as Part);
     }
     if (parts.length) {
       parts.unshift({ type: 'data-run-id', id: run.id, data: { runId: run.id } } as unknown as Part);

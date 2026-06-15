@@ -1,25 +1,21 @@
-// Transport boundary (Phase 0): the UI layer depends only on `UiEvent` and the
-// `UiTransport` interface — never on the concrete wire protocol (WS frames, SSE,
-// or a future event stream). Swapping the transport (LegacyTransport →
-// AiSdkTransport → AgUiTransport) must not touch any rendering code.
+// 传输边界：UI 层只依赖 UiEvent 和 UiTransport，不依赖具体线协议。
+// 切换 WS、SSE 或未来事件流时，不应该改渲染层代码。
 
-/** A user-submitted turn. Kept as an object so future fields (attachments, etc.)
- *  do not change the transport signature. */
+/** 用户提交的一轮输入；保留对象形态，便于后续增加附件等字段。 */
 export interface UserInput {
   text: string;
 }
 
 /**
- * Normalized UI event the rendering layer consumes. Independent of the wire
- * format; transports map their native frames onto this union.
+ * 渲染层消费的标准化 UI 事件，和底层线协议无关。
  *
- * `step` is preserved (the engine is multi-step and the UI groups by step). A
- * `tool` event may carry `input` (on the call) and/or `output` (on the result);
- * the renderer merges the two by `id`.
+ * step 会保留，因为 agent 引擎是多步骤的，UI 也按 step 分组。
+ * tool 事件可携带 input 或 output，渲染层按 id 合并。
  */
 export type UiEvent =
   | { kind: 'step_start'; step: number }
   | { kind: 'stream_stats'; step: number; stats: StreamStats }
+  | { kind: 'usage_update'; step: number; usage: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; estContextTokens?: number; contextBudget?: number } }
   | { kind: 'reasoning'; step: number; delta: string; startedAt?: string; endedAt?: string; durationMs?: number }
   | { kind: 'reasoning_timing'; step: number; startedAt: string; endedAt: string; durationMs: number }
   | { kind: 'text'; step: number; delta: string }
@@ -33,14 +29,13 @@ export type UiEvent =
   | { kind: 'error'; step: number; message: string };
 
 /**
- * Abstraction over "how a run is started and streamed". Upper layers call
- * `send` to begin a run and `subscribe` to receive `UiEvent`s; they never see
- * the underlying REST/WS calls.
+ * run 启动和流式订阅的抽象。上层只调用 send 和 subscribe，
+ * 不直接接触底层 REST/WS 调用。
  */
 export interface UiTransport {
-  /** Start a run for `input` on `threadId`; resolves with the new run id. */
+  /** 在指定 threadId 上用 input 启动 run，并返回新的 run id。 */
   send(threadId: string, input: UserInput): Promise<{ runId: string }>;
-  /** Stream live `UiEvent`s for a run. Returns an unsubscribe function. */
+  /** 订阅 run 的实时 UiEvent，并返回取消订阅函数。 */
   subscribe(runId: string, onEvent: (e: UiEvent) => void, onClose?: () => void): () => void;
 }
 import type { AskUserAnswer, AskUserSpec, GoalState } from '@/api';

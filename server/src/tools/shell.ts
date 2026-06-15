@@ -3,13 +3,9 @@ import { formatCommandResult, shellManager } from '../shell/manager.js';
 import { redactShellOutput } from '../shell/redact.js';
 import { runShellCommand } from './sandbox.js';
 import type { Tool } from './types.js';
+import { requiresDatabaseAccess } from './databaseAccessGuard.js';
 
 const isWindows = process.platform === 'win32';
-const DATABASE_CLI_RE = /(^|[\s;&|()])(?:psql|mysql|mongosh|beeline|duckdb|sqlite3)\b|\$DATABASE_URL|\$\{DATABASE_URL[}:+-]?/;
-
-function requiresDatabaseAccess(command: string): boolean {
-  return DATABASE_CLI_RE.test(command);
-}
 
 export const shellTool: Tool = {
   name: 'shell',

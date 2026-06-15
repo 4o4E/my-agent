@@ -1,4 +1,4 @@
-// Mirror of the server's AgentEvent union (kept in sync manually for the skeleton).
+// 前端手动同步后端 AgentEvent 联合类型。
 export type PlanStatus = 'todo' | 'doing' | 'done' | 'failed';
 
 export interface PlanItem {
@@ -8,6 +8,7 @@ export interface PlanItem {
 
 export interface GoalState {
   intent: string;
+  phase?: 'working' | 'reporting' | 'completed';
   plan: PlanItem[];
   decisions: string[];
   next: string;
@@ -16,6 +17,7 @@ export interface GoalState {
 export type AgentEvent =
   | { type: 'step_start'; step: number }
   | ({ type: 'stream_stats'; step: number } & StreamStats)
+  | { type: 'usage_update'; step: number; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; estContextTokens?: number; contextBudget?: number }
   | { type: 'reasoning'; step: number; text: string; startedAt?: string; endedAt?: string; durationMs?: number }
   | { type: 'reasoning_timing'; step: number; startedAt: string; endedAt: string; durationMs: number }
   | { type: 'llm_delta'; step: number; text: string }
@@ -156,6 +158,8 @@ export interface ToolSettings {
   shellDeny: string[];
   maxOutput: number;
 }
+
+export type PageState = Record<string, unknown>;
 
 export type DatasourceType = 'postgres' | 'mysql' | 'mongodb' | 'hive';
 export type DatasourceStatus = 'active' | 'disabled';
@@ -357,6 +361,15 @@ export const updateToolSettings = (settings: ToolSettings) =>
     body: JSON.stringify(settings),
   }).then(json<ToolSettings>);
 
+export const getPageState = () => fetch('/api/settings/page-state').then(json<PageState>);
+
+export const updatePageState = (state: PageState) =>
+  fetch('/api/settings/page-state', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state),
+  }).then(json<PageState>);
+
 export const listDatasources = () =>
   fetch('/api/datasources').then(json<{ datasources: Datasource[] }>);
 
@@ -473,7 +486,7 @@ export const takeoverShellSession = (sessionId: string) =>
 export const releaseShellSession = (sessionId: string) =>
   fetch(`/api/shell-sessions/${sessionId}/release`, { method: 'POST' }).then(json<{ session: ShellSession }>);
 
-/** Subscribe to a run's live event stream over WebSocket. */
+/** 通过 WebSocket 订阅 run 的实时事件流。 */
 export function subscribeRun(
   runId: string,
   onEvent: (e: AgentEvent) => void,
@@ -485,7 +498,7 @@ export function subscribeRun(
     try {
       onEvent(JSON.parse(m.data) as AgentEvent);
     } catch {
-      /* ignore malformed frame */
+      /* 忽略格式错误的帧 */
     }
   };
   ws.onclose = () => onClose?.();

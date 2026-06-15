@@ -56,7 +56,7 @@ test('maskOldAssistantToolCalls elides old large tool arguments but keeps ids', 
     { role: 'user', content: 'write report' },
     { role: 'assistant', content: null, toolCalls: [{ id: 'html1', name: 'write_html_artifact', arguments: hugeArgs }] },
     { role: 'tool', content: 'HTML artifact 已写入。', toolCallId: 'html1' },
-    { role: 'assistant', content: null, toolCalls: [{ id: 'f1', name: 'finish_conversation', arguments: '{}' }] },
+    { role: 'assistant', content: null, toolCalls: [{ id: 'p1', name: 'update_plan', arguments: '{}' }] },
   ];
 
   const { messages, masked } = maskOldAssistantToolCalls(msgs, { keepRecent: 1 });

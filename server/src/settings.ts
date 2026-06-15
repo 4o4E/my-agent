@@ -11,6 +11,8 @@ export interface ToolSettings extends ToolPolicyConfig {
 }
 
 type SettingRow = { key: string; value: unknown };
+const PAGE_STATE_KEY = 'ui.pageState';
+const MAX_PAGE_STATE_BYTES = 200_000;
 
 const TOOL_SETTING_KEYS = [
   'tools.sandbox',
@@ -173,4 +175,29 @@ export async function saveToolSettings(input: unknown): Promise<ToolSettings> {
     );
   }
   return settings;
+}
+
+function normalizePageState(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const json = JSON.stringify(input);
+  if (Buffer.byteLength(json, 'utf8') > MAX_PAGE_STATE_BYTES) {
+    throw new Error('页面状态过大，无法保存');
+  }
+  return JSON.parse(json) as Record<string, unknown>;
+}
+
+export async function getPageState(): Promise<Record<string, unknown>> {
+  const { rows } = await query<SettingRow>(`SELECT value FROM app_settings WHERE key = $1`, [PAGE_STATE_KEY]);
+  return normalizePageState(rows[0]?.value);
+}
+
+export async function savePageState(input: unknown): Promise<Record<string, unknown>> {
+  const state = normalizePageState(input);
+  await query(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ($1, $2::jsonb, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [PAGE_STATE_KEY, JSON.stringify(state)],
+  );
+  return state;
 }

@@ -16,14 +16,14 @@ import type { Provider } from '../llm/types.js';
 const SYSTEM_PROMPT = `你是 my-agent，一个通用自主助手。
 
 你以循环方式工作：先思考，必要时调用工具，观察结果，然后继续推进，直到任务完成。
-本次 run 只能通过调用 finish_conversation 结束。
+本次 run 以最终汇报自然结束：没有工具调用且输出最终汇报时，系统会根据计划状态自动完成。
 
 行为准则：
 - 优先使用工具真实行动，例如运行命令、读写文件、搜索网页。
 - 工具有帮助时就调用一个或多个工具，不要只凭猜测回答。
-- 不要只靠文字结束本次 run；必须调用 finish_conversation，并且 completed=true，才算完成工作。
 - 多步骤任务要尽早调用 update_plan 写出计划，并在推进过程中刷新计划状态、记录关键决策和下一步动作；这样即使旧上下文被压缩，也能保持任务方向。
-- 计划必须和最终状态一致：已有 plan 时，结束前所有条目都必须是 done 或 failed；仍是 todo/doing 时不能调用 completed=true。
+- 最终汇报前必须调用 update_plan，把所有计划条目标记为 done 或 failed，并把 phase 设置为 reporting。
+- Final report rule: before the final answer, call update_plan, mark every plan item as done or failed, and set phase to reporting.
 - 真实执行失败或路径改变时，必须同步调用 update_plan；失败条目标记为 failed 并保留，不要从 plan 里删除。
 - 回复要简洁；能合理假设时说明假设，不要频繁打断用户。
 - 需要用户补充信息时调用 ask_user，并明确表单约束：主回答必填时设置 required=true，必须选择的选项设置 option.required=true，不要要求用户在普通输入框里回答。
@@ -36,7 +36,7 @@ const SYSTEM_PROMPT = `你是 my-agent，一个通用自主助手。
 - 标准流程：
   1. 先用需要的工具收集数据。
   2. 用 Markdown 组织结果；复杂页面则写入 workspace 下的 HTML artifact。
-  3. 只有任务完成后，调用 finish_conversation，设置 completed=true，并写清楚工作进度。`;
+  3. 任务完成后，先把 phase 设置为 reporting，再直接输出最终汇报。`;
 
 export interface RuntimeContextInfo {
   workspaceRoot: string;
@@ -57,7 +57,7 @@ export function renderRuntimeContext(info: RuntimeContextInfo): string {
 - shell session 会长期记住当前目录 / The shell session remembers cwd across commands: 需要切目录时直接执行 cd，不要给每次命令单独传 cwd。旧 shell 工具只是兼容入口。`;
 }
 
-/** What a compaction pass did, surfaced for events/telemetry. */
+/** 一次压缩实际做了什么，用于事件和遥测。 */
 export interface CompactionInfo {
   estBefore: number;
   estAfter: number;
@@ -69,15 +69,13 @@ export interface CompactionInfo {
 
 export interface CompactionResult {
   info: CompactionInfo;
-  /** DB ids newly masked this pass — the executor persists these so the decision
-   *  survives a restart. (Window drops are in-memory only and never persisted.) */
+  /** 本次新增 mask 的 DB id，executor 会落库；窗口丢弃只在内存中发生。 */
   collapsedIds: number[];
   summarizedIds: number[];
   summaryMessage?: LlmMessage;
 }
 
-/** A message in the working set plus the DB row it came from (null = not yet
- *  persisted or not maskable, e.g. the system prompt). */
+/** 工作上下文里的消息及其 DB 行；null 表示尚未落库或不可 mask，例如 system prompt。 */
 interface WorkingMessage {
   msg: LlmMessage;
   dbId: number | null;
@@ -89,21 +87,18 @@ interface ContextOptions {
 }
 
 /**
- * Holds the working message list for a single run and keeps it under the context
- * budget. A fresh system prompt, the prior thread history (multi-turn memory, already
- * compacted by the store), and the new user input. Before each LLM call the executor
- * calls `maybeCompact()` so a long task never blows past the model window. Masking
- * decisions are reported back so they can be persisted (long-task design §3.3, §4).
+ * 管理单个 run 的工作消息列表，并把它压在上下文预算内。
+ * 每次模型调用前由 executor 调用 maybeCompact()，避免长任务撞上模型窗口；
+ * mask 决策会返回给 executor 落库。
  */
 export class ContextManager {
   private readonly forceMaskedToolNames: string[] = [];
   private items: WorkingMessage[] = [];
-  /** The goal-anchor system message, held by reference so it can be refreshed in
-   *  place each step. Kept in the leading system block so compaction never drops it. */
+  /** 目标锚点 system 消息按引用保存，每步可原地刷新，并放在前置 system 区避免被压缩丢掉。 */
   private goalItem: WorkingMessage;
-  /** Tokens-per-char ratio, calibrated from real provider usage when available. */
+  /** 每字符 token 估算比例，有真实 provider 用量时会校准。 */
   private tokensPerChar = 0.25;
-  /** Chars actually sent on the last LLM call, used to calibrate the ratio. */
+  /** 上次模型调用实际发送的字符数，用于校准比例。 */
   private lastSentChars = 0;
 
   constructor(priorMessages: ThreadMessage[], userInput: string, initialGoal = '', opts: ContextOptions = {}) {
@@ -121,22 +116,22 @@ export class ContextManager {
     if (appendUserInput) this.items.push({ msg: { role: 'user', content: userInput }, dbId: null });
   }
 
-  /** Refresh the goal-anchor system message (re-injected every step, drift defense). */
+  /** 刷新目标锚点 system 消息；每步重注入，用来防止目标漂移。 */
   setGoal(rendered: string): void {
     this.goalItem.msg = { role: 'system', content: rendered };
   }
 
-  /** The clean LLM-facing message list (no DB ids leak to providers). */
+  /** 返回干净的模型消息列表，不把 DB id 泄露给 provider。 */
   all(): LlmMessage[] {
     return this.items.map((i) => i.msg);
   }
 
-  /** Append a freshly produced message, optionally with its persisted DB id. */
+  /** 追加新生成消息，可同时带上已落库的 DB id。 */
   add(message: LlmMessage, dbId: number | null = null): void {
     this.items.push({ msg: message, dbId });
   }
 
-  /** Attach the DB id to the most recently added message (set after persisting it). */
+  /** 给最近追加的消息补上落库后的 DB id。 */
   setLastDbId(dbId: number): void {
     if (this.items.length) this.items[this.items.length - 1].dbId = dbId;
   }
@@ -147,21 +142,21 @@ export class ContextManager {
     if (item) item.dbId = dbId;
   }
 
-  /** Feed back real token usage so the next estimate is calibrated to this model. */
+  /** 回填真实 token 用量，让下一次估算贴近当前模型。 */
   recordUsage(usage?: LlmUsage): void {
     if (usage?.inputTokens && this.lastSentChars > 0) {
       const ratio = usage.inputTokens / this.lastSentChars;
-      // Clamp to a sane band so one odd response can't wreck the estimator.
+      // 限制在合理区间内，避免单次异常响应把估算器带偏。
       this.tokensPerChar = Math.min(0.6, Math.max(0.15, ratio));
     }
   }
 
-  /** Current estimated token size of the working set. */
+  /** 当前工作上下文的估算 token 数。 */
   estTokens(): number {
     return estimateTokens(this.all(), this.tokensPerChar);
   }
 
-  /** Apply cheap L1 masking and return newly collapsed DB ids. */
+  /** 执行低成本 L1 mask，并返回本次新折叠的 DB id。 */
   private maskOldPayloads(keepRecent: number): { collapsedIds: number[]; masked: number } {
     const collapsedIds: number[] = [];
     let masked = 0;
@@ -195,8 +190,7 @@ export class ContextManager {
     return { collapsedIds, masked };
   }
 
-  /** Run-end cleanup: shrink old bulky payloads for future turns even when this
-   *  run stayed below the live compaction threshold. */
+  /** run 结束清理：即使本轮没触发实时压缩，也为后续轮次收缩旧的大 payload。 */
   compactForHistory(reason = 'post-run-history'): CompactionResult | null {
     const { keepRecentMessages } = config.agent;
     const estBefore = this.estTokens();
@@ -211,9 +205,8 @@ export class ContextManager {
   }
 
   /**
-   * Run the compaction cascade if the working set is over the warn threshold.
-   * Mutates the working list in place. Returns what it did (with the DB ids newly
-   * masked), or null if untouched. Always records the post-compaction size.
+   * 工作上下文超过警戒线时执行压缩级联。
+   * 这里会原地修改工作列表；有改动则返回新 mask 的 DB id 和压缩结果，否则返回 null。
    */
   async maybeCompact(provider?: Provider): Promise<CompactionResult | null> {
     const { contextBudget, compactWarnRatio, compactHardRatio, keepRecentMessages, contextBudgetSource, modelContextWindow } =
@@ -238,8 +231,7 @@ export class ContextManager {
     let dropped = 0;
     const reason = `${contextBudgetSource}: budget=${contextBudget}, modelWindow=${modelContextWindow}`;
 
-    // L1 — mask old bulky tool results and assistant tool-call arguments. Both
-    // keep message structure intact, so persisted history can be compact but valid.
+    // L1：mask 旧的大工具结果和 assistant 工具参数，同时保持消息结构合法。
     const { collapsedIds, masked } = this.maskOldPayloads(keepRecentMessages);
 
     let l3Summary: LlmMessage | undefined;
@@ -258,9 +250,7 @@ export class ContextManager {
       }
     }
 
-    // L2 — sliding window, only if masking/L3 left us over the hard ratio. This is an
-    // in-memory safety valve: it drops rounds but never persists the loss (the full
-    // history stays in the DB and is re-derived on the next load).
+    // L2：滑动窗口只作为内存安全阀，不落库丢弃；完整历史仍保留在 DB 中。
     if (estimateTokens(this.all(), this.tokensPerChar) >= contextBudget * compactHardRatio) {
       const m2 = slidingWindow(this.all(), { keepRecent: keepRecentMessages });
       if (m2.dropped > 0) {

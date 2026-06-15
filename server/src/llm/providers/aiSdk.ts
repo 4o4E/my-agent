@@ -162,7 +162,11 @@ export function createAiSdkProvider(cfg: LlmConfig, opts: AiSdkOptions): Provide
           name: c.toolName,
           arguments: JSON.stringify(c.input ?? {}),
         })),
-        usage: { inputTokens: r.usage?.inputTokens, outputTokens: r.usage?.outputTokens },
+        usage: {
+          inputTokens: r.usage?.inputTokens,
+          outputTokens: r.usage?.outputTokens,
+          cachedInputTokens: (r.usage as { cachedInputTokens?: number } | undefined)?.cachedInputTokens,
+        },
       };
     },
 
@@ -190,7 +194,11 @@ export function createAiSdkProvider(cfg: LlmConfig, opts: AiSdkOptions): Provide
           name: c.toolName,
           arguments: JSON.stringify(c.input ?? {}),
         })),
-        usage: { inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens },
+        usage: {
+          inputTokens: usage?.inputTokens,
+          outputTokens: usage?.outputTokens,
+          cachedInputTokens: (usage as { cachedInputTokens?: number } | undefined)?.cachedInputTokens,
+        },
       };
     },
   };

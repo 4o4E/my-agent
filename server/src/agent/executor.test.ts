@@ -38,15 +38,7 @@ function testToolSettings(overrides: Partial<ToolSettings> = {}): ToolSettings {
   };
 }
 
-function finishCall(id: string, progress: string, completed = true) {
-  return {
-    id,
-    name: 'finish_conversation',
-    arguments: JSON.stringify({ progress, completed }),
-  };
-}
-
-// A provider that calls the `glob` tool on its first turn, then ends explicitly.
+// 一个先调用工具、再直接输出最终汇报的 provider。
 function scriptedProvider(): Provider {
   let turn = 0;
   return {
@@ -56,7 +48,7 @@ function scriptedProvider(): Provider {
       if (turn === 1) {
         return { content: null, toolCalls: [{ id: 'call_1', name: 'glob', arguments: '{"pattern":"**/*.json"}' }] };
       }
-      return { content: 'all done', toolCalls: [finishCall('finish_1', 'all done')] };
+      return { content: 'all done', toolCalls: [] };
     },
   };
 }
@@ -79,26 +71,28 @@ test('executeRun: runs the loop across steps and finalizes', async () => {
   assert.equal(finished?.status, 'done');
   assert.equal(finished?.output, 'all done');
 
-  // Two steps: step 1 (tool call), step 2 (explicit finish tool).
-  const types = published.filter((e) => e.type !== 'stream_stats').map((e) => `${e.step}:${e.type}`);
+  // 两步：第一步调用工具，第二步直接输出最终汇报。
+  const types = published
+    .filter((e) => e.type !== 'stream_stats' && e.type !== 'usage_update')
+    .map((e) => `${e.step}:${e.type}`);
   assert.deepEqual(types, [
     '1:step_start',
     '1:tool_call',
     '1:tool_result',
     '2:step_start',
-    '2:llm_delta',
-    '2:tool_call',
-    '2:tool_result',
     '2:final',
   ]);
+  const usage = published.filter((e): e is Extract<AgentEvent, { type: 'usage_update' }> => e.type === 'usage_update');
+  assert.deepEqual(usage.map((e) => e.step), [1, 2]);
+  assert.ok(usage.every((e) => e.estContextTokens !== undefined && e.contextBudget === config.agent.contextBudget));
   const stats = published.filter((e): e is Extract<AgentEvent, { type: 'stream_stats' }> => e.type === 'stream_stats');
   assert.ok(stats.some((e) => e.totals.outputChars >= 'all done'.length));
   assert.ok(stats.some((e) => e.totals.toolInputChars > 0));
   assert.ok(stats.some((e) => e.totals.toolOutputChars > 0));
 
-  // 对话会持久化为：用户消息、glob 的 assistant/tool 消息、finish 的 assistant/tool 消息。
+  // 对话会持久化为：用户消息、glob 的 assistant/tool 消息、最终 assistant 消息。
   const msgs = await store.loadThreadMessages(thread.id);
-  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant', 'tool']);
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant']);
 });
 
 test('executeRun: injects the current workspace root into the LLM context', async () => {
@@ -113,7 +107,7 @@ test('executeRun: injects the current workspace root into the LLM context', asyn
       name: 'capture-context',
       async complete(messages) {
         systemText = messages.filter((m) => m.role === 'system').map((m) => m.content ?? '').join('\n');
-        return { content: null, toolCalls: [finishCall('finish_1', 'done')] };
+        return { content: 'done', toolCalls: [] };
       },
     },
     publish: () => {},
@@ -175,7 +169,7 @@ test('executeRun: activates a skill and trims tools to allowed-tools', async () 
           };
         }
         secondSystemText = systemText;
-        return { content: 'done', toolCalls: [finishCall('finish_1', 'done')] };
+        return { content: 'done', toolCalls: [] };
       },
     },
     publish: (_id, e) => published.push(e),
@@ -190,7 +184,6 @@ test('executeRun: activates a skill and trims tools to allowed-tools', async () 
   assert.ok(toolNamesByTurn[0].includes('shell'));
   assert.ok(toolNamesByTurn[0].includes('skill_activate'));
   assert.ok(toolNamesByTurn[1].includes('file_read'));
-  assert.ok(toolNamesByTurn[1].includes('finish_conversation'));
   assert.ok(toolNamesByTurn[1].includes('skill_activate'));
   assert.equal(toolNamesByTurn[1].includes('shell'), false);
   const activated = published.find((e) => e.type === 'skill_activated');
@@ -198,7 +191,7 @@ test('executeRun: activates a skill and trims tools to allowed-tools', async () 
   assert.equal(activated?.type === 'skill_activated' ? activated.name : '', 'sample-skill');
   assert.deepEqual(activated?.type === 'skill_activated' ? activated.allowedTools : [], ['file_read']);
   const msgs = await store.loadThreadMessages(thread.id);
-  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'tool', 'assistant', 'tool']);
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'tool', 'assistant']);
   assert.equal(msgs[2].toolCallId, 'skill_1');
   assert.equal(msgs[3].toolCallId, 'read_1');
   assert.equal(msgs.some((m) => m.role === 'system' && (m.content ?? '').includes('已激活 Skill')), false);
@@ -225,7 +218,7 @@ test('executeRun: skill activation instructions do not leak into the next run hi
       async complete() {
         turn += 1;
         if (turn === 1) return { content: null, toolCalls: [{ id: 'skill_1', name: 'skill_activate', arguments: '{"name":"leaky-skill"}' }] };
-        return { content: null, toolCalls: [finishCall('finish_1', 'done')] };
+        return { content: 'done', toolCalls: [] };
       },
     },
     publish: () => {},
@@ -241,7 +234,7 @@ test('executeRun: skill activation instructions do not leak into the next run hi
       name: 'capture-next-run',
       async complete(messages) {
         secondRunSystemText = messages.filter((m) => m.role === 'system').map((m) => m.content ?? '').join('\n');
-        return { content: null, toolCalls: [finishCall('finish_2', 'done')] };
+        return { content: 'done', toolCalls: [] };
       },
     },
     publish: () => {},
@@ -256,22 +249,25 @@ test('executeRun: skill activation instructions do not leak into the next run hi
 test('executeRun: streams tool input stats without double counting final tool args', async () => {
   const store = new MemoryStore();
   const thread = await store.createThread();
-  const run = await store.createRun(thread.id, 'finish via streamed tool args');
-  const args = JSON.stringify({ progress: 'done', completed: true });
+  const run = await store.createRun(thread.id, 'update plan via streamed tool args');
+  const args = JSON.stringify({ phase: 'reporting', next: '汇报结果' });
   const published: AgentEvent[] = [];
+  let turn = 0;
 
   await executeRun(run.id, {
     store,
     provider: {
       name: 'stream-tool-input',
       async complete() {
-        throw new Error('complete should not be used');
+        return { content: 'done', toolCalls: [] };
       },
       async completeStream(_messages, _tools, onDelta) {
-        onDelta({ toolInputStart: { id: 'finish_1', name: 'finish_conversation' } });
-        onDelta({ toolInputDelta: { id: 'finish_1', name: 'finish_conversation', delta: args.slice(0, 12) } });
-        onDelta({ toolInputDelta: { id: 'finish_1', name: 'finish_conversation', delta: args.slice(12) } });
-        return { content: null, toolCalls: [finishCall('finish_1', 'done')] };
+        turn += 1;
+        if (turn > 1) return { content: 'done', toolCalls: [] };
+        onDelta({ toolInputStart: { id: 'plan_1', name: 'update_plan' } });
+        onDelta({ toolInputDelta: { id: 'plan_1', name: 'update_plan', delta: args.slice(0, 12) } });
+        onDelta({ toolInputDelta: { id: 'plan_1', name: 'update_plan', delta: args.slice(12) } });
+        return { content: null, toolCalls: [{ id: 'plan_1', name: 'update_plan', arguments: args }] };
       },
     },
     publish: (_id, e) => published.push(e),
@@ -291,7 +287,7 @@ test('executeRun: keeps multi-turn memory within a thread', async () => {
   const run1 = await store.createRun(thread.id, 'first');
   await executeRun(run1.id, {
     store,
-    provider: { name: 's', async complete() { return { content: 'ok1', toolCalls: [finishCall('f1', 'ok1')] }; } },
+    provider: { name: 's', async complete() { return { content: 'ok1', toolCalls: [] }; } },
     publish: () => {},
     hardStepCap: 3,
     toolSettings: testToolSettings(),
@@ -306,7 +302,7 @@ test('executeRun: keeps multi-turn memory within a thread', async () => {
       name: 's',
       async complete(messages) {
         seenPriorCount = messages.filter((m) => m.role !== 'system').length;
-        return { content: 'ok2', toolCalls: [finishCall('f2', 'ok2')] };
+        return { content: 'ok2', toolCalls: [] };
       },
     },
     publish: () => {},
@@ -314,8 +310,8 @@ test('executeRun: keeps multi-turn memory within a thread', async () => {
     toolSettings: testToolSettings(),
   });
 
-  // prior: user(first) + assistant(finish call) + tool(finish result) + new user(second) = 4
-  assert.equal(seenPriorCount, 4);
+  // prior: user(first) + assistant(final) + new user(second) = 3
+  assert.equal(seenPriorCount, 3);
 });
 
 test('executeRun: compacts bulky old history when finishing a run', async () => {
@@ -337,7 +333,7 @@ test('executeRun: compacts bulky old history when finishing a run', async () => 
     const published: AgentEvent[] = [];
     await executeRun(run.id, {
       store,
-      provider: { name: 's', async complete() { return { content: 'ok', toolCalls: [finishCall('f1', 'ok')] }; } },
+      provider: { name: 's', async complete() { return { content: 'ok', toolCalls: [] }; } },
       publish: (_id, e) => published.push(e),
       hardStepCap: 3,
       toolSettings: testToolSettings(),
@@ -358,7 +354,7 @@ test('executeRun: compacts bulky old history when finishing a run', async () => 
   }
 });
 
-test('executeRun: text without finish_conversation is not completion', async () => {
+test('executeRun: text without tools completes when no plan is open', async () => {
   const store = new MemoryStore();
   const thread = await store.createThread();
   const run = await store.createRun(thread.id, 'answer directly');
@@ -366,7 +362,7 @@ test('executeRun: text without finish_conversation is not completion', async () 
   await executeRun(run.id, {
     store,
     provider: {
-      name: 'no-finish',
+      name: 'direct-final',
       async complete() {
         return { content: 'premature final answer', toolCalls: [] };
       },
@@ -377,8 +373,8 @@ test('executeRun: text without finish_conversation is not completion', async () 
   });
 
   const finished = await store.getRun(run.id);
-  assert.equal(finished?.status, 'error');
-  assert.match(finished?.error ?? '', /hard step cap/);
+  assert.equal(finished?.status, 'done');
+  assert.equal(finished?.output, 'premature final answer');
 });
 
 test('executeRun: stops and errors at the hard step cap', async () => {
@@ -501,7 +497,7 @@ test('executeRun: rejects malformed string-wrapped tool args without running the
             ],
           };
         }
-        return { content: 'done', toolCalls: [finishCall('finish_1', 'recovered')] };
+        return { content: 'done', toolCalls: [] };
       },
     },
     publish: (_id, e) => published.push(e),
@@ -512,7 +508,7 @@ test('executeRun: rejects malformed string-wrapped tool args without running the
   const failedTool = published.find((e) => e.type === 'tool_result' && e.id === 'write_1');
   assert.equal(failedTool?.type, 'tool_result');
   assert.match(failedTool?.type === 'tool_result' ? failedTool.result : '', /工具参数无效，未执行 file_write/);
-  assert.equal((await store.getRun(run.id))?.output, 'recovered');
+  assert.equal((await store.getRun(run.id))?.output, 'done');
 });
 
 test('executeRun: resumes the same run after a user answer without duplicating input', async () => {
@@ -530,7 +526,7 @@ test('executeRun: resumes the same run after a user answer without duplicating i
           toolCalls: [{ id: 'ask_1', name: 'ask_user', arguments: '{"question":"选 A 还是 B？"}' }],
         };
       }
-      return { content: 'ok', toolCalls: [finishCall('finish_1', 'used answer')] };
+      return { content: 'ok', toolCalls: [] };
     },
   };
 
@@ -541,7 +537,7 @@ test('executeRun: resumes the same run after a user answer without duplicating i
 
   const finished = await store.getRun(run.id);
   assert.equal(finished?.status, 'done');
-  assert.equal(finished?.output, 'used answer');
+  assert.equal(finished?.output, 'ok');
   const msgs = await store.loadThreadMessages(thread.id);
   assert.equal(msgs.filter((m) => m.role === 'user' && m.content === 'needs answer').length, 1);
   assert.ok(msgs.some((m) => m.role === 'user' && m.content?.includes('用户回答')));
