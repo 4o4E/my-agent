@@ -549,7 +549,7 @@ test('memory store: deleteThread removes dependent run data', async () => {
   const run = await store.createRun(thread.id, 'delete me');
   await store.addMessage(thread.id, run.id, null, { role: 'user', content: 'delete me' });
   await store.addEvent(run.id, null, { type: 'final', step: 1, output: 'done' });
-  const session = await store.createShellSession({ threadId: thread.id, workspaceRoot: '/tmp/ws', backend: 'none' });
+  const session = await store.createShellSession({ threadId: thread.id, name: 'Default', owner: 'system', workspaceRoot: '/tmp/ws', backend: 'none' });
   const command = await store.createShellCommand({
     sessionId: session.id,
     runId: run.id,

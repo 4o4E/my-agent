@@ -81,7 +81,8 @@ function normalizeActor(value: unknown): ShellActor {
 }
 
 function scopedSession(sessions: ShellSessionRow[]): ShellSessionRow | null {
-  return sessions.find((s) => s.status !== 'closed' && s.status !== 'orphaned' && s.lease_actor !== 'user') ?? null;
+  return sessions.find((s) => s.name === 'Default' && s.status !== 'closed' && s.status !== 'orphaned')
+    ?? sessions.find((s) => s.status !== 'closed' && s.status !== 'orphaned') ?? null;
 }
 
 function isWithin(root: string, target: string): boolean {
@@ -128,6 +129,37 @@ function tailText(logs: Awaited<ReturnType<typeof store.getShellCommandLogs>>, l
   return text.length <= limit ? text : text.slice(text.length - limit);
 }
 
+function settingsSnapshot(settings: ToolSettings): Record<string, unknown> {
+  return {
+    sandbox: settings.sandbox,
+    sandboxBackend: settings.sandboxBackend,
+    shellUseHostPath: settings.shellUseHostPath,
+    shellAllowCommands: settings.shellAllowCommands,
+    network: settings.network,
+  };
+}
+
+function restoredSettings(session: ShellSessionRow, current: ToolSettings): ToolSettings {
+  const snap = session.config_snapshot ?? {};
+  return {
+    ...current,
+    workspaceRoot: session.workspace_root,
+    sandbox: snap.sandbox === 'off' || snap.sandbox === 'enforce' ? snap.sandbox : current.sandbox,
+    sandboxBackend:
+      snap.sandboxBackend === 'auto' || snap.sandboxBackend === 'none' || snap.sandboxBackend === 'bwrap'
+        ? snap.sandboxBackend
+        : current.sandboxBackend,
+    shellUseHostPath: typeof snap.shellUseHostPath === 'boolean' ? snap.shellUseHostPath : current.shellUseHostPath,
+    shellAllowCommands: Array.isArray(snap.shellAllowCommands) ? snap.shellAllowCommands.map(String) : current.shellAllowCommands,
+    network: snap.network === 'enabled' || snap.network === 'disabled' ? snap.network : current.network,
+  };
+}
+
+function fallbackName(owner: ShellSessionRow['owner'], index: number): string {
+  if (owner === 'system') return 'Default';
+  return `${owner === 'user' ? 'User' : 'Agent'} ${index}`;
+}
+
 export class ShellManager {
   private active = new Map<string, ActiveCommand>();
 
@@ -135,17 +167,19 @@ export class ShellManager {
     threadId: string;
     settings: ToolSettings;
     runId?: string;
-    pinned?: boolean;
-    ttlMs?: number | null;
+    name?: string;
+    owner?: ShellSessionRow['owner'];
     step?: number;
   }): Promise<ShellSessionRow> {
-    const idleExpiresAt = input.pinned ? null : futureIso(input.ttlMs ?? 30 * 60_000);
+    const owner = input.owner ?? 'agent';
+    const name = await this.nextSessionName(input.threadId, input.settings.workspaceRoot, owner, input.name);
     const session = await store.createShellSession({
       threadId: input.threadId,
+      name,
+      owner,
       workspaceRoot: input.settings.workspaceRoot,
       backend: input.settings.sandboxBackend,
-      pinned: input.pinned === true,
-      idleExpiresAt,
+      configSnapshot: settingsSnapshot(input.settings),
     });
     await store.addShellSessionEvent(session.id, 'system', 'opened', { runId: input.runId ?? null });
     if (input.runId) {
@@ -168,19 +202,27 @@ export class ShellManager {
     return session;
   }
 
+  async ensureDefaultSession(threadId: string, settings: ToolSettings): Promise<ShellSessionRow> {
+    const existing = (await store.listShellSessions(threadId, settings.workspaceRoot)).find((session) => session.name === 'Default');
+    return existing ?? this.openSession({ threadId, settings, owner: 'system', name: 'Default' });
+  }
+
   async reuseSession(input: { threadId: string; settings: ToolSettings; sessionId?: string; runId?: string; step?: number }): Promise<ShellSessionRow> {
     if (input.sessionId) {
       const session = await store.getShellSession(input.sessionId);
       if (!session) throw new Error(`shell session 不存在：${input.sessionId}`);
       if (session.thread_id !== input.threadId) throw new Error('shell session 不属于当前 thread');
+      if (session.deleted_at) throw new Error('shell session 已删除');
       if (session.status === 'closed' || session.status === 'orphaned') throw new Error(`shell session 当前状态为 ${session.status}`);
       return session;
     }
-    const existing = scopedSession(await store.listShellSessions(input.threadId, input.settings.workspaceRoot));
-    return existing ?? this.openSession(input);
+    const sessions = await store.listShellSessions(input.threadId, input.settings.workspaceRoot);
+    const existing = scopedSession(sessions);
+    return existing ?? this.ensureDefaultSession(input.threadId, input.settings);
   }
 
   async listSessions(threadId: string, settings: ToolSettings): Promise<ShellSessionRow[]> {
+    await this.ensureDefaultSession(threadId, settings);
     return store.listShellSessions(threadId, settings.workspaceRoot);
   }
 
@@ -202,7 +244,7 @@ export class ShellManager {
     const session = await store.getShellSession(input.sessionId);
     if (!session) throw new Error(`shell session 不存在：${input.sessionId}`);
     if (session.thread_id !== input.context.threadId) throw new Error('shell session 不属于当前 thread');
-    if (session.lease_actor === 'user' && input.actor !== 'user') throw new Error('用户正在接管该 shell session，agent 只能 poll，不能写入。');
+    if (session.deleted_at) throw new Error('shell session 已删除');
     const recent = await store.listShellCommandsBySession(session.id, 10);
     const running = recent.find((cmd) => cmd.status === 'queued' || cmd.status === 'running');
     if (running) throw new Error(`shell session 正在执行命令 ${running.id}，请先 poll 或 kill；需要并发时请打开新的 session。`);
@@ -237,7 +279,7 @@ export class ShellManager {
       cwdFile,
       commandText: commandWithCwd(commandWithCwdCapture(commandText, cwdFile), session.workspace_root, cwd),
       displayCommand: commandText,
-      settings: input.settings,
+      settings: restoredSettings(session, input.settings),
       env: input.env,
       context: input.context,
     });
@@ -309,9 +351,21 @@ export class ShellManager {
         error: '服务重启后无法重新连接本地 shell 进程。',
         ended_at: nowIso(),
       });
-      await store.updateShellSession(command.session_id, { status: 'orphaned', lease_actor: null, lease_run_id: null });
+      await store.updateShellSession(command.session_id, { status: 'idle', lease_actor: null, lease_run_id: null });
     }
     return running.length;
+  }
+
+  private async nextSessionName(threadId: string, workspaceRoot: string, owner: ShellSessionRow['owner'], requested?: string): Promise<string> {
+    const sessions = await store.listShellSessions(threadId, workspaceRoot);
+    const used = new Set(sessions.map((session) => session.name));
+    const trimmed = requested?.trim();
+    if (owner === 'system') return 'Default';
+    if (trimmed && trimmed !== 'Default' && !used.has(trimmed)) return trimmed;
+    for (let index = 1; ; index += 1) {
+      const name = fallbackName(owner, index);
+      if (!used.has(name)) return name;
+    }
   }
 
   private async spawnCommand(input: {
@@ -477,7 +531,7 @@ export class ShellManager {
     });
     const finalCwd = await readCapturedCwd(active.workspaceRoot, active.cwdFile);
     const session = await store.getShellSession(active.sessionId);
-    const terminalSession = session?.status === 'closed' || session?.status === 'closing' || session?.status === 'orphaned';
+    const terminalSession = !!session?.deleted_at || session?.status === 'closed' || session?.status === 'closing' || session?.status === 'orphaned';
     await store.updateShellSession(active.sessionId, {
       // 关闭/孤儿化是 session 的终态；迟到的进程退出事件不能把它改回 idle。
       ...(terminalSession ? {} : { status: 'idle' }),

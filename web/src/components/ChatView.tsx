@@ -121,7 +121,9 @@ export function ChatView({
           busy={busy}
           threadId={threadId}
           onOpenShellPreview={onOpenShellPreview}
-          className="absolute right-12 top-16 z-30"
+          className={wide
+            ? 'absolute right-6 top-16 z-30 min-w-72 max-w-[calc(100vw-3rem)] xl:left-[calc(50%+33rem)] xl:w-auto xl:max-w-none'
+            : 'absolute right-6 top-16 z-30 min-w-72 max-w-[calc(100vw-3rem)] xl:left-[calc(50%+25rem)] xl:w-auto xl:max-w-none'}
         />
       )}
 

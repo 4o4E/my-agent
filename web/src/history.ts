@@ -160,7 +160,7 @@ function terminalStats(run: RunWithEvents): StreamStats | null {
   const errorChars = run.error?.length ?? 0;
   return {
     stage: terminalStage,
-    updatedAt: run.created_at,
+    updatedAt: run.updated_at,
     totals: {
       outputChars,
       reasoningChars: 0,
@@ -172,11 +172,22 @@ function terminalStats(run: RunWithEvents): StreamStats | null {
   };
 }
 
+function isTerminalRun(run: RunWithEvents): boolean {
+  return run.status === 'done' || run.status === 'error' || run.status === 'canceled';
+}
+
 /** 把按时间排序的持久化 runs 映射成扁平 UIMessage 列表。 */
 export function runsToUiMessages(runs: RunWithEvents[]): UIMessage[] {
   const messages: UIMessage[] = [];
   for (const run of runs) {
-    messages.push({ id: `${run.id}:u`, role: 'user', parts: [{ type: 'text', text: run.input }] });
+    messages.push({
+      id: `${run.id}:u`,
+      role: 'user',
+      parts: [
+        { type: 'text', text: run.input },
+        { type: 'data-message-time', id: `time-${run.id}:u`, data: { sentAt: run.created_at } } as unknown as Part,
+      ],
+    });
     const parts = foldUiEventsToParts(
       run.events.map(toUiEvent).filter((e): e is UiEvent => e !== null),
     );
@@ -189,6 +200,9 @@ export function runsToUiMessages(runs: RunWithEvents[]): UIMessage[] {
     }
     if (parts.length) {
       parts.unshift({ type: 'data-run-id', id: run.id, data: { runId: run.id } } as unknown as Part);
+      if (isTerminalRun(run)) {
+        parts.push({ type: 'data-message-time', id: `time-${run.id}:a`, data: { completedAt: run.updated_at } } as unknown as Part);
+      }
       messages.push({ id: `${run.id}:a`, role: 'assistant', parts });
     }
   }

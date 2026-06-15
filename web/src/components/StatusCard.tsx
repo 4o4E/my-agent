@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { UIMessage } from 'ai';
 import { CheckCircle2, Circle, Gauge, LoaderCircle, Settings2, Terminal, XCircle } from 'lucide-react';
 import { listShellSessions, type PlanItem, type ShellSession } from '@/api';
@@ -33,18 +33,6 @@ function formatNumber(value?: number): string {
 function formatPercent(numerator?: number, denominator?: number): string {
   if (numerator == null || denominator == null || denominator <= 0) return '暂无';
   return `${((numerator / denominator) * 100).toFixed(1)}%`;
-}
-
-function latestAssistant(messages: UIMessage[]): UIMessage | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'assistant') return messages[i];
-  }
-  return null;
-}
-
-function runIdFrom(message: UIMessage | null): string {
-  const part = message?.parts.find((p) => p.type === 'data-run-id') as { data?: { runId?: string } } | undefined;
-  return part?.data?.runId ?? '暂无';
 }
 
 function usageFromPart(part: UIMessage['parts'][number]): UsageSnapshot | null {
@@ -124,7 +112,11 @@ export function AgentStatusCard({ messages, busy, threadId, className, onOpenShe
   const [configOpen, setConfigOpen] = useState(false);
   const [sessions, setSessions] = useState<ShellSession[]>([]);
   const usage = latestTokenUsage(messages);
-  const assistant = latestAssistant(messages);
+  const messageSummary = useMemo(() => {
+    const userCount = messages.filter((message) => message.role === 'user').length;
+    const assistantCount = messages.filter((message) => message.role === 'assistant').length;
+    return `${userCount} 轮提问 · ${assistantCount} 条回复`;
+  }, [messages]);
   const openShells = sessions.filter((session) => session.status !== 'closed');
   const runningShells = openShells.filter((session) => session.status === 'busy' || session.commands?.some((cmd) => cmd.status === 'queued' || cmd.status === 'running'));
 
@@ -182,8 +174,8 @@ export function AgentStatusCard({ messages, busy, threadId, className, onOpenShe
       <div className="space-y-1">
         {show('run') && (
           <>
-            <StatusRow label="Thread" value={threadId ?? '暂无'} />
-            <StatusRow label="Run" value={runIdFrom(assistant)} />
+            <StatusRow label="状态" value={busy ? '运行中' : '空闲'} />
+            <StatusRow label="消息" value={messageSummary} />
           </>
         )}
         {show('plan') && <PlanList messages={messages} />}
@@ -217,10 +209,10 @@ export function AgentStatusCard({ messages, busy, threadId, className, onOpenShe
               type="button"
               onClick={() => onOpenShellPreview?.(session.id)}
               className="inline-flex max-w-full items-center gap-1 rounded border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
-              title={session.id}
+              title={session.name}
             >
               <Terminal className="size-3" />
-              <span className="truncate">{session.id}</span>
+              <span className="truncate">{session.name}</span>
             </button>
           ))}
         </div>

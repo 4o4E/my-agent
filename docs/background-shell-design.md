@@ -1,7 +1,7 @@
 # 托管 Shell 资源设计
 
 > 目标：把所有 shell 都建模成需要主动管理的运行资源。LLM 先创建或复用 `shell_session`，
-> 再执行命令；命令可以前台等待完成，也可以后台运行。用户和 LLM 共享可观察、可审计、可接管的 shell 生命周期。
+> 再执行命令；命令可以前台等待完成，也可以后台运行。用户和 LLM 共享可观察、可审计、可恢复的 shell 交互记录。
 
 ## 1. 结论
 
@@ -28,7 +28,7 @@
 
 - 每次 shell 没有显式资源身份，cwd、环境、长进程和用户操作无法统一管理。
 - 长命令会占住当前 step，LLM 不能并行分析或继续调用其他工具。
-- 超时只得到失败文本，用户无法选择继续等或接管。
+- 超时只得到失败文本，用户无法选择继续等或直接中断。
 - 输出在一次 tool result 内返回，容易污染上下文，即使有 `TOOL_MAX_OUTPUT` 也会浪费窗口。
 - `cmd &` 不是正确方案：进程归属、日志、退出码、取消和沙箱退出语义都不可控。
 
@@ -36,7 +36,7 @@
 
 - E2B：`run(background=true)` 返回 command handle，支持 `connect/list/stdin/kill`。
 - Claude Code：后台 PTY job 与 Bash sandbox 分层；权限先判定，OS 沙箱约束子进程。
-- Codex / Copilot cloud agent / Cursor / Devin：任务拥有独立环境，用户能看日志、状态、diff、测试证据并接管。
+- Codex / Copilot cloud agent / Cursor / Devin：任务拥有独立环境，用户能看日志、状态、diff、测试证据，并可中断错误操作。
 
 落到本项目：实现**本地 bwrap/host 托管 shell 后端**，接口按 E2B 风格设计，未来可替换为 Docker/E2B。
 
@@ -52,7 +52,7 @@
 session 状态：
 
 ```text
-opening -> idle | busy | attached_by_user | closing | closed | orphaned
+opening -> idle | busy | closing | closed | orphaned
 ```
 
 command 状态：
@@ -63,7 +63,7 @@ queued -> running -> succeeded | failed | killed | timed_out | orphaned
 
 超时分两层：
 
-- `soft_timeout_ms`：到点后不强杀，发事件并让 LLM/用户选择继续、终止、接管。
+- `soft_timeout_ms`：到点后不强杀，发事件并让 LLM/用户选择继续或终止。
 - `hard_timeout_ms`：兜底强杀，避免无人值守任务长期占资源。
 
 软超时不是阻塞点。用户没看到时，命令继续运行；到硬超时仍无人处理才终止。需要用户确认的场景用
@@ -73,12 +73,12 @@ queued -> running -> succeeded | failed | killed | timed_out | orphaned
 
 新工具以 session 为入口：
 
-- `shell_session_open(scope?, ttl_ms?, pinned?)`
-  - 创建托管 shell；默认 `scope=thread`，绑定当前 thread 和 workspace。
+- `shell_session_open(name?)`
+  - 创建托管 shell；默认绑定当前 thread 和 workspace。名称只是展示名，LLM 仍通过 id 交互。
 - `shell_session_reuse(sessionId?)`
   - 复用现有 session；不传时返回当前 thread 下推荐 session。
 - `shell_session_list()`
-  - 列出当前 thread/workspace 可见 session，以及是否有用户正在接管。
+  - 列出当前 thread/workspace 可见 shell 以及最近命令。
 - `shell_exec(sessionId, command, wait?, timeout_ms?, soft_timeout_ms?, hard_timeout_ms?)`
   - `wait=foreground`：等待命令完成或超时，返回 exit code 和 tail。
   - `wait=background`：立即返回 `commandId`，命令继续运行。
@@ -120,7 +120,7 @@ bwrap 启动方式：
 - 输出到达时记录日志、输出字节数和 `last_output_at`。
 - 到软超时：写 `shell_command_timeout` 事件，不杀进程。
 - 到硬超时：kill 进程树，command 状态置 `timed_out`，session 回到 `idle` 或 `orphaned`。
-- run 取消：默认只 kill 该 run 启动的 foreground/background command；跨 run pinned session 不关闭。
+- run 取消：默认只 kill 该 run 启动的 foreground/background command；shell 记录保留，可继续恢复使用。
 
 ## 7. 存储设计
 
@@ -130,14 +130,16 @@ bwrap 启动方式：
 CREATE TABLE shell_sessions (
   id TEXT PRIMARY KEY,
   thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  owner TEXT NOT NULL,
   workspace_root TEXT NOT NULL,
   cwd TEXT NOT NULL,
   backend TEXT NOT NULL,
   status TEXT NOT NULL,
   lease_actor TEXT,
   lease_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-  pinned BOOLEAN NOT NULL DEFAULT false,
-  idle_expires_at TIMESTAMPTZ,
+  config_snapshot JSONB,
+  deleted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -208,9 +210,9 @@ CREATE TABLE shell_session_events (
 - thread 右侧提供 Shell 面板，展示当前可用 session、lease 持有者和最近命令。
 - Shell 面板默认用常规终端样式展示：prompt、连续输出、退出状态；内部日志仍按 seq 落库。
 - 工具卡展示 command 状态：运行中、耗时、输出速率、退出码、最近 100 行。
-- 运行中 command 提供刷新、终止、接管操作；终止调用后端 kill API，不依赖 LLM。
+- 运行中 command 提供刷新、终止操作；终止调用后端 kill API，不依赖 LLM。
 - 详情面板分页读取完整 stdout/stderr，支持按 stream 过滤和下载日志。
-- 超过软超时后展示明确选择：继续等待 10 分钟、终止、接管。
+- 超过软超时后展示明确选择：继续等待 10 分钟或终止。
 - 用户在 Shell 面板执行的命令也写入 `shell_commands(actor='user')`，LLM 后续能看到摘要和完整审计。
 - 用户没打开页面时，WebSocket 事件已落库；下次打开 run/thread 时从历史事件和日志表恢复 session/command 卡片。
 - 不把后台日志混进普通 assistant 文本；按 step 归属展示。
@@ -242,7 +244,7 @@ PTY 模式需要新增：
 - `shell_stdin(sessionId, data)` 写入 PTY
 - `shell_resize(sessionId, rows, cols)` 同步窗口尺寸
 - 原始 transcript 日志：保留 raw bytes，同时派生给 LLM 的短摘要
-- 输入 lease：用户接管时 agent 只能观察，不能写 stdin
+- 输入锁：同一个 shell 同时只能有一个 running/queued command
 
 安全边界不变：PTY 只是 I/O 形态，命令仍走同一套 tool policy 和 bwrap/host 后端。
 
@@ -266,12 +268,11 @@ PTY 模式需要新增：
 - DB 表、事件、run cancel 对 command 的级联 kill
 - 前端 Shell 面板 + command 卡片展示状态和 tail
 
-阶段 2：交互和接管
+阶段 2：交互标记与手动命令
 
-- `shell_stdin`
-- PTY 模式、xterm 前端、用户接管锁
-- 接管期间 agent 暂停写命令/stdin，避免并发操作冲突
 - 用户命令写入 `shell_commands(actor='user')`，LLM 可观察但不能伪造用户输入
+- 用户可把某一次 command 交互标记为输入附件，提交给 LLM
+- PTY 模式、xterm 前端、`shell_stdin` 留作未来交互终端能力
 
 阶段 3：环境后端抽象
 
@@ -290,20 +291,21 @@ PTY 模式需要新增：
 - 普通短命令：`shell_exec(wait=foreground)` 等价于原同步 shell，但有 session/command 审计。
 - 软超时：任务仍运行，前端和事件提示用户选择。
 - 硬超时：任务被杀，状态为 `timed_out`，退出信息可追踪。
-- run cancel：该 run 启动的 running command 被级联终止；pinned session 保留。
+- run cancel：该 run 启动的 running command 被级联终止；shell 记录保留。
 - bwrap enforce：工作区外不可见，网络 disabled 时 clone 失败，enabled 时按预期执行。
 - 日志大于 `TOOL_MAX_OUTPUT`：LLM 只收到 tail，完整日志可分页查看。
 - 用户打开历史 run：仍能看到 session、command 最终状态和完整日志。
 
 ## 13. 共享 Shell 与跨 run 生命周期
 
-共享 shell 是默认模型的一部分，但要用 lease 防止用户和 LLM 同时写入：
+共享 shell 是默认模型的一部分，但要用命令级写入锁防止用户和 LLM 同时写入：
 
-- 生命周期绑定 `thread + workspace`，不是单个 run。
-- 默认 TTL：空闲 30 分钟关闭；用户可在 UI 上固定会话。
-- 新 run 启动时，系统注入“当前 thread 有活跃 shell_session”的只读摘要，让 LLM 可选择继续使用。
-- 命令写入必须有 lease：`agent`、`user`、`system` 三类 actor，同一时刻只有 lease 持有者能启动命令。
-- 用户点击接管后，lease 切到 `user`，agent 只能 poll，不能写；用户释放后 agent 才能继续操作。
+- 生命周期绑定 `thread + workspace`，不是单个 run；Default shell 由系统创建且不可删除。
+- shell 是常驻会话记录，真实进程按 command 启动；没有运行中进程时资源可自动释放。
+- 新 run 可通过 shell id 继续使用已有 shell，后端用保存的 `cwd/config_snapshot` 恢复执行环境。
+- 同一个 shell 同时只能有一个 running/queued command；用户要介入时可先终止错误 command。
+- 用户执行的命令写入 `shell_commands(actor='user')`，LLM 不自动读取全部历史。
+- 用户可标记某一次 shell 交互为输入附件，发送时转成结构化文本给 LLM。
 - 所有输入和输出都写 `shell_session_events`，审计时能区分用户输入和 LLM 输入。
 - 共享终端输出视为不可信观察，不直接当系统指令；LLM 只能把它作为 tool result 使用。
 
@@ -311,8 +313,8 @@ PTY 模式需要新增：
 
 - `shell_session_open/reuse/list/close`
 - `shell_poll(sessionId)`
-- `POST /api/shell-sessions/:id/takeover`
-- `POST /api/shell-sessions/:id/release`
+- `PATCH /api/shell-sessions/:id`：用户改名自己创建的 shell；`Default` 不能改名。
+- `POST /api/shell-commands/:id/mark`
 
 取舍：跨 run shell 能显著改善长任务连续性，但也增加误操作风险。默认应只对同一 thread 和同一 workspace 开放，
 跨 thread 复用必须用户显式选择。

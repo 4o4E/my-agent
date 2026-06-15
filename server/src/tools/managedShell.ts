@@ -15,18 +15,13 @@ function numberArg(value: unknown, fallback: number | null = null): number | nul
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
 }
 
-function boolArg(value: unknown): boolean {
-  return value === true || value === 'true';
-}
-
 export const shellSessionOpenTool: Tool = {
   name: 'shell_session_open',
-  description: '创建一个托管 shell session。后续用 shell_exec 在该 session 中执行命令；session 默认绑定当前 thread 和 workspace，可跨 run 复用。',
+  description: '创建一个托管 shell session。shell 会保留名称、cwd 和命令历史；真实进程按命令启动，结束后自动释放。',
   parameters: {
     type: 'object',
     properties: {
-      pinned: { type: 'boolean', description: '是否固定该 session，固定后 run 取消不会关闭 session。' },
-      ttl_ms: { type: 'number', description: '空闲回收时间，单位毫秒；默认 30 分钟。' },
+      name: { type: 'string', description: '给用户看的 shell 名称；不填时自动生成 Agent 1、Agent 2 等名称。Default 由系统保留。' },
     },
   },
   async run(args, ctx) {
@@ -37,11 +32,11 @@ export const shellSessionOpenTool: Tool = {
       threadId: shellCtx.threadId,
       settings,
       runId: shellCtx.runId,
-      pinned: boolArg(args.pinned),
-      ttlMs: numberArg(args.ttl_ms, null),
+      owner: 'agent',
+      name: typeof args.name === 'string' ? args.name : undefined,
       step: shellCtx.step,
     });
-    return `已创建 shell session：${session.id}\nworkspace: ${session.workspace_root}\nbackend: ${session.backend}`;
+    return `已创建 shell：${session.name}\nid: ${session.id}\nworkspace: ${session.workspace_root}\nbackend: ${session.backend}`;
   },
 };
 
@@ -65,7 +60,7 @@ export const shellSessionReuseTool: Tool = {
       step: shellCtx.step,
       sessionId: typeof args.sessionId === 'string' && args.sessionId.trim() ? args.sessionId.trim() : undefined,
     });
-    return `可用 shell session：${session.id}\nstatus: ${session.status}\nworkspace: ${session.workspace_root}\nbackend: ${session.backend}`;
+    return `可用 shell：${session.name}\nid: ${session.id}\nstatus: ${session.status}\nworkspace: ${session.workspace_root}\nbackend: ${session.backend}`;
   },
 };
 
@@ -82,7 +77,7 @@ export const shellSessionListTool: Tool = {
     const lines: string[] = [];
     for (const session of sessions) {
       const commands = await store.listShellCommandsBySession(session.id, 3);
-      lines.push(`- ${session.id} status=${session.status} lease=${session.lease_actor ?? 'none'} pinned=${session.pinned}`);
+      lines.push(`- ${session.name} (${session.id}) owner=${session.owner} status=${session.status}`);
       for (const cmd of commands) lines.push(`  - ${cmd.id} ${cmd.status} ${cmd.command.slice(0, 120)}`);
     }
     return lines.join('\n');
@@ -170,7 +165,7 @@ export const shellKillTool: Tool = {
 
 export const shellSessionCloseTool: Tool = {
   name: 'shell_session_close',
-  description: '关闭托管 shell session；如果还有运行中命令，需要先终止命令。',
+  description: '删除 agent 创建的托管 shell（软删除，历史命令保留）。Default 和用户创建的 shell 不能由 LLM 删除。',
   parameters: {
     type: 'object',
     properties: {
@@ -184,13 +179,15 @@ export const shellSessionCloseTool: Tool = {
     const session = await store.getShellSession(sessionId);
     if (!session) throw new Error(`shell session 不存在：${sessionId}`);
     if (session.thread_id !== shellCtx.threadId) throw new Error('shell session 不属于当前 thread');
+    if (session.name === 'Default' || session.owner === 'system') return 'Default shell 不支持删除。';
+    if (session.owner !== 'agent') return '只能删除 agent 创建的 shell，不能删除用户创建的 shell。';
     const commands = await store.listShellCommandsBySession(sessionId, 20);
     const running = commands.filter((cmd) => cmd.status === 'running' || cmd.status === 'queued');
     if (running.length) return `shell session 仍有运行中命令，请先 shell_kill：${running.map((cmd) => cmd.id).join(', ')}`;
-    await store.updateShellSession(sessionId, { status: 'closed', lease_actor: null, lease_run_id: null });
-    await store.addShellSessionEvent(sessionId, 'agent', 'closed', { runId: shellCtx.runId ?? null });
+    await store.updateShellSession(sessionId, { status: 'closed', lease_actor: null, lease_run_id: null, deleted_at: new Date().toISOString() });
+    await store.addShellSessionEvent(sessionId, 'agent', 'deleted', { runId: shellCtx.runId ?? null });
     shellBus.publish(shellCtx.threadId, { type: 'shell_session_closed', step: shellCtx.step ?? 0, sessionId });
-    return `已关闭 shell session：${sessionId}`;
+    return `已删除 shell：${session.name} (${sessionId})`;
   },
 };
 

@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import { Activity, Bot, ChevronDown, Copy, Fingerprint, FileText, Workflow } from 'lucide-react';
+import { Activity, Bot, Check, ChevronDown, Copy, Fingerprint, FileText, Workflow } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import {
@@ -47,12 +47,26 @@ function isActivityPart(p: Part): boolean {
 
 function isHiddenDataPart(p: Part): boolean {
   return p.type === 'data-run-id'
+    || p.type === 'data-message-time'
     || p.type === 'data-tool-timing'
     || p.type === 'data-reasoning-timing'
     || p.type === 'data-stream-stats'
     || p.type === 'data-usage-update'
     || p.type === 'data-final-output'
     || p.type === 'data-plan-state';
+}
+
+function messageTime(message: UIMessage): string | null {
+  for (let i = message.parts.length - 1; i >= 0; i--) {
+    const part = message.parts[i] as { type: string; data?: { sentAt?: string; completedAt?: string } };
+    if (part.type !== 'data-message-time') continue;
+    const value = message.role === 'assistant' ? part.data?.completedAt : part.data?.sentAt;
+    if (!value) return null;
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return null;
+    return date.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+  return null;
 }
 
 function durationFromTiming(t?: Timing): number | undefined {
@@ -136,20 +150,53 @@ function ProcessingDots() {
   );
 }
 
-function StreamStatusBar({ parts, active }: { parts: Part[]; active: boolean }) {
+function useCopyFeedback(): [boolean, () => void] {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return undefined;
+    const timer = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  return [copied, () => setCopied(true)];
+}
+
+function CopyRunButton({ runId, className }: { runId: string | null; className?: string }) {
+  const [copied, markCopied] = useCopyFeedback();
+  return (
+    <MessageAction
+      tooltip={copied ? '已复制' : runId ? '复制 run id' : '暂无 run id'}
+      label="复制 run id"
+      disabled={!runId}
+      onClick={async () => {
+        if (runId && await copyToClipboard(runId)) markCopied();
+      }}
+      className={className}
+    >
+      {copied ? <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" /> : <Fingerprint className="size-3.5" />}
+    </MessageAction>
+  );
+}
+
+function StreamStatusBar({ parts, active, time, runId }: { parts: Part[]; active: boolean; time: string | null; runId: string | null }) {
   const stats = latestStreamStats(parts);
-  if (!stats) return null;
-  const running = active && stats.stage !== 'done' && stats.stage !== 'error';
-  const charsPerSecond = Math.round(stats.rate.charsPerSecond);
+  if (!stats && !time && !runId) return null;
+  const running = !!stats && active && stats.stage !== 'done' && stats.stage !== 'error';
+  const charsPerSecond = Math.round(stats?.rate.charsPerSecond ?? 0);
 
   return (
     <div className="not-prose mt-3 flex min-h-8 w-full flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 pt-2 text-xs text-muted-foreground">
-      <span className="inline-flex items-center gap-1.5">
-        <Activity className={cn('size-3.5', running && 'animate-pulse text-primary')} />
-        <span>{streamStageLabel(stats)}</span>
-        {running && <ProcessingDots />}
+      {stats && (
+        <span className="inline-flex items-center gap-1.5">
+          <Activity className={cn('size-3.5', running && 'animate-pulse text-primary')} />
+          <span>{streamStageLabel(stats)}</span>
+          {running && <ProcessingDots />}
+        </span>
+      )}
+      {time && <span className="tabular-nums">{time}</span>}
+      <span className="inline-flex items-center">
+        <CopyRunButton runId={runId} className="size-6 text-muted-foreground" />
       </span>
-      {running && (
+      {stats && running && (
         <>
           <span className="tabular-nums">{charsPerSecond.toLocaleString()} 字/秒</span>
           <span className="text-primary/80">
@@ -569,8 +616,13 @@ function runIdForUser(messages: UIMessage[], index: number): string | null {
   return fromId || runIdFromAssistant(messages[index + 1]);
 }
 
-function copyToClipboard(value: string) {
-  void navigator.clipboard.writeText(value);
+async function copyToClipboard(value: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function formatBytes(size?: number): string {
@@ -612,14 +664,6 @@ function userTocTitle(message: UIMessage): string {
   return compactTocText(parsed.text || parsed.files[0]?.name || parsed.files[0]?.path || '对话');
 }
 
-function assistantTocTitle(message: UIMessage): string {
-  const text = message.parts
-    .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
-    .map((part) => part.text)
-    .join(' ');
-  return compactTocText(text || '回复');
-}
-
 function UserMessageText({ message, onOpenRemoteFile }: { message: UIMessage; onOpenRemoteFile: (path: string) => void }) {
   const parsed = parseFileTokens(userText(message));
   return (
@@ -646,17 +690,26 @@ function UserMessageText({ message, onOpenRemoteFile }: { message: UIMessage; on
   );
 }
 
-function UserMessageActions({ message, runId }: { message: UIMessage; runId: string | null }) {
+function UserMessageFooter({ message, runId }: { message: UIMessage; runId: string | null }) {
   const text = userText(message);
+  const time = messageTime(message);
+  const [copiedText, markCopiedText] = useCopyFeedback();
   return (
-    <MessageActions className="ml-auto justify-end pr-1 opacity-70 transition-opacity group-hover:opacity-100">
-      <MessageAction tooltip="复制消息文本" label="复制消息文本" onClick={() => copyToClipboard(text)}>
-        <Copy className="size-3.5" />
-      </MessageAction>
-      <MessageAction tooltip={runId ? '复制 run id' : '暂无 run id'} label="复制 run id" disabled={!runId} onClick={() => runId && copyToClipboard(runId)}>
-        <Fingerprint className="size-3.5" />
-      </MessageAction>
-    </MessageActions>
+    <div className="ml-auto flex min-h-6 items-center justify-end gap-2 pr-1">
+      {time && <span className="text-[11px] tabular-nums text-muted-foreground">{time}</span>}
+      <MessageActions className="justify-end opacity-70 transition-opacity group-hover:opacity-100">
+        <MessageAction
+          tooltip={copiedText ? '已复制' : '复制消息文本'}
+          label="复制消息文本"
+          onClick={async () => {
+            if (await copyToClipboard(text)) markCopiedText();
+          }}
+        >
+          {copiedText ? <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="size-3.5" />}
+        </MessageAction>
+        <CopyRunButton runId={runId} />
+      </MessageActions>
+    </div>
   );
 }
 
@@ -747,7 +800,7 @@ function AssistantMessage({
   return (
     <>
       {nodes}
-      <StreamStatusBar parts={message.parts} active={active} />
+      <StreamStatusBar parts={message.parts} active={active} time={messageTime(message)} runId={runId} />
     </>
   );
 }
@@ -806,31 +859,34 @@ export function Conversation({
                 <Message
                   from={m.role}
                   key={m.id}
-                  data-toc-message={m.role}
-                  data-toc-title={m.role === 'user' ? userTocTitle(m) : assistantTocTitle(m)}
+                  data-toc-message={m.role === 'user' ? 'user' : undefined}
+                  data-toc-title={m.role === 'user' ? userTocTitle(m) : undefined}
+                  data-toc-time={m.role === 'user' ? messageTime(m) ?? undefined : undefined}
                 >
                   {m.role === 'user' ? (
                     <>
                       <MessageContent>
                         <UserMessageText message={m} onOpenRemoteFile={onOpenRemoteFile} />
                       </MessageContent>
-                      <UserMessageActions message={m} runId={runIdForUser(messages, index)} />
+                      <UserMessageFooter message={m} runId={runIdForUser(messages, index)} />
                     </>
                   ) : (
-                    <MessageContent>
-                      <AssistantMessage
-                        message={m}
-                        active={busy && m.id === activeAssistantId}
-                        lastToolKey={lastToolKey}
-                        lastActivityKey={lastActivityKey}
-                        workspaceRoot={workspaceRoot}
-                        onOpenRemoteFile={onOpenRemoteFile}
-                        askUserDrafts={askUserDrafts}
-                        onAskUserDraftChange={onAskUserDraftChange}
-                        onAskUserSubmit={onAskUserSubmit}
-                        onAskUserCancel={onAskUserCancel}
-                      />
-                    </MessageContent>
+                    <>
+                      <MessageContent>
+                        <AssistantMessage
+                          message={m}
+                          active={busy && m.id === activeAssistantId}
+                          lastToolKey={lastToolKey}
+                          lastActivityKey={lastActivityKey}
+                          workspaceRoot={workspaceRoot}
+                          onOpenRemoteFile={onOpenRemoteFile}
+                          askUserDrafts={askUserDrafts}
+                          onAskUserDraftChange={onAskUserDraftChange}
+                          onAskUserSubmit={onAskUserSubmit}
+                          onAskUserCancel={onAskUserCancel}
+                        />
+                      </MessageContent>
+                    </>
                   )}
                 </Message>
               ))

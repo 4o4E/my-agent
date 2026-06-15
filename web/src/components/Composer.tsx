@@ -8,7 +8,7 @@ import {
   type PromptInputMessage,
 } from '@/components/ai-elements/prompt-input';
 import { Button } from '@/components/ui/button';
-import { FileUp, Folder, FolderUp, Maximize2, Minimize2, Paperclip, RefreshCw } from 'lucide-react';
+import { FileUp, Folder, FolderUp, Maximize2, Minimize2, Paperclip, RefreshCw, Terminal } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -23,10 +23,11 @@ import { listRemoteFiles, type RemoteFileEntry } from '@/api';
 import type { UsageSnapshot } from './Conversation';
 
 export interface ComposerAttachment {
-  kind: 'remote' | 'local';
+  kind: 'remote' | 'local' | 'shell';
   path: string;
   name: string;
   size?: number;
+  text?: string;
 }
 
 interface Props {
@@ -185,7 +186,8 @@ export function Composer({
                     className="rounded-md border bg-background px-2 py-1 text-left text-xs text-muted-foreground hover:border-destructive hover:text-destructive"
                     title="点击移除附件"
                   >
-                    {att.kind === 'local' ? '本地' : '远程'} · {att.name}
+                    {att.kind === 'shell' && <Terminal className="mr-1 inline size-3" />}
+                    {att.kind === 'local' ? '本地' : att.kind === 'remote' ? '远程' : 'Shell'} · {att.name}
                     {att.size != null ? ` · ${formatSize(att.size)}` : ''}
                   </button>
                 ))}

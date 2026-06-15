@@ -169,23 +169,42 @@ CREATE INDEX IF NOT EXISTS idx_datasource_leases_expiry ON datasource_account_le
 CREATE TABLE IF NOT EXISTS shell_sessions (
   id              TEXT PRIMARY KEY,
   thread_id       TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL DEFAULT 'Default',
+  owner           TEXT NOT NULL DEFAULT 'system' CHECK (owner IN ('agent', 'user', 'system')),
   workspace_root  TEXT NOT NULL,
   cwd             TEXT NOT NULL,
   backend         TEXT NOT NULL,
-  status          TEXT NOT NULL DEFAULT 'idle' CHECK (status IN ('opening', 'idle', 'busy', 'attached_by_user', 'closing', 'closed', 'orphaned')),
+  status          TEXT NOT NULL DEFAULT 'idle' CHECK (status IN ('opening', 'idle', 'busy', 'closing', 'closed', 'orphaned')),
   lease_actor     TEXT,
   lease_run_id    TEXT REFERENCES runs(id) ON DELETE SET NULL,
-  pinned          BOOLEAN NOT NULL DEFAULT false,
-  idle_expires_at TIMESTAMPTZ,
+  config_snapshot JSONB,
+  deleted_at      TIMESTAMPTZ,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE shell_sessions ADD COLUMN IF NOT EXISTS name TEXT;
+UPDATE shell_sessions SET name = id WHERE name IS NULL;
+ALTER TABLE shell_sessions ALTER COLUMN name SET NOT NULL;
+ALTER TABLE shell_sessions ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT 'agent';
+UPDATE shell_sessions SET owner = 'agent' WHERE owner IS NULL OR owner NOT IN ('agent', 'user', 'system');
+ALTER TABLE shell_sessions ALTER COLUMN owner SET DEFAULT 'agent';
+ALTER TABLE shell_sessions ALTER COLUMN owner SET NOT NULL;
+ALTER TABLE shell_sessions DROP CONSTRAINT IF EXISTS shell_sessions_owner_check;
+ALTER TABLE shell_sessions ADD CONSTRAINT shell_sessions_owner_check CHECK (owner IN ('agent', 'user', 'system'));
+ALTER TABLE shell_sessions ADD COLUMN IF NOT EXISTS config_snapshot JSONB;
+ALTER TABLE shell_sessions ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+UPDATE shell_sessions SET status = 'idle', lease_actor = NULL, lease_run_id = NULL, updated_at = now() WHERE status = 'attached_by_user';
+ALTER TABLE shell_sessions DROP CONSTRAINT IF EXISTS shell_sessions_status_check;
+ALTER TABLE shell_sessions ADD CONSTRAINT shell_sessions_status_check CHECK (status IN ('opening', 'idle', 'busy', 'closing', 'closed', 'orphaned'));
+ALTER TABLE shell_sessions DROP COLUMN IF EXISTS pinned;
+ALTER TABLE shell_sessions DROP COLUMN IF EXISTS idle_expires_at;
 ALTER TABLE shell_sessions ADD COLUMN IF NOT EXISTS cwd TEXT;
 UPDATE shell_sessions SET cwd = workspace_root WHERE cwd IS NULL;
 ALTER TABLE shell_sessions ALTER COLUMN cwd SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_shell_sessions_thread ON shell_sessions(thread_id, workspace_root, status);
+CREATE INDEX IF NOT EXISTS idx_shell_sessions_active ON shell_sessions(thread_id, workspace_root, deleted_at);
 
 CREATE TABLE IF NOT EXISTS shell_commands (
   id               TEXT PRIMARY KEY,
@@ -217,6 +236,9 @@ CREATE TABLE IF NOT EXISTS shell_commands (
 CREATE INDEX IF NOT EXISTS idx_shell_commands_session ON shell_commands(session_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_shell_commands_run ON shell_commands(run_id, status);
 CREATE INDEX IF NOT EXISTS idx_shell_commands_status ON shell_commands(status, updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shell_commands_one_running_per_session
+  ON shell_commands(session_id)
+  WHERE status IN ('queued', 'running');
 
 CREATE TABLE IF NOT EXISTS shell_command_logs (
   id          BIGSERIAL PRIMARY KEY,

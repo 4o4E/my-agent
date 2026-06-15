@@ -112,6 +112,7 @@ export interface RunWithEvents {
   error: string | null;
   goal_state?: GoalState | null;
   created_at: string;
+  updated_at: string;
   events: AgentEvent[];
 }
 
@@ -259,20 +260,23 @@ export interface DatasourceTestResult {
 }
 
 export type ShellActor = 'agent' | 'user' | 'system';
-export type ShellSessionStatus = 'opening' | 'idle' | 'busy' | 'attached_by_user' | 'closing' | 'closed' | 'orphaned';
+export type ShellOwner = 'agent' | 'user' | 'system';
+export type ShellSessionStatus = 'opening' | 'idle' | 'busy' | 'closing' | 'closed' | 'orphaned';
 export type ShellCommandStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'killed' | 'timed_out' | 'orphaned';
 
 export interface ShellSession {
   id: string;
   thread_id: string;
+  name: string;
+  owner: ShellOwner;
   workspace_root: string;
   cwd: string;
   backend: string;
   status: ShellSessionStatus;
   lease_actor: ShellActor | null;
   lease_run_id: string | null;
-  pinned: boolean;
-  idle_expires_at: string | null;
+  config_snapshot: Record<string, unknown> | null;
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
   commands?: ShellCommand[];
@@ -304,6 +308,16 @@ export interface ShellCommandLog {
   stream: 'stdout' | 'stderr' | 'system';
   chunk: string;
   created_at: string;
+}
+
+export interface ShellCommandAttachment {
+  kind: 'shell';
+  commandId: string;
+  shellName: string;
+  name: string;
+  text: string;
+  size?: number;
+  path?: string | null;
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -456,12 +470,19 @@ export const answerRun = (runId: string, answer: AskUserAnswer) =>
 export const listShellSessions = (threadId: string) =>
   fetch(`/api/shell-sessions?threadId=${encodeURIComponent(threadId)}`).then(json<{ sessions: ShellSession[] }>);
 
-export const createShellSession = (threadId: string, pinned = true) =>
+export const createShellSession = (threadId: string, name?: string) =>
   fetch('/api/shell-sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ threadId, pinned }),
+    body: JSON.stringify({ threadId, name }),
   }).then(json<{ session: ShellSession }>);
+
+export const renameShellSession = (sessionId: string, name: string) =>
+  fetch(`/api/shell-sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }).then(json<{ session: ShellSession | null }>);
 
 export const closeShellSession = (sessionId: string, force = false) =>
   fetch(`/api/shell-sessions/${sessionId}/close`, {
@@ -487,11 +508,9 @@ export const killShellCommand = (commandId: string, reason = 'user_requested_kil
 export const getShellCommandLogs = (commandId: string, sinceSeq = 0, limit = 200) =>
   fetch(`/api/shell-commands/${commandId}/logs?sinceSeq=${sinceSeq}&limit=${limit}`).then(json<{ command: ShellCommand; logs: ShellCommandLog[] }>);
 
-export const takeoverShellSession = (sessionId: string) =>
-  fetch(`/api/shell-sessions/${sessionId}/takeover`, { method: 'POST' }).then(json<{ session: ShellSession }>);
+export const markShellCommand = (commandId: string) =>
+  fetch(`/api/shell-commands/${commandId}/mark`, { method: 'POST' }).then(json<{ attachment: ShellCommandAttachment }>);
 
-export const releaseShellSession = (sessionId: string) =>
-  fetch(`/api/shell-sessions/${sessionId}/release`, { method: 'POST' }).then(json<{ session: ShellSession }>);
 
 /** 通过 WebSocket 订阅 run 的实时事件流。 */
 export function subscribeRun(

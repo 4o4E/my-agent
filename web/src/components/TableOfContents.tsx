@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 interface TocItem {
   index: number;
   text: string;
-  role: 'user' | 'assistant';
+  time?: string;
   topPct: number;
 }
 
@@ -32,7 +32,7 @@ function scrollInsideContainer(container: HTMLElement, target: HTMLElement) {
 }
 
 /**
- * 对话锚点轨道只认用户消息和 assistant 回复，贴在真实滚动条旁边。
+ * 对话锚点轨道只认用户消息，贴在真实滚动条旁边。
  * marker 的位置来自消息在滚动容器里的相对高度，悬浮时显示消息摘要。
  */
 export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElement | null> }) {
@@ -47,21 +47,15 @@ export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElem
 
     for (const message of Array.from(root.querySelectorAll<HTMLElement>(MESSAGE_SELECTOR))) {
       const role = message.dataset.tocMessage;
-      if (role !== 'user' && role !== 'assistant') continue;
+      if (role !== 'user') continue;
       const containerRect = scrollParent?.getBoundingClientRect();
       const messageRect = message.getBoundingClientRect();
       const absoluteTop = scrollParent && containerRect
         ? scrollParent.scrollTop + messageRect.top - containerRect.top
         : message.offsetTop;
       const topPct = Math.min(100, Math.max(0, (absoluteTop / scrollRange) * 100));
-      if (role === 'user') {
-        const text = message.dataset.tocTitle || '对话';
-        nextItems.push({ index: targets.length, text, role, topPct });
-        targets.push(message);
-        continue;
-      }
-
-      nextItems.push({ index: targets.length, text: message.dataset.tocTitle || '回复', role, topPct });
+      const text = message.dataset.tocTitle || '对话';
+      nextItems.push({ index: targets.length, text, time: message.dataset.tocTime, topPct });
       targets.push(message);
     }
 
@@ -132,19 +126,20 @@ export function TableOfContents({ contentRef }: { contentRef: RefObject<HTMLElem
             key={item.index}
             type="button"
             onClick={() => handleClick(item.index)}
-            title={item.text}
+            title={item.time ? `${item.time}\n${item.text}` : item.text}
             style={{ top: `${item.topPct}%` }}
             className={cn(
               'group absolute left-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border transition-all hover:z-20 hover:scale-125',
-              item.role === 'user' ? 'bg-primary/80' : 'bg-muted-foreground/70',
+              'bg-primary/80',
               activeIndex === item.index ? 'border-primary bg-background ring-2 ring-primary/70' : 'border-background',
             )}
             aria-label={item.text}
           >
             <span className="pointer-events-none absolute right-4 top-1/2 hidden w-96 max-w-[min(24rem,calc(100vw-6rem))] -translate-y-1/2 rounded-md border bg-popover px-3 py-2 text-left text-xs text-popover-foreground shadow-lg group-hover:block">
               <span className="block whitespace-nowrap text-[10px] text-muted-foreground">
-                {item.role === 'user' ? '用户消息' : 'LLM 回复'}
+                用户消息
               </span>
+              {item.time && <span className="mt-0.5 block whitespace-nowrap text-[11px] tabular-nums text-muted-foreground">{item.time}</span>}
               <span className="line-clamp-8 break-words leading-5">{item.text}</span>
             </span>
           </button>

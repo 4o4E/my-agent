@@ -22,7 +22,7 @@ interface Props {
   onOpenShellTab: (sessionId: string) => void;
   onCloseTab: (tab: RightTabId) => void;
   onClose: () => void;
-  onAttach: (entry: { kind: 'remote'; path: string; name: string; size?: number }) => void;
+  onAttach: (entry: { kind: 'remote'; path: string; name: string; size?: number } | { kind: 'shell'; path: string; name: string; size?: number; text: string }) => void;
 }
 
 interface TabSpec {
@@ -117,7 +117,7 @@ function AddTabMenu({
         {liveSessions.map((session) => (
           <DropdownMenuItem key={session.id} onClick={() => onOpenShellTab(session.id)}>
             <Terminal className="mr-2 size-4" />
-            {shortShellId(session.id)}
+            {session.name}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -252,6 +252,7 @@ export function RightSidebar({
             embedded
             previewSessionId={activeShellSessionId}
             onClose={onClose}
+            onAttach={onAttach}
           />
         )}
         {!activeTab && (

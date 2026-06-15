@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { executeRun } from '../agent/executor.js';
 import { store } from '../store/index.js';
 import { filesApi } from './files.js';
@@ -11,6 +13,7 @@ import { shellManager } from '../shell/manager.js';
 import { shellBus } from '../shell/bus.js';
 import { getToolSettings } from '../settings.js';
 import { createPolicy } from '../tools/policy.js';
+import { isWithin } from '../tools/policy.js';
 
 export const api = Router();
 
@@ -32,6 +35,45 @@ async function killRunShellCommands(runId: string): Promise<void> {
 
 function normalizeShellSignal(value: unknown, fallback: NodeJS.Signals): NodeJS.Signals {
   return value === 'SIGINT' || value === 'SIGTERM' || value === 'SIGKILL' ? value : fallback;
+}
+
+function commandDurationMs(command: Awaited<ReturnType<typeof store.getShellCommand>>): number | null {
+  if (!command?.ended_at) return null;
+  return Math.max(0, new Date(command.ended_at).getTime() - new Date(command.started_at).getTime());
+}
+
+function renderShellLogs(logs: Awaited<ReturnType<typeof store.getShellCommandLogs>>): string {
+  let current = '';
+  const chunks: string[] = [];
+  for (const log of logs) {
+    if (log.stream !== current) {
+      current = log.stream;
+      chunks.push(`\n[${current}]\n`);
+    }
+    chunks.push(log.chunk);
+  }
+  return chunks.join('').trim();
+}
+
+async function readAllShellCommandLogs(commandId: string): Promise<Awaited<ReturnType<typeof store.getShellCommandLogs>>> {
+  const logs: Awaited<ReturnType<typeof store.getShellCommandLogs>> = [];
+  let sinceSeq = 0;
+  for (;;) {
+    const page = await store.getShellCommandLogs(commandId, sinceSeq, 1000);
+    if (!page.length) return logs;
+    logs.push(...page);
+    sinceSeq = page[page.length - 1].seq;
+    if (page.length < 1000) return logs;
+  }
+}
+
+function headTail(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const marker = `\n...[已截断 ${text.length - maxChars} 个字符，完整内容见附件文件]...\n`;
+  const body = Math.max(0, maxChars - marker.length);
+  const head = Math.floor(body * 0.6);
+  const tail = body - head;
+  return `${text.slice(0, head)}${marker}${text.slice(text.length - tail)}`;
 }
 
 // --- Threads ---
@@ -135,8 +177,10 @@ api.post('/runs/:id/answer', async (req, res) => {
 api.get('/shell-sessions', async (req, res) => {
   const threadId = String(req.query.threadId ?? '').trim();
   if (!threadId) return res.status(400).json({ error: 'threadId 为必填' });
+  const thread = await store.getThread(threadId);
+  if (!thread) return res.status(404).json({ error: 'thread 不存在' });
   const settings = await getToolSettings();
-  const sessions = await store.listShellSessions(threadId, settings.workspaceRoot);
+  const sessions = await shellManager.listSessions(threadId, settings);
   const result = await Promise.all(
     sessions.map(async (session) => ({
       ...session,
@@ -157,10 +201,28 @@ api.post('/shell-sessions', async (req, res) => {
   const session = await shellManager.openSession({
     threadId,
     settings,
-    pinned: req.body?.pinned === true,
-    ttlMs: typeof req.body?.ttl_ms === 'number' ? req.body.ttl_ms : null,
+    owner: 'user',
+    name: typeof req.body?.name === 'string' ? req.body.name : undefined,
   });
   res.status(201).json({ session });
+});
+
+api.patch('/shell-sessions/:id', async (req, res) => {
+  const session = await store.getShellSession(req.params.id);
+  if (!session) return res.status(404).json({ error: 'shell session 不存在' });
+  if (session.deleted_at) return res.status(404).json({ error: 'shell session 已删除' });
+  if (session.name === 'Default' || session.owner === 'system') return res.status(403).json({ error: 'Default shell 不支持改名' });
+  if (session.owner !== 'user') return res.status(403).json({ error: '用户不能改名 agent 创建的 shell' });
+  const name = String(req.body?.name ?? '').trim();
+  if (!name) return res.status(400).json({ error: 'name 为必填' });
+  if (name === 'Default') return res.status(400).json({ error: 'Default 是系统保留名称' });
+  const siblings = await store.listShellSessions(session.thread_id, session.workspace_root);
+  if (siblings.some((item) => item.id !== session.id && item.name === name)) {
+    return res.status(409).json({ error: `shell 名称已存在：${name}` });
+  }
+  await store.updateShellSession(session.id, { name });
+  await store.addShellSessionEvent(session.id, 'user', 'renamed', { name });
+  res.json({ session: await store.getShellSession(session.id) });
 });
 
 api.get('/shell-sessions/:id/commands', async (req, res) => {
@@ -173,6 +235,8 @@ api.get('/shell-sessions/:id/commands', async (req, res) => {
 api.post('/shell-sessions/:id/close', async (req, res) => {
   const session = await store.getShellSession(req.params.id);
   if (!session) return res.status(404).json({ error: 'shell session 不存在' });
+  if (session.name === 'Default' || session.owner === 'system') return res.status(403).json({ error: 'Default shell 不支持删除' });
+  if (session.owner !== 'user') return res.status(403).json({ error: '用户不能删除 agent 创建的 shell' });
   const commands = await store.listShellCommandsBySession(session.id, 50);
   const running = commands.filter((cmd) => cmd.status === 'queued' || cmd.status === 'running');
   if (running.length && req.body?.force !== true) {
@@ -181,8 +245,8 @@ api.post('/shell-sessions/:id/close', async (req, res) => {
   for (const command of running) {
     await shellManager.kill(command.id, 'session_close', 'SIGTERM');
   }
-  await store.updateShellSession(session.id, { status: 'closed', lease_actor: null, lease_run_id: null });
-  await store.addShellSessionEvent(session.id, 'user', 'closed', { force: req.body?.force === true });
+  await store.updateShellSession(session.id, { status: 'closed', lease_actor: null, lease_run_id: null, deleted_at: new Date().toISOString() });
+  await store.addShellSessionEvent(session.id, 'user', 'deleted', { force: req.body?.force === true });
   shellBus.publish(session.thread_id, { type: 'shell_session_closed', step: 0, sessionId: session.id, reason: '用户关闭 session。' });
   res.json({ session: await store.getShellSession(session.id) });
 });
@@ -218,28 +282,65 @@ api.get('/shell-commands/:id/logs', async (req, res) => {
   res.json({ command, logs: await store.getShellCommandLogs(command.id, sinceSeq, limit) });
 });
 
+api.post('/shell-commands/:id/mark', async (req, res) => {
+  const command = await store.getShellCommand(req.params.id);
+  if (!command) return res.status(404).json({ error: 'shell command 不存在' });
+  if (command.status === 'queued' || command.status === 'running') {
+    return res.status(409).json({ error: 'shell command 仍在运行，结束后才能标记' });
+  }
+  const session = await store.getShellSession(command.session_id);
+  if (!session) return res.status(404).json({ error: 'shell session 不存在' });
+  const settings = await getToolSettings();
+  if (!isWithin(settings.workspaceRoot, session.workspace_root)) {
+    return res.status(403).json({ error: 'shell session 不属于当前 workspace' });
+  }
+
+  const logs = await readAllShellCommandLogs(command.id);
+  const output = renderShellLogs(logs);
+  const maxInline = settings.maxOutput;
+  let outputPath: string | null = null;
+  if (output.length > maxInline) {
+    outputPath = `.tmp/shell-marks/${command.id}.txt`;
+    const absolute = resolve(settings.workspaceRoot, outputPath);
+    await mkdir(dirname(absolute), { recursive: true });
+    await writeFile(absolute, output, 'utf8');
+  }
+  const duration = commandDurationMs(command);
+  const markedText = [
+    `用户从 shell "${session.name}" 标记了一次交互，供 LLM 作为上下文参考。`,
+    '',
+    `Shell 名称/ID: ${session.name} (${session.id})`,
+    `命令 ID / Command ID: ${command.id}`,
+    `执行者 / Actor: ${command.actor}`,
+    `CWD: ${command.cwd}`,
+    `命令 / Command: ${command.command}`,
+    `状态 / Status: ${command.status}`,
+    command.exit_code != null ? `退出码 / Exit code: ${command.exit_code}` : '',
+    command.signal ? `信号 / Signal: ${command.signal}` : '',
+    duration != null ? `耗时毫秒 / Duration ms: ${duration}` : '',
+    outputPath ? `完整输出文件 / Full output file: ${outputPath}` : '',
+    '',
+    '输出 / Output:',
+    output ? headTail(output, maxInline) : '（无输出）',
+  ].filter(Boolean).join('\n');
+
+  res.json({
+    attachment: {
+      kind: 'shell',
+      commandId: command.id,
+      shellName: session.name,
+      name: `${session.name}: ${command.command.slice(0, 40)}`,
+      text: markedText,
+      size: output.length,
+      path: outputPath,
+    },
+  });
+});
+
 api.post('/shell-commands/:id/kill', async (req, res) => {
   const signal = normalizeShellSignal(req.body?.signal, 'SIGTERM');
   const command = await shellManager.kill(req.params.id, String(req.body?.reason ?? 'user_requested_kill'), signal);
   res.json({ command });
-});
-
-api.post('/shell-sessions/:id/takeover', async (req, res) => {
-  const session = await store.getShellSession(req.params.id);
-  if (!session) return res.status(404).json({ error: 'shell session 不存在' });
-  await store.updateShellSession(session.id, { status: 'attached_by_user', lease_actor: 'user', lease_run_id: null });
-  await store.addShellSessionEvent(session.id, 'user', 'takeover', {});
-  shellBus.publish(session.thread_id, { type: 'shell_lease_changed', step: 0, sessionId: session.id, actor: 'user', runId: null });
-  res.json({ session: await store.getShellSession(session.id) });
-});
-
-api.post('/shell-sessions/:id/release', async (req, res) => {
-  const session = await store.getShellSession(req.params.id);
-  if (!session) return res.status(404).json({ error: 'shell session 不存在' });
-  await store.updateShellSession(session.id, { status: 'idle', lease_actor: null, lease_run_id: null });
-  await store.addShellSessionEvent(session.id, 'user', 'release', {});
-  shellBus.publish(session.thread_id, { type: 'shell_lease_changed', step: 0, sessionId: session.id, actor: null, runId: null });
-  res.json({ session: await store.getShellSession(session.id) });
 });
 
 function latestAskUserSpec(events: Awaited<ReturnType<typeof store.getEvents>>): AskUserSpec | null {

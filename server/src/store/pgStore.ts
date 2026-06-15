@@ -206,17 +206,27 @@ export class PgStore implements Store {
 
   async createShellSession(input: {
     threadId: string;
+    name: string;
+    owner: ShellSessionRow['owner'];
     workspaceRoot: string;
     cwd?: string;
     backend: string;
-    pinned?: boolean;
-    idleExpiresAt?: string | null;
+    configSnapshot?: Record<string, unknown> | null;
   }): Promise<ShellSessionRow> {
     const id = newShellSessionId();
     const { rows } = await query<ShellSessionRow>(
-      `INSERT INTO shell_sessions (id, thread_id, workspace_root, cwd, backend, status, pinned, idle_expires_at)
-       VALUES ($1, $2, $3, $4, $5, 'idle', $6, $7) RETURNING *`,
-      [id, input.threadId, input.workspaceRoot, input.cwd ?? input.workspaceRoot, input.backend, input.pinned === true, input.idleExpiresAt ?? null],
+      `INSERT INTO shell_sessions (id, thread_id, name, owner, workspace_root, cwd, backend, status, config_snapshot)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'idle', $8::jsonb) RETURNING *`,
+      [
+        id,
+        input.threadId,
+        input.name,
+        input.owner,
+        input.workspaceRoot,
+        input.cwd ?? input.workspaceRoot,
+        input.backend,
+        input.configSnapshot ? JSON.stringify(input.configSnapshot) : null,
+      ],
     );
     return rows[0];
   }
@@ -229,11 +239,11 @@ export class PgStore implements Store {
   async listShellSessions(threadId: string, workspaceRoot?: string): Promise<ShellSessionRow[]> {
     const { rows } = workspaceRoot
       ? await query<ShellSessionRow>(
-          `SELECT * FROM shell_sessions WHERE thread_id = $1 AND workspace_root = $2 ORDER BY updated_at DESC, created_at DESC`,
+          `SELECT * FROM shell_sessions WHERE thread_id = $1 AND workspace_root = $2 AND deleted_at IS NULL ORDER BY updated_at DESC, created_at DESC`,
           [threadId, workspaceRoot],
         )
       : await query<ShellSessionRow>(
-          `SELECT * FROM shell_sessions WHERE thread_id = $1 ORDER BY updated_at DESC, created_at DESC`,
+          `SELECT * FROM shell_sessions WHERE thread_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC, created_at DESC`,
           [threadId],
         );
     return rows;
@@ -241,14 +251,14 @@ export class PgStore implements Store {
 
   async updateShellSession(
     id: string,
-    fields: Partial<Pick<ShellSessionRow, 'status' | 'lease_actor' | 'lease_run_id' | 'pinned' | 'idle_expires_at' | 'cwd'>>,
+    fields: Partial<Pick<ShellSessionRow, 'name' | 'status' | 'lease_actor' | 'lease_run_id' | 'cwd' | 'config_snapshot' | 'deleted_at'>>,
   ): Promise<void> {
     const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
     if (!entries.length) return;
-    const sets = entries.map(([key], i) => `${key} = $${i + 2}`);
+    const sets = entries.map(([key], i) => `${key} = $${i + 2}${key === 'config_snapshot' ? '::jsonb' : ''}`);
     await query(`UPDATE shell_sessions SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, [
       id,
-      ...entries.map(([, value]) => value),
+      ...entries.map(([key, value]) => key === 'config_snapshot' && value != null ? JSON.stringify(value) : value),
     ]);
   }
 

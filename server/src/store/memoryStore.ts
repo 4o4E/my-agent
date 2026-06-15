@@ -190,23 +190,26 @@ export class MemoryStore implements Store {
 
   async createShellSession(input: {
     threadId: string;
+    name: string;
+    owner: ShellSessionRow['owner'];
     workspaceRoot: string;
     cwd?: string;
     backend: string;
-    pinned?: boolean;
-    idleExpiresAt?: string | null;
+    configSnapshot?: Record<string, unknown> | null;
   }): Promise<ShellSessionRow> {
     const row: ShellSessionRow = {
       id: newShellSessionId(),
       thread_id: input.threadId,
+      name: input.name,
+      owner: input.owner,
       workspace_root: input.workspaceRoot,
       cwd: input.cwd ?? input.workspaceRoot,
       backend: input.backend,
       status: 'idle',
       lease_actor: null,
       lease_run_id: null,
-      pinned: input.pinned === true,
-      idle_expires_at: input.idleExpiresAt ?? null,
+      config_snapshot: input.configSnapshot ?? null,
+      deleted_at: null,
       created_at: this.now(),
       updated_at: this.now(),
     };
@@ -220,13 +223,13 @@ export class MemoryStore implements Store {
 
   async listShellSessions(threadId: string, workspaceRoot?: string): Promise<ShellSessionRow[]> {
     return [...this.shellSessions.values()]
-      .filter((session) => session.thread_id === threadId && (!workspaceRoot || session.workspace_root === workspaceRoot))
+      .filter((session) => !session.deleted_at && session.thread_id === threadId && (!workspaceRoot || session.workspace_root === workspaceRoot))
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }
 
   async updateShellSession(
     id: string,
-    fields: Partial<Pick<ShellSessionRow, 'status' | 'lease_actor' | 'lease_run_id' | 'pinned' | 'idle_expires_at' | 'cwd'>>,
+    fields: Partial<Pick<ShellSessionRow, 'name' | 'status' | 'lease_actor' | 'lease_run_id' | 'cwd' | 'config_snapshot' | 'deleted_at'>>,
   ): Promise<void> {
     const row = this.shellSessions.get(id);
     if (!row) return;
@@ -246,6 +249,10 @@ export class MemoryStore implements Store {
     softTimeoutAt?: string | null;
     hardTimeoutAt?: string | null;
   }): Promise<ShellCommandRow> {
+    const alreadyRunning = [...this.shellCommands.values()].find(
+      (cmd) => cmd.session_id === input.sessionId && (cmd.status === 'queued' || cmd.status === 'running'),
+    );
+    if (alreadyRunning) throw new Error(`shell session 正在执行命令 ${alreadyRunning.id}`);
     const row: ShellCommandRow = {
       id: newShellCommandId(),
       session_id: input.sessionId,

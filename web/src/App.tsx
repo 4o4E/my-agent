@@ -76,6 +76,9 @@ function beginHorizontalResize(
 }
 
 function attachmentToken(att: ComposerAttachment): string {
+  if (att.kind === 'shell') {
+    return att.text ?? `用户标记了 shell 交互：${att.name}`;
+  }
   const payload = {
     kind: att.kind,
     path: att.path,

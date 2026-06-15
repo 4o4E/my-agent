@@ -35,7 +35,8 @@ export interface StoredEvent {
 }
 
 export type ShellActor = 'agent' | 'user' | 'system';
-export type ShellSessionStatus = 'opening' | 'idle' | 'busy' | 'attached_by_user' | 'closing' | 'closed' | 'orphaned';
+export type ShellOwner = 'agent' | 'user' | 'system';
+export type ShellSessionStatus = 'opening' | 'idle' | 'busy' | 'closing' | 'closed' | 'orphaned';
 export type ShellCommandStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'killed' | 'timed_out' | 'orphaned';
 export type ShellCommandWaitMode = 'foreground' | 'background';
 export type ShellLogStream = 'stdout' | 'stderr' | 'system';
@@ -43,14 +44,16 @@ export type ShellLogStream = 'stdout' | 'stderr' | 'system';
 export interface ShellSessionRow {
   id: string;
   thread_id: string;
+  name: string;
+  owner: ShellOwner;
   workspace_root: string;
   cwd: string;
   backend: string;
   status: ShellSessionStatus;
   lease_actor: ShellActor | null;
   lease_run_id: string | null;
-  pinned: boolean;
-  idle_expires_at: string | null;
+  config_snapshot: Record<string, unknown> | null;
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -141,17 +144,18 @@ export interface Store {
 
   createShellSession(input: {
     threadId: string;
+    name: string;
+    owner: ShellOwner;
     workspaceRoot: string;
     cwd?: string;
     backend: string;
-    pinned?: boolean;
-    idleExpiresAt?: string | null;
+    configSnapshot?: Record<string, unknown> | null;
   }): Promise<ShellSessionRow>;
   getShellSession(id: string): Promise<ShellSessionRow | null>;
   listShellSessions(threadId: string, workspaceRoot?: string): Promise<ShellSessionRow[]>;
   updateShellSession(
     id: string,
-    fields: Partial<Pick<ShellSessionRow, 'status' | 'lease_actor' | 'lease_run_id' | 'pinned' | 'idle_expires_at' | 'cwd'>>,
+    fields: Partial<Pick<ShellSessionRow, 'name' | 'status' | 'lease_actor' | 'lease_run_id' | 'cwd' | 'config_snapshot' | 'deleted_at'>>,
   ): Promise<void>;
 
   createShellCommand(input: {

@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, Play, Plug, Power, RefreshCw, ShieldCheck, Square, Terminal, Unlock, X } from 'lucide-react';
+import { Circle, Paperclip, Pencil, Play, Plug, Power, RefreshCw, Square, Terminal, X } from 'lucide-react';
 import {
   closeShellSession,
   createShellSession,
   getShellCommandLogs,
   killShellCommand,
   listShellSessions,
-  releaseShellSession,
+  markShellCommand,
+  renameShellSession,
   runShellCommand,
   subscribeShell,
-  takeoverShellSession,
   type ShellCommand,
   type ShellCommandLog,
   type ShellSession,
 } from '@/api';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
@@ -25,6 +27,7 @@ interface Props {
   embedded?: boolean;
   previewSessionId?: string | null;
   onClose: () => void;
+  onAttach: (entry: { kind: 'shell'; path: string; name: string; size?: number; text: string }) => void;
 }
 
 const RUNNING: ShellCommand['status'][] = ['queued', 'running'];
@@ -93,11 +96,15 @@ function sortedCommands(session: ShellSession | null): ShellCommand[] {
   return [...(session?.commands ?? [])].sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
 }
 
-export function ShellPanel({ open, width, threadId, embedded = false, previewSessionId = null, onClose }: Props) {
+export function ShellPanel({ open, width, threadId, embedded = false, previewSessionId = null, onClose, onAttach }: Props) {
   const [sessions, setSessions] = useState<ShellSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [logsByCommand, setLogsByCommand] = useState<Record<string, ShellCommandLog[]>>({});
   const [commandText, setCommandText] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newSessionName, setNewSessionName] = useState('');
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameName, setRenameName] = useState('');
   const [loading, setLoading] = useState(false);
   const [acting, setActing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -209,8 +216,10 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
     setActing(true);
     setError(null);
     try {
-      const { session } = await createShellSession(threadId, true);
+      const { session } = await createShellSession(threadId, newSessionName.trim() || undefined);
       setSelectedSessionId(session.id);
+      setNewSessionName('');
+      setCreateOpen(false);
       await refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -221,6 +230,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
 
   async function closeSelectedSession() {
     if (!selectedSession) return;
+    if (selectedSession.name === 'Default' || selectedSession.owner !== 'user') return;
     const force = !!runningCommand;
     if (force && !window.confirm('当前 session 还有运行中命令，确认终止命令并关闭 session？')) return;
     setActing(true);
@@ -228,6 +238,32 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
     try {
       await closeShellSession(selectedSession.id, force);
       setLogsByCommand({});
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setActing(false);
+    }
+  }
+
+  function openRenameDialog() {
+    if (!selectedSession || selectedSession.name === 'Default' || selectedSession.owner !== 'user') return;
+    setRenameName(selectedSession.name);
+    setRenameOpen(true);
+  }
+
+  async function renameSelectedSession() {
+    if (!selectedSession) return;
+    const name = renameName.trim();
+    if (!name) {
+      setError('名称不能为空');
+      return;
+    }
+    setActing(true);
+    setError(null);
+    try {
+      await renameShellSession(selectedSession.id, name);
+      setRenameOpen(false);
       await refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -266,14 +302,18 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
     }
   }
 
-  async function setUserLease(next: 'takeover' | 'release') {
-    if (!selectedSession) return;
+  async function attachCommand(command: ShellCommand) {
     setActing(true);
     setError(null);
     try {
-      if (next === 'takeover') await takeoverShellSession(selectedSession.id);
-      else await releaseShellSession(selectedSession.id);
-      await refresh();
+      const { attachment } = await markShellCommand(command.id);
+      onAttach({
+        kind: 'shell',
+        path: `shell:${attachment.commandId}`,
+        name: attachment.name,
+        size: attachment.size,
+        text: attachment.text,
+      });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -284,7 +324,8 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
   if (!open) return null;
 
   const canRun = !!selectedSession && !runningCommand && commandText.trim().length > 0;
-  const leaseByUser = selectedSession?.lease_actor === 'user';
+  const canDeleteSelected = !!selectedSession && selectedSession.name !== 'Default' && selectedSession.owner === 'user';
+  const canRenameSelected = canDeleteSelected;
 
   return (
     <aside className={cn('flex h-full shrink-0 flex-col bg-card', !embedded && 'border-l')} style={embedded ? undefined : { width }}>
@@ -323,44 +364,42 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
                       session.id === selectedSession?.id ? 'border-primary bg-background text-foreground' : 'border-transparent text-muted-foreground',
                     )}
                     onClick={() => setSelectedSessionId(session.id)}
-                    title={session.id}
+                    title={`${session.name} (${session.id})`}
                   >
                     <Circle className={cn('size-2.5 shrink-0 fill-current', sessionTone(session.status))} />
-                    <span className="min-w-0 flex-1 truncate">{session.id}</span>
+                    <span className="min-w-0 flex-1 truncate">{session.name}</span>
                   </button>
                 ))}
               </div>
             )}
             {previewSessionId && (
               <div className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-                预览 {previewSessionId}
+                预览 {selectedSession?.name ?? previewSessionId}
               </div>
             )}
-            <Button variant="ghost" size="icon-sm" onClick={() => void createSession()} disabled={acting} title="创建 session">
+            <Button variant="ghost" size="icon-sm" onClick={() => setCreateOpen(true)} disabled={acting} title="创建 shell">
               <Plug className="size-3.5" />
             </Button>
             {selectedSession && (
               <>
-                {leaseByUser ? (
-                  <Button variant="outline" size="sm" onClick={() => void setUserLease('release')} disabled={acting} title="释放接管">
-                    <Unlock className="size-3.5" />
-                    释放
-                  </Button>
-                ) : (
-                  <Button variant="outline" size="sm" onClick={() => void setUserLease('takeover')} disabled={acting} title="接管 session">
-                    <ShieldCheck className="size-3.5" />
-                    接管
-                  </Button>
-                )}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={openRenameDialog}
+                  disabled={acting || !canRenameSelected}
+                  title={canRenameSelected ? '改名' : 'Default 或 agent 创建的 shell 不能改名'}
+                >
+                  <Pencil className="size-3.5" />
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => void closeSelectedSession()}
-                  disabled={acting}
-                  title="关闭 session"
+                  disabled={acting || !canDeleteSelected}
+                  title={canDeleteSelected ? '删除 shell' : 'Default 或 agent 创建的 shell 不能删除'}
                 >
                   <Power className="size-3.5" />
-                  关闭
+                  删除
                 </Button>
               </>
             )}
@@ -385,8 +424,21 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
                         </div>
                         {output && <pre className="whitespace-pre-wrap break-words text-slate-100">{output}</pre>}
                         {!isRunning(command) && (
-                          <div className={cn('text-[11px]', commandTone(command.status))}>
-                            [{formatTime(command.ended_at ?? command.updated_at)}] {commandSummary(command)}
+                          <div className="flex items-center gap-2">
+                            <div className={cn('min-w-0 flex-1 text-[11px]', commandTone(command.status))}>
+                              [{formatTime(command.ended_at ?? command.updated_at)}] {commandSummary(command)}
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              className="size-6 text-slate-300 hover:bg-slate-800 hover:text-white"
+                              onClick={() => void attachCommand(command)}
+                              disabled={acting}
+                              title="添加这次 shell 交互到输入框"
+                            >
+                              <Paperclip className="size-3.5" />
+                            </Button>
                           </div>
                         )}
                       </div>
@@ -432,7 +484,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
             <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
               <div>
                 <div>当前没有可用 shell session。</div>
-                <Button className="mt-3" size="sm" onClick={() => void createSession()} disabled={acting}>
+                <Button className="mt-3" size="sm" onClick={() => setCreateOpen(true)} disabled={acting}>
                   <Plug className="size-4" />
                   创建
                 </Button>
@@ -441,6 +493,48 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
           )}
         </>
       )}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>创建 Shell</DialogTitle>
+          </DialogHeader>
+          <label className="block space-y-1 text-sm">
+            <span className="text-muted-foreground">名称</span>
+            <Input
+              value={newSessionName}
+              onChange={(event) => setNewSessionName(event.currentTarget.value)}
+              placeholder="留空自动生成 User 1"
+            />
+          </label>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>取消</Button>
+            <Button type="button" onClick={() => void createSession()} disabled={acting}>
+              创建
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>改名 Shell</DialogTitle>
+          </DialogHeader>
+          <label className="block space-y-1 text-sm">
+            <span className="text-muted-foreground">名称</span>
+            <Input
+              value={renameName}
+              onChange={(event) => setRenameName(event.currentTarget.value)}
+              placeholder="Shell 名称"
+            />
+          </label>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => setRenameOpen(false)}>取消</Button>
+            <Button type="button" onClick={() => void renameSelectedSession()} disabled={acting || !renameName.trim()}>
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }
