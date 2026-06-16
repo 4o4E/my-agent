@@ -126,10 +126,10 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
   const refreshTimerRef = useRef<number | null>(null);
 
   const liveSessions = useMemo(() => sessions.filter((session) => session.status !== 'closed'), [sessions]);
-  const selectedSession = useMemo(
-    () => liveSessions.find((session) => session.id === (previewSessionId ?? selectedSessionId)) ?? liveSessions[0] ?? null,
-    [liveSessions, previewSessionId, selectedSessionId],
-  );
+  const selectedSession = useMemo(() => {
+    if (previewSessionId) return liveSessions.find((session) => session.id === previewSessionId) ?? null;
+    return liveSessions.find((session) => session.id === selectedSessionId) ?? liveSessions[0] ?? null;
+  }, [liveSessions, previewSessionId, selectedSessionId]);
   const commands = useMemo(() => sortedCommands(selectedSession), [selectedSession]);
   const runningCommand = useMemo(() => commands.find((command) => isRunning(command)) ?? null, [commands]);
   const hasRunningCommand = useMemo(
@@ -182,7 +182,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
 
   useEffect(() => {
     if (open) void refresh();
-  }, [open, refresh]);
+  }, [open, previewSessionId, refresh]);
 
   useLayoutEffect(() => {
     // thread 或预览 session 切换时先清掉本地视图，避免旧 shell 输出和选区短暂残留。
@@ -402,7 +402,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
             )}
             {previewSessionId && (
               <div className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-                预览 {selectedSession?.name ?? previewSessionId}
+                预览 {selectedSession ? selectedSession.name : `${previewSessionId}（不存在或已关闭）`}
               </div>
             )}
             <Button variant="ghost" size="icon-sm" onClick={() => setCreateOpen(true)} disabled={acting} title="创建 shell">
@@ -511,11 +511,13 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
           ) : (
             <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
               <div>
-                <div>当前没有可用 shell session。</div>
-                <Button className="mt-3" size="sm" onClick={() => setCreateOpen(true)} disabled={acting}>
-                  <Plug className="size-4" />
-                  创建
-                </Button>
+                <div>{previewSessionId ? '这个 shell session 不存在或已关闭。' : '当前没有可用 shell session。'}</div>
+                {!previewSessionId && (
+                  <Button className="mt-3" size="sm" onClick={() => setCreateOpen(true)} disabled={acting}>
+                    <Plug className="size-4" />
+                    创建
+                  </Button>
+                )}
               </div>
             </div>
           )}

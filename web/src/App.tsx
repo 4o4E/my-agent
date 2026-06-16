@@ -180,6 +180,10 @@ function waitingRunFrom(runs: RunWithEvents[]): { id: string; spec: AskUserSpec 
   return { id: run.id, spec: event?.spec ?? defaultAskSpec(question) };
 }
 
+function liveRunFrom(runs: RunWithEvents[]): RunWithEvents | null {
+  return [...runs].reverse().find((r) => r.status === 'pending' || r.status === 'running' || r.status === 'canceling') ?? null;
+}
+
 function isRightTabId(value: unknown): value is RightTabId {
   return value === 'files'
     || (typeof value === 'string' && (value.startsWith('file:') || value.startsWith('shell:') || value.startsWith('subagent:')));
@@ -275,6 +279,7 @@ export function App() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [reattachedRunId, setReattachedRunId] = useState<string | null>(null);
   const [waitingRun, setWaitingRun] = useState<{ id: string; spec: AskUserSpec } | null>(null);
   const [resumingRunId, setResumingRunId] = useState<string | null>(null);
   const [askUserDrafts, setAskUserDrafts] = useState<Record<string, AskUserDraft>>({});
@@ -287,6 +292,7 @@ export function App() {
   const threadPanelStatesRef = useRef<Record<string, ThreadPanelState>>({});
   const threadDraftsRef = useRef<Record<string, string>>({});
   const draftRef = useRef(route.draft);
+  const reattachedEventsRef = useRef<AgentEvent[]>([]);
   const draftSyncTimerRef = useRef<number | null>(null);
   const draftRouteTimerRef = useRef<number | null>(null);
 
@@ -507,7 +513,7 @@ export function App() {
   const transport = useMemo(() => createAiSdkChatTransport(handle), [handle]);
 
   const { messages, sendMessage, status, stop, setMessages } = useChat({ transport });
-  const busy = status === 'submitted' || status === 'streaming' || !!resumingRunId;
+  const busy = status === 'submitted' || status === 'streaming' || !!resumingRunId || !!reattachedRunId;
 
   useEffect(() => {
     if (!busy) setActiveRunId(null);
@@ -559,6 +565,8 @@ export function App() {
       draftRef.current = route.draft;
       setComposerDraft(route.draft);
       setMessages([]);
+      reattachedEventsRef.current = [];
+      setReattachedRunId(null);
       return () => {
         canceled = true;
       };
@@ -576,16 +584,68 @@ export function App() {
         if (!canceled) {
           setMessages(runsToUiMessages(runs));
           setWaitingRun(waitingRunFrom(runs));
+          const liveRun = liveRunFrom(runs);
+          reattachedEventsRef.current = liveRun?.events ?? [];
+          setReattachedRunId(liveRun?.id ?? null);
+          if (liveRun) setActiveRunId(liveRun.id);
         }
       })
       .catch(() => {
-        if (!canceled) setMessages([]);
+        if (!canceled) {
+          setMessages([]);
+          reattachedEventsRef.current = [];
+          setReattachedRunId(null);
+        }
       });
 
     return () => {
       canceled = true;
     };
   }, [activeThreadId, setMessages]);
+
+  useEffect(() => {
+    if (!activeThreadId || !reattachedRunId) return;
+    let canceled = false;
+    let renderFrame = 0;
+
+    const renderEvents = () => {
+      renderFrame = 0;
+      setMessages((current) => replaceAssistantMessage(current, reattachedRunId, reattachedEventsRef.current));
+    };
+    const refreshLiveRun = () => {
+      void getThread(activeThreadId)
+        .then(({ runs }) => {
+          if (canceled) return;
+          setMessages(runsToUiMessages(runs));
+          setWaitingRun(waitingRunFrom(runs));
+          const liveRun = liveRunFrom(runs);
+          reattachedEventsRef.current = liveRun?.events ?? [];
+          setReattachedRunId(liveRun?.id ?? null);
+          setActiveRunId(liveRun?.id ?? null);
+          if (!liveRun) refreshThreads();
+        })
+        .catch(() => {});
+    };
+
+    const unsubscribe = subscribeRun(
+      reattachedRunId,
+      (event) => {
+        reattachedEventsRef.current = [...reattachedEventsRef.current, event];
+        if (renderFrame) return;
+        renderFrame = window.requestAnimationFrame(renderEvents);
+      },
+      refreshLiveRun,
+      { replay: 'none' },
+    );
+    const interval = window.setInterval(refreshLiveRun, 2000);
+
+    return () => {
+      canceled = true;
+      if (renderFrame) window.cancelAnimationFrame(renderFrame);
+      window.clearInterval(interval);
+      unsubscribe();
+    };
+  }, [activeThreadId, reattachedRunId, refreshThreads, setMessages]);
 
   function newChat() {
     stop();
@@ -643,11 +703,16 @@ export function App() {
     void getThread(activeThreadId).then(({ runs }) => {
       setMessages(runsToUiMessages(runs));
       setWaitingRun(waitingRunFrom(runs));
+      const liveRun = liveRunFrom(runs);
+      reattachedEventsRef.current = liveRun?.events ?? [];
+      setReattachedRunId(liveRun?.id ?? null);
+      setActiveRunId(liveRun?.id ?? null);
     });
   }, [activeThreadId, setMessages]);
 
   const resumeWithAnswer = useCallback((runId: string, answer: AskUserAnswer) => {
     setWaitingRun(null);
+    setReattachedRunId(null);
     setResumingRunId(runId);
     setActiveRunId(runId);
     void answerRun(runId, answer)
@@ -774,6 +839,7 @@ export function App() {
     void cancelRun(runId).catch((err) => console.error('cancel run failed', err));
     stop();
     setActiveRunId(null);
+    setReattachedRunId(null);
   }
 
   const activeThread = threads.find((t) => t.id === activeThreadId);

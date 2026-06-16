@@ -86,6 +86,7 @@ class StreamStatsTracker {
   constructor(
     private readonly runId: string,
     private readonly publish: (runId: string, event: AgentEvent) => void,
+    private readonly persist?: (event: Extract<AgentEvent, { type: 'stream_stats' }>) => void,
   ) {}
 
   add(step: number, stage: StreamStage, kind: keyof Omit<StreamStats['totals'], 'totalChars'>, chars: number, activeTool?: StreamStats['activeTool']) {
@@ -121,7 +122,7 @@ class StreamStatsTracker {
     const now = Date.now();
     if (!force && now - this.lastPublishMs < STREAM_STATS_MIN_INTERVAL_MS) return;
     this.lastPublishMs = now;
-    this.publish(this.runId, {
+    const event: Extract<AgentEvent, { type: 'stream_stats' }> = {
       type: 'stream_stats',
       step,
       stage,
@@ -132,7 +133,9 @@ class StreamStatsTracker {
         charsPerSecond: this.bucket.chars,
         history: [...this.history, this.bucket.chars].slice(-STREAM_STATS_POINTS),
       },
-    });
+    };
+    this.publish(this.runId, event);
+    this.persist?.(event);
   }
 }
 
@@ -399,10 +402,24 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
 
     const activeSkills: SkillIndexItem[] = [];
     const toolEnv: Record<string, string> = {};
-    const streamStats = new StreamStatsTracker(runId, publish);
+    const stepIds = new Map<number, string>();
+    let livePersistQueue = Promise.resolve();
+    const persistLiveEvent = (event: AgentEvent) => {
+      const stepId = 'step' in event ? stepIds.get(event.step) ?? null : null;
+      // 流式事件需要实时落库，刷新/切换会话时才能从 DB 恢复当前状态。
+      livePersistQueue = livePersistQueue.then(() => store.addEvent(runId, stepId, event)).catch((err) => {
+        console.warn(`persist live event failed for ${runId}: ${(err as Error).message}`);
+      });
+    };
+    const publishLiveEvent = (event: AgentEvent) => {
+      publish(runId, event);
+      persistLiveEvent(event);
+    };
+    const streamStats = new StreamStatsTracker(runId, publish, persistLiveEvent);
     const recentToolSignatures: string[] = [];
     const recentFailures: string[] = [];
     let noActionTurns = 0;
+    let deferredFinalText = '';
 
     const ensureDatabaseToolEnv = async (activation: SkillActivation): Promise<string> => {
       if (toolEnv.DB_WORKLOAD_TOKEN) return '数据库访问运行环境已存在，本次 run 复用同一个 workload token。';
@@ -651,6 +668,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       }
 
       const step = await store.createStep(runId, stepIdx);
+      stepIds.set(stepIdx, step.id);
       await emit(step.id, { type: 'step_start', step: stepIdx });
       streamStats.mark(stepIdx, 'llm_waiting', undefined, true);
 
@@ -664,6 +682,8 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       let result;
       let liveStreamed = false;
       let publishedDelta = false;
+      let persistedLiveContent = false;
+      let persistedLiveReasoning = false;
       const llmStartedAt = new Date().toISOString();
       let reasoningStartedAt: string | null = null;
       let llmStage: StreamStage = 'llm_waiting';
@@ -711,13 +731,15 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
                 llmActiveTool = undefined;
                 reasoningStartedAt ??= new Date().toISOString();
                 streamStats.add(stepIdx, 'reasoning', 'reasoningChars', charCount(d.reasoning));
-                publish(runId, { type: 'reasoning', step: stepIdx, text: d.reasoning, startedAt: reasoningStartedAt });
+                persistedLiveReasoning = true;
+                publishLiveEvent({ type: 'reasoning', step: stepIdx, text: d.reasoning, startedAt: reasoningStartedAt });
               }
               if (d.content) {
                 llmStage = 'output';
                 llmActiveTool = undefined;
                 streamStats.add(stepIdx, 'output', 'outputChars', charCount(d.content));
-                publish(runId, { type: 'llm_delta', step: stepIdx, text: d.content });
+                persistedLiveContent = true;
+                publishLiveEvent({ type: 'llm_delta', step: stepIdx, text: d.content });
               }
             });
             liveStreamed = true;
@@ -730,6 +752,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       } finally {
         stopLlmHeartbeat();
       }
+      await livePersistQueue;
       const llmEndedAt = new Date().toISOString();
 
       // 用真实 token 用量校准估算器，供下一次压缩判断使用。
@@ -747,7 +770,9 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         const startedAt = reasoningStartedAt ?? llmStartedAt;
         const timing = { startedAt, endedAt: llmEndedAt, durationMs: durationMs(startedAt, llmEndedAt) };
         const ev = { type: 'reasoning' as const, step: stepIdx, text: reasoning, ...timing };
-        if (liveStreamed) {
+        if (liveStreamed && persistedLiveReasoning) {
+          await emit(step.id, { type: 'reasoning_timing', step: stepIdx, ...timing });
+        } else if (liveStreamed) {
           await store.addEvent(runId, step.id, ev);
           await emit(step.id, { type: 'reasoning_timing', step: stepIdx, ...timing });
         } else {
@@ -759,7 +784,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       ctx.add(assistantMsg);
       ctx.setLastDbId(await store.addMessage(threadId, runId, step.id, assistantMsg));
 
-      if (content && toolCalls.length) {
+      if (content && (toolCalls.length || liveStreamed) && !persistedLiveContent) {
         const ev = { type: 'llm_delta' as const, step: stepIdx, text: content };
         if (liveStreamed) await store.addEvent(runId, step.id, ev);
         else await emit(step.id, ev);
@@ -774,12 +799,14 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
           if (goal.plan.length) await emit(step.id, { type: 'plan_update', step: stepIdx, goal });
           await persistCompaction(step.id, ctx.compactForHistory());
           streamStats.mark(stepIdx, 'done', undefined, true);
+          await livePersistQueue;
           await emit(step.id, { type: 'final', step: stepIdx, output: finalText });
           await store.setRunStatus(runId, 'done', { output: finalText });
           return;
         }
 
         noActionTurns += 1;
+        if (finalText) deferredFinalText = finalText;
         if (noActionTurns >= 3) {
           const reason = finalText
             ? `连续 ${noActionTurns} 个 step 输出了最终文本，但计划没有进入可汇报状态。`
@@ -797,6 +824,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
         continue;
       }
       noActionTurns = 0;
+      if (toolCalls.some((call) => call.name !== 'update_plan')) deferredFinalText = '';
 
       const toolTraces: ToolTrace[] = [];
       const pendingSkillSystemMessages: LlmMessage[] = [];
@@ -1008,6 +1036,25 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       // tool_result 连续出现，所以 skill 的 system 注入必须等本轮工具结果全部回填后再追加。
       for (const msg of pendingSkillSystemMessages) {
         ctx.add(msg);
+      }
+
+      const sameTurnFinalText = content?.trim() ?? '';
+      const deferredToolFinalText =
+        !sameTurnFinalText && goal.phase === 'completed' && toolCalls.every((call) => call.name === 'update_plan')
+          ? deferredFinalText
+          : '';
+      const finalTextFromToolTurn = sameTurnFinalText || deferredToolFinalText;
+      if (finalTextFromToolTurn && toolCalls.every((call) => call.name === 'update_plan') && canReportGoal(goal)) {
+        goal = finishGoal(goal);
+        await store.setGoalState(runId, goal);
+        ctx.setGoal(renderGoal(goal));
+        if (goal.plan.length) await emit(step.id, { type: 'plan_update', step: stepIdx, goal });
+        await persistCompaction(step.id, ctx.compactForHistory());
+        streamStats.mark(stepIdx, 'done', undefined, true);
+        await livePersistQueue;
+        await emit(step.id, { type: 'final', step: stepIdx, output: finalTextFromToolTurn });
+        await store.setRunStatus(runId, 'done', { output: finalTextFromToolTurn });
+        return;
       }
 
       const guardHit = detectLoopGuard(recentToolSignatures, recentFailures);

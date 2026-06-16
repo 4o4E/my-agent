@@ -218,9 +218,12 @@ export function subscribeRun(
   runId: string,
   onEvent: (e: AgentEvent) => void,
   onClose?: () => void,
+  options: { replay?: 'all' | 'none' } = {},
 ): () => void {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws?runId=${runId}`);
+  const params = new URLSearchParams({ runId });
+  if (options.replay) params.set('replay', options.replay);
+  const ws = new WebSocket(`${proto}://${location.host}/ws?${params.toString()}`);
   ws.onmessage = (m) => {
     try {
       onEvent(JSON.parse(m.data) as AgentEvent);

@@ -104,6 +104,43 @@ test('executeRun: runs the loop across steps and finalizes', async () => {
   assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool', 'assistant']);
 });
 
+test('executeRun: persists streamed text and terminal stream status for replay', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'stream a final answer');
+  const published: AgentEvent[] = [];
+
+  await executeRun(run.id, {
+    store,
+    provider: {
+      name: 'streaming-final',
+      async complete() {
+        assert.fail('流式 provider 不应回退到非流式 complete');
+      },
+      async completeStream(_messages, _tools, onDelta) {
+        onDelta({ reasoning: '想' });
+        onDelta({ content: 'he' });
+        onDelta({ content: 'llo' });
+        return { content: 'hello', reasoning: '想', toolCalls: [] };
+      },
+    },
+    publish: (_id, e) => published.push(e),
+    hardStepCap: 3,
+    stream: true,
+    toolSettings: testToolSettings(),
+  });
+
+  const events = await store.getEvents(run.id);
+  const textEvents = events.filter((e): e is Extract<AgentEvent, { type: 'llm_delta' }> => e.type === 'llm_delta');
+  assert.deepEqual(textEvents.map((e) => e.text), ['he', 'llo']);
+  assert.equal(textEvents.map((e) => e.text).join(''), 'hello');
+  assert.equal(events.filter((e) => e.type === 'reasoning').length, 1);
+  assert.ok(events.some((e) => e.type === 'reasoning_timing'));
+  assert.ok(events.some((e) => e.type === 'stream_stats' && e.stage === 'done' && e.totals.outputChars === 5));
+  assert.equal(events.at(-1)?.type, 'final');
+  assert.ok(published.some((e) => e.type === 'llm_delta' && e.text === 'he'));
+});
+
 test('executeRun: injects the current workspace root into the LLM context', async () => {
   const store = new MemoryStore();
   const thread = await store.createThread();
@@ -451,6 +488,170 @@ test('executeRun: streams tool input stats without double counting final tool ar
   const stats = published.filter((e): e is Extract<AgentEvent, { type: 'stream_stats' }> => e.type === 'stream_stats');
   const maxToolInputChars = Math.max(...stats.map((e) => e.totals.toolInputChars));
   assert.equal(maxToolInputChars, Array.from(args).length);
+});
+
+test('executeRun: finalizes when the same turn writes the full answer and closes the plan', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'write a final report and close the plan');
+  const finalText = '完整分析报告\n\n结论：所有步骤已经完成。';
+  const published: AgentEvent[] = [];
+  let turns = 0;
+
+  await executeRun(run.id, {
+    store,
+    provider: {
+      name: 'answer-then-plan',
+      async complete() {
+        turns += 1;
+        return {
+          content: finalText,
+          toolCalls: [
+            {
+              id: 'plan_done',
+              name: 'update_plan',
+              arguments: JSON.stringify({
+                phase: 'completed',
+                plan: [{ text: '完成分析报告', status: 'done' }],
+                next: '已完成',
+              }),
+            },
+          ],
+        };
+      },
+    },
+    publish: (_id, e) => published.push(e),
+    hardStepCap: 3,
+    toolSettings: testToolSettings(),
+  });
+
+  const finished = await store.getRun(run.id);
+  assert.equal(turns, 1);
+  assert.equal(finished?.status, 'done');
+  assert.equal(finished?.output, finalText);
+  assert.equal(finished?.goal_state?.phase, 'completed');
+  assert.equal(published.some((event) => event.type === 'final' && event.output === finalText), true);
+
+  const msgs = await store.loadThreadMessages(thread.id);
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant', 'tool']);
+  assert.equal(msgs[1]?.content, finalText);
+  assert.equal(msgs[2]?.toolCallId, 'plan_done');
+});
+
+test('executeRun: auto-completes the final report plan item without a second summary turn', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'produce a report');
+  const finalText = '## 完整报告\n\n这里是完整可见的最终内容。';
+  const published: AgentEvent[] = [];
+  let turns = 0;
+
+  await executeRun(run.id, {
+    store,
+    provider: {
+      name: 'auto-report-step',
+      async complete() {
+        turns += 1;
+        if (turns === 1) {
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: 'plan_1',
+                name: 'update_plan',
+                arguments: JSON.stringify({
+                  phase: 'reporting',
+                  plan: [
+                    { text: '完成分析', status: 'done' },
+                    { text: '汇总结果并汇报', status: 'doing', autoComplete: true },
+                  ],
+                  next: '输出最终报告',
+                }),
+              },
+            ],
+          };
+        }
+        return { content: finalText, toolCalls: [] };
+      },
+    },
+    publish: (_id, e) => published.push(e),
+    hardStepCap: 4,
+    toolSettings: testToolSettings(),
+  });
+
+  const finished = await store.getRun(run.id);
+  assert.equal(turns, 2);
+  assert.equal(finished?.status, 'done');
+  assert.equal(finished?.output, finalText);
+  assert.deepEqual(finished?.goal_state?.plan.map((item) => item.status), ['done', 'done']);
+  assert.equal(published.some((event) => event.type === 'final' && event.output === finalText), true);
+});
+
+test('executeRun: a completion-only update_plan finalizes the previously blocked final answer', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'produce then close plan');
+  const finalText = '## 完整报告\n\n这是先输出、后被计划状态挡住的完整报告。';
+  const published: AgentEvent[] = [];
+  let turns = 0;
+
+  await executeRun(run.id, {
+    store,
+    provider: {
+      name: 'deferred-final',
+      async complete() {
+        turns += 1;
+        if (turns === 1) {
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: 'plan_1',
+                name: 'update_plan',
+                arguments: JSON.stringify({
+                  phase: 'reporting',
+                  plan: [
+                    { text: '完成分析', status: 'done' },
+                    { text: '收尾', status: 'doing' },
+                  ],
+                }),
+              },
+            ],
+          };
+        }
+        if (turns === 2) return { content: finalText, toolCalls: [] };
+        if (turns === 3) {
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: 'plan_2',
+                name: 'update_plan',
+                arguments: JSON.stringify({
+                  phase: 'completed',
+                  plan: [
+                    { text: '完成分析', status: 'done' },
+                    { text: '收尾', status: 'done' },
+                  ],
+                }),
+              },
+            ],
+          };
+        }
+        return { content: '任务完成，所有计划步骤均已执行并汇报完毕。', toolCalls: [] };
+      },
+    },
+    publish: (_id, e) => published.push(e),
+    hardStepCap: 5,
+    toolSettings: testToolSettings(),
+  });
+
+  const finished = await store.getRun(run.id);
+  assert.equal(turns, 3);
+  assert.equal(finished?.status, 'done');
+  assert.equal(finished?.output, finalText);
+  assert.equal(published.some((event) => event.type === 'final' && event.output === finalText), true);
+  assert.equal(published.some((event) => event.type === 'final' && event.output.startsWith('任务完成')), false);
 });
 
 test('executeRun: keeps multi-turn memory within a thread', async () => {

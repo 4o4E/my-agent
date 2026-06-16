@@ -8,6 +8,7 @@ import type { AgentEvent } from '../agent/types.js';
 /**
  * WebSocket 端点:
  * - ws://host/ws?runId=<id> 回放并推送 run 事件。
+ * - ws://host/ws?runId=<id>&replay=none 仅推送新事件；前端已从 REST 恢复历史时使用。
  * - ws://host/ws?channel=shell&threadId=<id> 推送 thread 级 shell 事件。
  */
 export function attachWebSocket(server: Server): void {
@@ -18,6 +19,7 @@ export function attachWebSocket(server: Server): void {
     const channel = url.searchParams.get('channel');
     const threadId = url.searchParams.get('threadId');
     const runId = url.searchParams.get('runId');
+    const replay = url.searchParams.get('replay') ?? 'all';
 
     if (channel === 'shell') {
       if (!threadId) {
@@ -43,11 +45,14 @@ export function attachWebSocket(server: Server): void {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(event));
     };
 
-    // 回放历史事件，确保较晚连接的前端也能看到完整 run。
-    try {
-      for (const e of await store.getEvents(runId)) send(e);
-    } catch {
-      /* 忽略回放失败 */
+    // 新 run 订阅需要历史回放兜底；刷新/切换后的接管已经从 REST 恢复历史，
+    // 此时只订阅后续 live 事件，避免完成 step 被重复播放。
+    if (replay !== 'none') {
+      try {
+        for (const e of await store.getEvents(runId)) send(e);
+      } catch {
+        /* 忽略回放失败 */
+      }
     }
 
     const unsubscribe = runBus.subscribe(runId, (event) => {

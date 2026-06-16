@@ -4,6 +4,7 @@ import {
   type ComponentProps,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  createContext,
   isValidElement,
   useCallback,
   useContext,
@@ -24,6 +25,20 @@ import {
   useIsCodeFenceIncomplete,
 } from 'streamdown';
 import { cn } from '@/lib/utils';
+
+interface MarkdownRenderOptions {
+  streaming?: boolean;
+}
+
+const MarkdownRenderOptionsContext = createContext<MarkdownRenderOptions>({});
+
+export function MarkdownRenderOptionsProvider({ children, value }: { children: ReactNode; value: MarkdownRenderOptions }) {
+  return (
+    <MarkdownRenderOptionsContext.Provider value={value}>
+      {children}
+    </MarkdownRenderOptionsContext.Provider>
+  );
+}
 
 type MarkdownCodeProps = ComponentProps<'code'> & {
   node?: { properties?: { metastring?: string } };
@@ -249,6 +264,7 @@ function MermaidFullscreen({
 
 function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; className?: string; isIncomplete: boolean }) {
   const { controls, mermaid } = useContext(StreamdownContext);
+  const { streaming } = useContext(MarkdownRenderOptionsContext);
   const reactId = useId().replace(/[^a-zA-Z0-9_-]/g, '-');
   const [svg, setSvg] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -265,7 +281,7 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
   const showActions = !isIncomplete && (showCopy || showDownload || showFullscreen);
 
   useEffect(() => {
-    if (isIncomplete) return;
+    if (isIncomplete && !streaming) return;
 
     let canceled = false;
     const renderId = `mermaid-${reactId}-${hashString(chart)}-${retry}`;
@@ -273,25 +289,33 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
     setLoading(true);
     setError(null);
 
-    void mermaidPlugin
-      .getMermaid(config)
-      .render(renderId, chart)
-      .then(({ svg: nextSvg }) => {
+    void (async () => {
+      try {
+        const mermaidApi = await Promise.resolve(mermaidPlugin.getMermaid(config));
+        const parseableMermaid = mermaidApi as typeof mermaidApi & { parse?: (source: string) => unknown | Promise<unknown> };
+        // 流式输出期间先做 Mermaid 基础语法校验；不通过就保留上一张有效图，等待下一次同步。
+        if (typeof parseableMermaid.parse === 'function') await parseableMermaid.parse(chart);
+        const { svg: nextSvg } = await mermaidApi.render(renderId, chart);
         if (canceled) return;
+        setError(null);
         setSvg(nextSvg);
-      })
-      .catch((reason: unknown) => {
+      } catch (reason) {
         if (canceled) return;
+        if (streaming) {
+          setError(null);
+          return;
+        }
+        setSvg('');
         setError(reason instanceof Error ? reason.message : 'Mermaid 图表渲染失败');
-      })
-      .finally(() => {
+      } finally {
         if (!canceled) setLoading(false);
-      });
+      }
+    })();
 
     return () => {
       canceled = true;
     };
-  }, [chart, config, isIncomplete, reactId, retry]);
+  }, [chart, config, isIncomplete, reactId, retry, streaming]);
 
   const copySource = useCallback(() => {
     void navigator.clipboard?.writeText(chart);
@@ -304,7 +328,7 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
   const retryRender = useCallback(() => setRetry((value) => value + 1), []);
 
   const body = useMemo(() => {
-    if (isIncomplete || (loading && !svg)) {
+    if ((isIncomplete && !svg) || (loading && !svg) || (streaming && !svg && !error)) {
       return (
         <div className="flex size-full items-center justify-center text-sm text-muted-foreground">
           Mermaid 图表生成中...
@@ -327,7 +351,7 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
     return (
       <MermaidViewport svg={svg} />
     );
-  }, [ErrorComponent, chart, error, isIncomplete, loading, retryRender, svg]);
+  }, [ErrorComponent, chart, error, isIncomplete, loading, retryRender, streaming, svg]);
 
   return (
     <div

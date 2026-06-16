@@ -33,7 +33,7 @@ export const askUserAnswerSchema = z.object({
 export const goalStateSchema = z.object({
   intent: z.string(),
   phase: goalPhaseSchema,
-  plan: z.array(z.object({ text: z.string(), status: planStatusSchema })),
+  plan: z.array(z.object({ text: z.string(), status: planStatusSchema, autoComplete: z.boolean().optional() })),
   decisions: z.array(z.string()),
   next: z.string(),
 });

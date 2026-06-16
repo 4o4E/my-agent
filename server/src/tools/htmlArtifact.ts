@@ -31,7 +31,7 @@ function ensureHtmlDocument(content: string): string {
 export const htmlArtifactTool: Tool = {
   name: 'write_html_artifact',
   description:
-    '为复杂报告或页面写入完整 HTML artifact。当 Markdown/Mermaid/LaTeX 不够表达时使用；需要时可通过 CDN 引入 Vue、axios、ECharts 等常用库。',
+    '写入完整 HTML artifact。仅在 Markdown/Mermaid/LaTeX 无法表达、用户明确要求交互/独立页面，或需要散点图、热力图、地图、桑基图等 Mermaid 不支持图型时使用；不要因为报告“复杂”就默认调用。',
   parameters: {
     type: 'object',
     properties: {

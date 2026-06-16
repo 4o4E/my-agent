@@ -3,6 +3,8 @@ export type PlanStatus = 'todo' | 'doing' | 'done' | 'failed';
 export interface PlanItem {
   text: string;
   status: PlanStatus;
+  /** 最终汇报类步骤可在可见最终回答输出后由运行时自动标记完成。 */
+  autoComplete?: boolean;
 }
 
 export type GoalPhase = 'working' | 'reporting' | 'completed';

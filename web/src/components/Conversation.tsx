@@ -37,11 +37,38 @@ function isToolPart(p: Part): boolean {
   return p.type === 'dynamic-tool' || p.type.startsWith('tool-');
 }
 
+function isObjectValue(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function partToolName(part: Part): string | null {
+  const p = part as { type: string; toolName?: string };
+  if (p.type === 'dynamic-tool') return p.toolName ?? null;
+  if (p.type.startsWith('tool-')) return p.type.slice('tool-'.length);
+  return null;
+}
+
+function isCompletionUpdatePlan(part: Part): boolean {
+  if (partToolName(part) !== 'update_plan') return false;
+  const input = (part as { input?: unknown }).input;
+  if (!isObjectValue(input)) return false;
+  const phase = input.phase;
+  if (phase !== 'reporting' && phase !== 'completed') return false;
+  const plan = input.plan;
+  if (!Array.isArray(plan)) return true;
+  // 和后端 canReportGoal 保持一致：最终汇报/总结项允许在完整回答后自动完成。
+  return plan.every((item) => {
+    if (!isObjectValue(item)) return false;
+    return item.status === 'done' || item.status === 'failed' || item.autoComplete === true;
+  });
+}
+
 function isReasoningPart(p: Part): p is Extract<Part, { type: 'reasoning' }> {
   return p.type === 'reasoning';
 }
 
 function isActivityPart(p: Part): boolean {
+  if (isCompletionUpdatePlan(p)) return false;
   return isToolPart(p) || isReasoningPart(p);
 }
 
@@ -242,11 +269,37 @@ export function latestUsageSnapshot(parts: Part[]): UsageSnapshot | null {
 function finalTextIndex(parts: Part[]): number | null {
   const finalIndex = parts.findIndex((part) => part.type === 'data-final-output');
   if (finalIndex < 0) return null;
+  let nearestTextIndex: number | null = null;
   for (let i = finalIndex - 1; i >= 0; i--) {
     const part = parts[i] as { type: string; text?: string };
-    if (part.type === 'text' && part.text) return i;
+    if (part.type === 'text' && part.text) {
+      nearestTextIndex = i;
+      break;
+    }
   }
-  return null;
+  if (nearestTextIndex == null) return null;
+
+  const nearestText = ((parts[nearestTextIndex] as { text?: string }).text ?? '').trim();
+  if (!isCompletionSummaryText(nearestText)) return nearestTextIndex;
+
+  let sawCompletionPlan = false;
+  for (let i = nearestTextIndex - 1; i >= 0; i--) {
+    const part = parts[i] as { type: string; text?: string };
+    if (isCompletionUpdatePlan(parts[i])) {
+      sawCompletionPlan = true;
+      continue;
+    }
+    if (part.type !== 'text' || !part.text?.trim()) continue;
+    // 兼容旧 run：完整正文输出后又单独 update_plan，最后只补一句完成摘要。
+    if (sawCompletionPlan && part.text.trim().length > Math.max(400, nearestText.length * 4)) return i;
+    return nearestTextIndex;
+  }
+  return nearestTextIndex;
+}
+
+function isCompletionSummaryText(text: string): boolean {
+  const compact = text.trim();
+  return compact.length > 0 && compact.length <= 160 && /(任务完成|已完成|汇报完毕|计划步骤均已执行)/.test(compact);
 }
 
 function streamStageLabel(stats: StreamStats): string {
@@ -350,6 +403,18 @@ function fileHref(path: string): string {
   return `${FILE_LINK_PREFIX}${encodeURIComponent(path)}`;
 }
 
+function stripFileLineSuffix(value: string): string {
+  return value.replace(/#L\d+(?:-L?\d+)?$/i, '').replace(/(?::\d+){1,2}$/, '');
+}
+
+function decodeHrefPath(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function pathFromHref(href: string): string | null {
   if (!href.startsWith(FILE_LINK_PREFIX)) return null;
   try {
@@ -357,6 +422,35 @@ function pathFromHref(href: string): string | null {
   } catch {
     return href.slice(FILE_LINK_PREFIX.length);
   }
+}
+
+function workspacePathFromHref(href: string, workspaceRoot: string | null): string | null {
+  if (href.startsWith(FILE_LINK_PREFIX)) return pathFromHref(href);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith('file://')) return null;
+
+  let rawPath = href;
+  if (href.startsWith('file://')) {
+    try {
+      rawPath = new URL(href).pathname;
+    } catch {
+      return null;
+    }
+  }
+  const withoutQuery = rawPath.split(/[?#]/, 1)[0] ?? '';
+  let candidate = stripFileLineSuffix(decodeHrefPath(withoutQuery)).trim();
+  if (!candidate) return null;
+
+  const root = workspaceRoot?.replace(/\/+$/, '') ?? '';
+  if (root && (candidate === root || candidate.startsWith(`${root}/`))) {
+    candidate = candidate.slice(root.length).replace(/^\/+/, '') || '.';
+  } else if (candidate.startsWith('/')) {
+    return null;
+  }
+
+  candidate = candidate.replace(/^\.\/+/, '');
+  if (!candidate || candidate.startsWith('../')) return null;
+  if (!/[/.]/.test(candidate)) return null;
+  return candidate;
 }
 
 function linkifyPathChunk(text: string, workspaceRoot: string | null): string {
@@ -377,16 +471,26 @@ function linkifyPathChunk(text: string, workspaceRoot: string | null): string {
 
 function linkifyPaths(text: string, workspaceRoot: string | null): string {
   return text
-    .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
-    .map((chunk) => (chunk.startsWith('`') ? chunk : linkifyPathChunk(chunk, workspaceRoot)))
+    .split(/(```[\s\S]*?```|`[^`\n]*`|!?\[[^\]\n]*\]\([^)]+\))/g)
+    .map((chunk) => (chunk.startsWith('`') || chunk.startsWith('[') || chunk.startsWith('![') ? chunk : linkifyPathChunk(chunk, workspaceRoot)))
     .join('');
 }
 
-function PathAwareResponse({ text, workspaceRoot, onOpenRemoteFile }: { text: string; workspaceRoot: string | null; onOpenRemoteFile: (path: string) => void }) {
+function PathAwareResponse({
+  text,
+  workspaceRoot,
+  streaming = false,
+  onOpenRemoteFile,
+}: {
+  text: string;
+  workspaceRoot: string | null;
+  streaming?: boolean;
+  onOpenRemoteFile: (path: string) => void;
+}) {
   const linkedText = linkifyPaths(text, workspaceRoot);
   const components: StreamdownProps['components'] = {
     a: ({ href, children, ...props }) => {
-      const path = typeof href === 'string' ? pathFromHref(href) : null;
+      const path = typeof href === 'string' ? workspacePathFromHref(href, workspaceRoot) : null;
       if (!path) return <a href={href} {...props}>{children}</a>;
       return (
         <button
@@ -402,7 +506,7 @@ function PathAwareResponse({ text, workspaceRoot, onOpenRemoteFile }: { text: st
     },
   };
 
-  return <MarkdownContent text={linkedText} components={components} />;
+  return <MarkdownContent text={linkedText} components={components} streaming={streaming} />;
 }
 
 // `active` 标记最新工具调用；新工具出现时旧块自动折叠，用户手动切换会临时覆盖。
@@ -456,6 +560,7 @@ function AssistantPart({
   answer,
   canceled,
   toolActive,
+  messageActive,
   timingMaps,
   workspaceRoot,
   onOpenRemoteFile,
@@ -469,6 +574,7 @@ function AssistantPart({
   answer?: AskUserAnswer;
   canceled?: boolean;
   toolActive: boolean;
+  messageActive: boolean;
   timingMaps: ReturnType<typeof buildTimingMaps>;
   workspaceRoot: string | null;
   onOpenRemoteFile: (path: string) => void;
@@ -478,7 +584,12 @@ function AssistantPart({
   onAskUserSubmit: (runId: string, answer: AskUserAnswer) => void;
   onAskUserCancel: (runId: string) => void;
 }) {
-  if (part.type === 'text') return part.text ? <PathAwareResponse text={part.text} workspaceRoot={workspaceRoot} onOpenRemoteFile={onOpenRemoteFile} /> : null;
+  if (part.type === 'text') {
+    const streaming = messageActive || (part as { state?: string }).state === 'streaming';
+    return part.text ? (
+      <PathAwareResponse text={part.text} workspaceRoot={workspaceRoot} streaming={streaming} onOpenRemoteFile={onOpenRemoteFile} />
+    ) : null;
+  }
   if (part.type === 'reasoning') {
     const duration = durationFromTiming(timingForPart(part, timingMaps));
     return part.text ? (
@@ -538,6 +649,7 @@ function ActivityGroup({
   entries,
   active,
   lastToolKey,
+  messageActive,
   messageId,
   timingMaps,
   workspaceRoot,
@@ -551,6 +663,7 @@ function ActivityGroup({
   entries: ActivityEntry[];
   active: boolean;
   lastToolKey: string | null;
+  messageActive: boolean;
   messageId: string;
   timingMaps: ReturnType<typeof buildTimingMaps>;
   workspaceRoot: string | null;
@@ -589,6 +702,7 @@ function ActivityGroup({
               answer={askUserState.answer}
               canceled={askUserState.canceled}
               toolActive={`${messageId}:${index}` === lastToolKey}
+              messageActive={messageActive}
               timingMaps={timingMaps}
               workspaceRoot={workspaceRoot}
               onOpenRemoteFile={onOpenRemoteFile}
@@ -757,6 +871,7 @@ function AssistantMessage({
         entries={group.entries}
         active={active}
         lastToolKey={lastToolKey}
+        messageActive={active}
         messageId={message.id}
         timingMaps={timingMaps}
         workspaceRoot={workspaceRoot}
@@ -772,7 +887,9 @@ function AssistantMessage({
   };
 
   message.parts.forEach((part, i) => {
+    if (isCompletionUpdatePlan(part)) return;
     if (isHiddenDataPart(part)) return;
+    if (finalIndex != null && i > finalIndex && part.type === 'text' && isCompletionSummaryText(part.text)) return;
     if (finalIndex != null && i < finalIndex) {
       group ??= { entries: [], start: i };
       group.entries.push({ part, index: i });
@@ -792,6 +909,7 @@ function AssistantMessage({
         answer={askUserState.answer}
         canceled={askUserState.canceled}
         toolActive={`${message.id}:${i}` === lastToolKey}
+        messageActive={active}
         timingMaps={timingMaps}
         workspaceRoot={workspaceRoot}
         onOpenRemoteFile={onOpenRemoteFile}
@@ -852,6 +970,7 @@ export function Conversation({
       if (m.role === 'user') continue;
       activeAssistantId = m.id;
       m.parts.forEach((part, i) => {
+        if (isCompletionUpdatePlan(part)) return;
         if (isToolPart(part)) lastToolKey = `${m.id}:${i}`;
         if (isActivityPart(part)) lastActivityKey = `${m.id}:${i}`;
       });

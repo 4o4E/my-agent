@@ -36,12 +36,15 @@ test('renderGoal: compact, includes intent + plan checkboxes + next', () => {
 test('parseGoalPatch: coerces messy args, drops invalid', () => {
   const patch = parseGoalPatch({
     phase: 'reporting',
-    plan: [{ text: 'a', status: 'failed' }, { text: '', status: 'todo' }, { status: 'bad' }],
+    plan: [{ text: 'a', status: 'failed' }, { text: '', status: 'todo' }, { status: 'bad' }, { text: '汇总结果并汇报', status: 'doing' }],
     decisions: ['d1', ''],
     next: 'go',
   });
   assert.equal(patch.phase, 'reporting');
-  assert.deepEqual(patch.plan, [{ text: 'a', status: 'failed' }]); // 空项和无效项会丢弃
+  assert.deepEqual(patch.plan, [
+    { text: 'a', status: 'failed' },
+    { text: '汇总结果并汇报', status: 'doing', autoComplete: true },
+  ]); // 空项会丢弃，最后的汇报步骤会规范化为自动完成
   assert.deepEqual(patch.decisions, ['d1']);
   assert.equal(patch.next, 'go');
 });
@@ -50,12 +53,12 @@ test('finishGoal: preserves terminal plan status instead of forcing success', ()
   const goal = finishGoal({
     intent: 'ship it',
     phase: 'reporting',
-    plan: [{ text: 'build', status: 'done' }, { text: 'verify', status: 'failed' }],
+    plan: [{ text: 'build', status: 'done' }, { text: 'verify', status: 'failed' }, { text: '汇报结果', status: 'doing', autoComplete: true }],
     decisions: ['keep tests'],
     next: 'verify',
   });
 
-  assert.deepEqual(goal.plan.map((p) => p.status), ['done', 'failed']);
+  assert.deepEqual(goal.plan.map((p) => p.status), ['done', 'failed', 'done']);
   assert.equal(goal.phase, 'completed');
   assert.equal(goal.next, '已结束（存在失败项）');
   assert.deepEqual(goal.decisions, ['keep tests']);
@@ -66,12 +69,17 @@ test('canReportGoal: plan tasks must settle and enter reporting phase', () => {
   const settledWorking = { intent: 'x', phase: 'working' as const, plan: [{ text: 'a', status: 'failed' as const }], decisions: [], next: '' };
   const settledReporting = { ...settledWorking, phase: 'reporting' as const };
   const settledCompleted = { ...settledWorking, phase: 'completed' as const };
+  const reportStepWorking = { intent: 'x', phase: 'working' as const, plan: [{ text: '汇报结果', status: 'doing' as const, autoComplete: true }], decisions: [], next: '' };
+  const reportStepReporting = { ...reportStepWorking, phase: 'reporting' as const };
   assert.equal(canReportGoal(open), false);
   assert.match(reportBlockedMessage(open), /未收口/);
   assert.equal(canReportGoal(settledWorking), false);
   assert.match(reportBlockedMessage(settledWorking), /reporting/);
   assert.equal(canReportGoal(settledReporting), true);
   assert.equal(canReportGoal(settledCompleted), true);
+  assert.equal(canReportGoal(reportStepWorking), false);
+  assert.match(reportBlockedMessage(reportStepWorking), /reporting/);
+  assert.equal(canReportGoal(reportStepReporting), true);
   assert.equal(canReportGoal({ intent: 'x', phase: 'working' as const, plan: [], decisions: [], next: '' }), true);
 });
 
