@@ -181,7 +181,7 @@ export function App() {
   const [activeView, setActiveView] = useState<'chat' | 'settings'>(() =>
     window.location.pathname === '/settings' ? 'settings' : 'chat',
   );
-  const [draft, setDraft] = useState(route.draft);
+  const [composerDraft, setComposerDraft] = useState(route.draft);
   const [wide, setWide] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [rightPanelTabs, setRightPanelTabs] = useState<RightTabId[]>([]);
@@ -204,6 +204,9 @@ export function App() {
   const previousPanelThreadIdRef = useRef(activeThreadId);
   const threadPanelStatesRef = useRef<Record<string, ThreadPanelState>>({});
   const threadDraftsRef = useRef<Record<string, string>>({});
+  const draftRef = useRef(route.draft);
+  const draftSyncTimerRef = useRef<number | null>(null);
+  const draftRouteTimerRef = useRef<number | null>(null);
 
   // 活跃会话 ID 放在 ref 中，稳定的 transport 可以读取和更新它，
   // 不需要在每次选择会话时重新创建 transport。
@@ -243,6 +246,42 @@ export function App() {
     });
   }, []);
 
+  const rememberThreadDraftRef = useCallback((threadId: string, draftText: string) => {
+    const next = { ...threadDraftsRef.current };
+    if (draftText) next[threadId] = draftText;
+    else delete next[threadId];
+    threadDraftsRef.current = next;
+  }, []);
+
+  const scheduleThreadDraftSync = useCallback(() => {
+    if (draftSyncTimerRef.current) window.clearTimeout(draftSyncTimerRef.current);
+    draftSyncTimerRef.current = window.setTimeout(() => {
+      draftSyncTimerRef.current = null;
+      setThreadDrafts(threadDraftsRef.current);
+    }, 250);
+  }, []);
+
+  const replaceDraftRouteLater = useCallback((threadId: string | null, draftText: string) => {
+    if (draftRouteTimerRef.current) window.clearTimeout(draftRouteTimerRef.current);
+    draftRouteTimerRef.current = window.setTimeout(() => {
+      draftRouteTimerRef.current = null;
+      const path = buildChatPath({ draft: draftText, threadId });
+      if (currentBrowserPath() !== path) window.history.replaceState(null, '', path);
+    }, 150);
+  }, []);
+
+  const flushPendingDraftSync = useCallback(() => {
+    if (draftRouteTimerRef.current) {
+      window.clearTimeout(draftRouteTimerRef.current);
+      draftRouteTimerRef.current = null;
+    }
+    if (draftSyncTimerRef.current) {
+      window.clearTimeout(draftSyncTimerRef.current);
+      draftSyncTimerRef.current = null;
+      setThreadDrafts(threadDraftsRef.current);
+    }
+  }, []);
+
   const refreshThreads = useCallback(() => {
     listThreads().then(setThreads).catch(() => {});
   }, []);
@@ -269,8 +308,8 @@ export function App() {
         if (savedThreadId && typeof chat.draft === 'string' && chat.draft) {
           savedDrafts[savedThreadId] = chat.draft;
         }
-        if (activeThreadId && draft) {
-          savedDrafts[activeThreadId] = draft;
+        if (activeThreadId && draftRef.current) {
+          savedDrafts[activeThreadId] = draftRef.current;
         }
 
         setSidebarWidth((current) => numberInRange(layout.sidebarWidth, current, 200, 420));
@@ -281,7 +320,11 @@ export function App() {
         setThreadDrafts(savedDrafts);
         threadDraftsRef.current = savedDrafts;
         applyThreadPanelState(activeThreadId ? savedThreadStates[activeThreadId] ?? EMPTY_THREAD_PANEL_STATE : EMPTY_THREAD_PANEL_STATE);
-        if (activeThreadId && !draft) setDraft(savedDrafts[activeThreadId] ?? '');
+        if (activeThreadId && !draftRef.current) {
+          const savedDraft = savedDrafts[activeThreadId] ?? '';
+          draftRef.current = savedDraft;
+          setComposerDraft(savedDraft);
+        }
       })
       .catch((err) => console.error('load page state failed', err))
       .finally(() => {
@@ -312,7 +355,7 @@ export function App() {
     const savedThreadStates = activeThreadId ? { ...threadPanelStates, [activeThreadId]: activePanelState } : threadPanelStates;
     const savedThreadDrafts = { ...threadDrafts };
     if (activeThreadId) {
-      if (draft) savedThreadDrafts[activeThreadId] = draft;
+      if (draftRef.current) savedThreadDrafts[activeThreadId] = draftRef.current;
       else delete savedThreadDrafts[activeThreadId];
     }
     const state: PageState = {
@@ -325,7 +368,7 @@ export function App() {
       chat: {
         threadId: activeThreadId,
         wide,
-        draft,
+        draft: draftRef.current,
         rightPanelOpen: activePanelState.rightPanelOpen,
         rightPanelTabs: activePanelState.rightPanelTabs,
         rightPanelMode: activePanelState.rightPanelMode,
@@ -338,23 +381,31 @@ export function App() {
       void updatePageState(state).catch((err) => console.error('save page state failed', err));
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [activeThreadId, activeView, currentThreadPanelState, draft, filesPanelWidth, pageStateLoaded, sidebarWidth, threadDrafts, threadPanelStates, wide]);
+  }, [activeThreadId, activeView, currentThreadPanelState, filesPanelWidth, pageStateLoaded, sidebarWidth, threadDrafts, threadPanelStates, wide]);
 
   const navigateChatRoute = useCallback((next: ChatRoute, mode: 'push' | 'replace' = 'push') => {
+    flushPendingDraftSync();
     const path = buildChatPath(next);
     if (currentBrowserPath() !== path) {
       if (mode === 'replace') window.history.replaceState(null, '', path);
       else window.history.pushState(null, '', path);
     }
     setRoute(next);
-    setDraft(next.draft);
+    draftRef.current = next.draft;
+    setComposerDraft(next.draft);
     setActiveView('chat');
+  }, [flushPendingDraftSync]);
+
+  useEffect(() => () => {
+    if (draftRouteTimerRef.current) window.clearTimeout(draftRouteTimerRef.current);
+    if (draftSyncTimerRef.current) window.clearTimeout(draftSyncTimerRef.current);
   }, []);
 
   const navigateSettings = useCallback(() => {
+    flushPendingDraftSync();
     if (currentBrowserPath() !== '/settings') window.history.pushState(null, '', '/settings');
     setActiveView('settings');
-  }, []);
+  }, [flushPendingDraftSync]);
 
   const handle = useMemo<ChatThreadHandle>(
     () => ({
@@ -404,21 +455,25 @@ export function App() {
 
   useEffect(() => {
     const onPopState = () => {
+      flushPendingDraftSync();
       stop();
       setActiveView(window.location.pathname === '/settings' ? 'settings' : 'chat');
       const next = readChatRoute();
       setRoute(next);
-      setDraft(next.draft);
+      draftRef.current = next.draft;
+      setComposerDraft(next.draft);
     };
 
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [stop]);
+  }, [flushPendingDraftSync, stop]);
 
   useEffect(() => {
     let canceled = false;
 
     if (!activeThreadId) {
+      draftRef.current = route.draft;
+      setComposerDraft(route.draft);
       setMessages([]);
       return () => {
         canceled = true;
@@ -450,20 +505,20 @@ export function App() {
 
   function newChat() {
     stop();
-    if (activeThreadId) rememberThreadDraft(activeThreadId, draft);
+    if (activeThreadId) rememberThreadDraft(activeThreadId, draftRef.current);
     navigateChatRoute({ draft: '', threadId: null });
     setMessages([]);
   }
 
   function selectThread(id: string) {
     stop();
-    if (activeThreadId) rememberThreadDraft(activeThreadId, draft);
+    if (activeThreadId) rememberThreadDraft(activeThreadId, draftRef.current);
     navigateChatRoute({ draft: threadDraftsRef.current[id] ?? '', threadId: id });
   }
 
   function openSettings() {
     stop();
-    if (activeThreadId) rememberThreadDraft(activeThreadId, draft);
+    if (activeThreadId) rememberThreadDraft(activeThreadId, draftRef.current);
     navigateSettings();
   }
 
@@ -491,8 +546,12 @@ export function App() {
   }
 
   function changeDraft(text: string) {
-    if (activeThreadId) rememberThreadDraft(activeThreadId, text);
-    navigateChatRoute({ draft: text, threadId: activeThreadId }, 'replace');
+    draftRef.current = text;
+    if (activeThreadId) {
+      rememberThreadDraftRef(activeThreadId, text);
+      scheduleThreadDraftSync();
+    }
+    replaceDraftRouteLater(activeThreadId, text);
   }
 
   const refreshActiveThread = useCallback(() => {
@@ -562,6 +621,8 @@ export function App() {
       ? `${text}\n\n${attachments.map(attachmentToken).join('\n')}`
       : text;
     if (activeThreadId) rememberThreadDraft(activeThreadId, '');
+    draftRef.current = '';
+    setComposerDraft('');
     navigateChatRoute({ draft: '', threadId: activeThreadId }, 'replace');
     setAttachments([]);
     void sendMessage({ text: finalText });
@@ -660,7 +721,7 @@ export function App() {
           messages={messages}
           busy={busy}
           waitingQuestion={waitingRun?.spec.question ?? null}
-          draft={draft}
+          draft={composerDraft}
           wide={wide}
           workspaceRoot={workspaceRoot}
           threadId={activeThreadId}

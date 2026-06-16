@@ -64,7 +64,14 @@ function messageTime(message: UIMessage): string | null {
     if (!value) return null;
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return null;
-    return date.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    const monthDay = `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    if (date < oneYearAgo) {
+      const year = date.getFullYear();
+      return `${year}-${monthDay}`;
+    }
+    return monthDay;
   }
   return null;
 }
@@ -851,11 +858,16 @@ export function Conversation({
     }
   }
   return (
-    <div className="relative flex h-full min-h-0 justify-center">
-      <div className={cn('flex h-full min-h-0 w-full min-w-0', embedded ? 'max-w-none' : wide ? 'max-w-[calc(64rem+1.75rem)]' : 'max-w-[calc(48rem+1.75rem)]')}>
+    <div className="relative flex h-full min-h-0">
       <AIConversation className="min-h-0 min-w-0 flex-1">
         <ConversationContent>
-          <div ref={contentRef as RefObject<HTMLDivElement>} className={cn('flex flex-col', embedded ? 'gap-4 px-3 py-4' : 'gap-8')}>
+          <div
+            ref={contentRef as RefObject<HTMLDivElement>}
+            className={cn(
+              'mx-auto flex w-full flex-col',
+              embedded ? 'max-w-none gap-4 px-3 py-4' : wide ? 'max-w-5xl gap-8' : 'max-w-3xl gap-8',
+            )}
+          >
             {messages.length === 0 ? (
               <ConversationEmptyState
                 icon={<Bot className="size-6" />}
@@ -907,10 +919,9 @@ export function Conversation({
             )}
           </div>
         </ConversationContent>
-        <ConversationScrollButton className="left-[calc(50%-0.875rem)]" />
+        <ConversationScrollButton />
       </AIConversation>
       {showToc && <TableOfContents contentRef={contentRef} />}
-      </div>
     </div>
   );
 }
