@@ -3,7 +3,7 @@ import { formatCommandResult, shellManager } from '../shell/manager.js';
 import { redactShellOutput } from '../shell/redact.js';
 import { runShellCommand } from './sandbox.js';
 import type { Tool } from './types.js';
-import { requiresDatabaseAccess } from './databaseAccessGuard.js';
+import { requiresDatabaseAccess, usesDatabaseAccessHelper, usesDatabaseCli } from './databaseAccessGuard.js';
 
 const isWindows = process.platform === 'win32';
 
@@ -29,6 +29,9 @@ export const shellTool: Tool = {
     const settings = ctx?.settings ?? (await getToolSettings());
     if (requiresDatabaseAccess(command) && !ctx?.env?.DB_WORKLOAD_TOKEN) {
       return '数据库 CLI 需要先激活 database-access skill，由本次 run 的 workload token 换取短期凭证；不要使用宿主 DATABASE_URL 或本机默认数据库账号直连。';
+    }
+    if (usesDatabaseCli(command) && !usesDatabaseAccessHelper(command)) {
+      return '检测到直接调用数据库 CLI。DB_WORKLOAD_TOKEN 只是本次 run 换取短期凭证的令牌，不是数据库密码；请使用 database-access helper（例如 psql_query.py 或 db_credential.py/db_credential.sh）在同一命令内换取本 run 的短期凭证，不要复用旧 run 的数据库用户名或宿主 DATABASE_URL。';
     }
     try {
       if (ctx?.threadId && ctx.settings) {

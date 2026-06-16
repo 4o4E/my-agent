@@ -168,6 +168,64 @@ test('executeRun: injects the current workspace root into the LLM context', asyn
   assert.match(systemText, /当前可用目录/);
 });
 
+test('executeRun: injects database workload token at run startup', async () => {
+  const store = new MemoryStore();
+  const thread = await store.createThread();
+  const run = await store.createRun(thread.id, 'check datasource env');
+  let sawRuntimeContext = false;
+  let sawSkillReusedRunEnv = false;
+  let turn = 0;
+
+  await executeRun(run.id, {
+    store,
+    provider: {
+      name: 'database-runtime-env',
+      async complete(messages) {
+        turn += 1;
+        if (turn === 1) {
+          sawRuntimeContext = messages.some((message) => (
+            message.role === 'system'
+            && (message.content ?? '').includes('数据库访问运行环境（run 级）')
+            && (message.content ?? '').includes('DB_WORKLOAD_TOKEN=已注入')
+          ));
+          return {
+            content: null,
+            toolCalls: [{
+              id: 'skill_1',
+              name: 'skill_activate',
+              arguments: '{"name":"database-access"}',
+            }],
+          };
+        }
+        sawSkillReusedRunEnv = messages.some((message) => (
+          message.role === 'system'
+          && (message.content ?? '').includes('数据库访问运行环境已在 run 初始化时注入')
+        ));
+        return { content: 'done', toolCalls: [] };
+      },
+    },
+    publish: () => {},
+    hardStepCap: 3,
+    toolSettings: testToolSettings(),
+    databaseRuntimeEnv: async () => ({
+      env: {
+        DB_WORKLOAD_TOKEN: 'wat_test_runtime',
+        MY_AGENT_RUNTIME_API_BASE: 'http://localhost:8080/api/runtime',
+        DATASOURCE_ID: 'ds_test',
+        DATASOURCE_PROFILE: 'readonly',
+      },
+      summary: [
+        '数据库访问运行环境（run 级）:',
+        '- DB_WORKLOAD_TOKEN=已注入',
+        '- DATASOURCE_ID=ds_test',
+      ].join('\n'),
+    }),
+  });
+
+  assert.equal(sawRuntimeContext, true);
+  assert.equal(sawSkillReusedRunEnv, true);
+});
+
 test('executeRun: activates a skill and trims tools to allowed-tools', async () => {
   const skillRoot = join(testWorkspace, '.skills', 'sample-skill');
   await mkdir(skillRoot, { recursive: true });

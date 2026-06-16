@@ -2,7 +2,7 @@ import type { Tool, ToolRunContext } from './types.js';
 import { formatCommandResult, parseShellActor, parseWaitMode, shellManager } from '../shell/manager.js';
 import { shellBus } from '../shell/bus.js';
 import { store } from '../store/index.js';
-import { requiresDatabaseAccess } from './databaseAccessGuard.js';
+import { requiresDatabaseAccess, usesDatabaseAccessHelper, usesDatabaseCli } from './databaseAccessGuard.js';
 
 function requireShellContext(ctx: ToolRunContext | undefined): { threadId: string; runId?: string; stepId?: string; step?: number } {
   if (!ctx?.threadId) throw new Error('托管 shell 需要当前 threadId，上下文缺失。');
@@ -106,6 +106,9 @@ export const shellExecTool: Tool = {
     const command = String(args.command ?? '');
     if (requiresDatabaseAccess(command) && !ctx?.env?.DB_WORKLOAD_TOKEN) {
       return '数据库 CLI 或 database-access SDK 脚本需要先激活 database-access skill，由本次 run 的 workload token 换取短期凭证；不要跨 run 复用旧凭证。';
+    }
+    if (usesDatabaseCli(command) && !usesDatabaseAccessHelper(command)) {
+      return '检测到直接调用数据库 CLI。DB_WORKLOAD_TOKEN 只是本次 run 换取短期凭证的令牌，不是数据库密码；请使用 database-access helper（例如 psql_query.py 或 db_credential.py/db_credential.sh）在同一命令内换取本 run 的短期凭证，不要复用旧 run 的数据库用户名或宿主 DATABASE_URL。';
     }
     const shellCtx = requireShellContext(ctx);
     const result = await shellManager.exec({

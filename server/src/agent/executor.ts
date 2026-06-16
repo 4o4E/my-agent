@@ -40,6 +40,12 @@ export interface ExecutorDeps {
   stream: boolean;
   resume: boolean;
   toolSettings?: ToolSettings;
+  databaseRuntimeEnv?: (runId: string) => Promise<DatabaseRuntimeEnv>;
+}
+
+interface DatabaseRuntimeEnv {
+  env: Record<string, string>;
+  summary: string;
 }
 
 interface ToolTrace {
@@ -222,6 +228,48 @@ function commandFromToolCall(name: string, args: unknown): string | null {
   return typeof command === 'string' ? command : null;
 }
 
+async function createDefaultDatabaseRuntimeEnv(runId: string): Promise<DatabaseRuntimeEnv> {
+  const activeDatasources = (await listDatasources()).filter((datasource) => datasource.status === 'active');
+  const allowedDatasourceIds = activeDatasources.map((datasource) => datasource.id);
+  const created = await createWorkloadToken({
+    runId,
+    skillId: 'runtime:run',
+    allowedDatasourceIds,
+  });
+
+  const env: Record<string, string> = {
+    DB_WORKLOAD_TOKEN: created.token,
+    MY_AGENT_RUNTIME_API_BASE: runtimeApiBase(),
+    DATASOURCE_PROFILE: 'readonly',
+  };
+
+  if (activeDatasources.length === 1) {
+    const datasource = activeDatasources[0];
+    env.DATASOURCE_ID = datasource.id;
+    const profiles = await listPermissionProfiles(datasource.id);
+    const readonly = profiles.find((profile) => profile.name === 'readonly');
+    env.DATASOURCE_PROFILE = readonly?.name ?? profiles[0]?.name ?? 'readonly';
+  }
+
+  const visible = [
+    'DB_WORKLOAD_TOKEN=已注入',
+    `MY_AGENT_RUNTIME_API_BASE=${env.MY_AGENT_RUNTIME_API_BASE}`,
+    env.DATASOURCE_ID ? `DATASOURCE_ID=${env.DATASOURCE_ID}` : 'DATASOURCE_ID=未自动选择',
+    `DATASOURCE_PROFILE=${env.DATASOURCE_PROFILE}`,
+    `allowedDatasourceIds=${allowedDatasourceIds.length ? allowedDatasourceIds.join(',') : '无'}`,
+  ];
+
+  return {
+    env,
+    summary: [
+      '数据库访问运行环境（run 级）:',
+      ...visible.map((item) => `- ${item}`),
+      '- DB_WORKLOAD_TOKEN 只是换取本次 run 短期数据库凭证的令牌，不是数据库密码。',
+      '- 涉及数据库 CLI 时必须使用 database-access helper 换取本 run 的短期凭证；不要复用旧 run 的数据库用户名、密码、DATABASE_URL 或宿主默认账号。',
+    ].join('\n'),
+  };
+}
+
 function findMissingToolResults(messages: LlmMessage[]): { id: string; name: string }[] {
   const answered = new Set(messages.filter((m) => m.role === 'tool' && m.toolCallId).map((m) => m.toolCallId as string));
   const missing: { id: string; name: string }[] = [];
@@ -386,13 +434,25 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     let goal = initialRun.goal_state ?? initGoal(userInput);
     if (!initialRun.goal_state) await store.setGoalState(runId, goal);
     const toolSettings = deps.toolSettings ?? (await getToolSettings());
+    const toolEnv: Record<string, string> = {};
+    const databaseRuntimeEnvProvider = deps.databaseRuntimeEnv ?? (deps.store === defaultStore ? createDefaultDatabaseRuntimeEnv : null);
+    let databaseRuntimeSummary = '';
+    if (databaseRuntimeEnvProvider) {
+      try {
+        const runtime = await databaseRuntimeEnvProvider(runId);
+        Object.assign(toolEnv, runtime.env);
+        databaseRuntimeSummary = runtime.summary;
+      } catch (err) {
+        databaseRuntimeSummary = `数据库访问运行环境（run 级）注入失败：${(err as Error).message}`;
+      }
+    }
     const skillIndex = await loadSkillIndex(toolSettings.workspaceRoot);
     const workflowIndex = await loadWorkflowIndex(toolSettings.workspaceRoot);
     const skillRuntimeContext = [renderSkillSystemRules(), renderSkillCatalog(skillIndex)].join('\n\n');
     const workflowRuntimeContext = [renderWorkflowSystemRules(), renderWorkflowCatalog(workflowIndex)].join('\n\n');
     const ctx = new ContextManager(prior, userInput, renderGoal(goal), {
       appendUserInput: !isResume,
-      runtimeContext: `${renderRuntimeContext(toolSettings)}\n\n${workflowRuntimeContext}\n\n${skillRuntimeContext}`,
+      runtimeContext: `${renderRuntimeContext(toolSettings)}\n\n${databaseRuntimeSummary}\n\n${workflowRuntimeContext}\n\n${skillRuntimeContext}`,
     });
     currentCtx = ctx;
     if (!isResume) {
@@ -401,7 +461,6 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     }
 
     const activeSkills: SkillIndexItem[] = [];
-    const toolEnv: Record<string, string> = {};
     const stepIds = new Map<number, string>();
     let livePersistQueue = Promise.resolve();
     const persistLiveEvent = (event: AgentEvent) => {
@@ -422,7 +481,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     let deferredFinalText = '';
 
     const ensureDatabaseToolEnv = async (activation: SkillActivation): Promise<string> => {
-      if (toolEnv.DB_WORKLOAD_TOKEN) return '数据库访问运行环境已存在，本次 run 复用同一个 workload token。';
+      if (toolEnv.DB_WORKLOAD_TOKEN) return '数据库访问运行环境已在 run 初始化时注入；database-access skill 只提供脚本和操作规范。';
 
       const activeDatasources = (await listDatasources()).filter((datasource) => datasource.status === 'active');
       const allowedDatasourceIds = activeDatasources.map((datasource) => datasource.id);
@@ -960,7 +1019,11 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
                 return out;
               }
               const command = commandFromToolCall(call.name, args);
-              if (command && requiresDatabaseAccess(command) && !toolEnv.DB_WORKLOAD_TOKEN) {
+              if (
+                command
+                && requiresDatabaseAccess(command)
+                && !activeSkills.some((skill) => skill.name === DATABASE_ACCESS_SKILL_NAME)
+              ) {
                 try {
                   const activation = await activateSkill(toolSettings.workspaceRoot, DATABASE_ACCESS_SKILL_NAME);
                   await applySkillActivation(activation);

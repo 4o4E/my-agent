@@ -14,6 +14,7 @@ import { truncateFetchText } from './webFetch.js';
 import { getTool, runTool, toolSchemas } from './registry.js';
 import { publicDatasourceForTool } from './datasourceList.js';
 import { shellExecTool } from './managedShell.js';
+import { requiresDatabaseAccess } from './databaseAccessGuard.js';
 import type { ToolResult, ToolRunContext } from './types.js';
 import { normalizeToolSettings } from '../settings.js';
 
@@ -163,7 +164,8 @@ test('shell blocks database CLI before database-access injects a workload token'
 });
 
 test('shell blocks database-access SDK scripts before workload token injection', async () => {
-  const command = 'python3 .agents/skills/database-access/scripts/psql_query.py --sql "select 1"';
+  const command = `python3 ${dir}/.agents/skills/database-access/scripts/psql_query.py --sql "select 1"`;
+  assert.equal(requiresDatabaseAccess(command), true);
   const blockedShell = text(await shellTool.run(
     { command },
     { settings: normalizeToolSettings({ workspaceRoot: dir, shellUseHostPath: true }) },
@@ -177,6 +179,16 @@ test('shell blocks database-access SDK scripts before workload token injection',
   ));
   assert.match(blockedManaged, /database-access/);
   assert.match(blockedManaged, /workload token/);
+});
+
+test('shell blocks direct database CLI even when workload token exists', async () => {
+  const command = 'psql -h localhost -U ag_readonly_old -d my_agent -c "select 1"';
+  const blocked = text(await shellTool.run(
+    { command },
+    { settings: normalizeToolSettings({ workspaceRoot: dir, shellUseHostPath: true }), env: { DB_WORKLOAD_TOKEN: 'wat_test' } },
+  ));
+  assert.match(blocked, /直接调用数据库 CLI/);
+  assert.match(blocked, /短期凭证/);
 });
 
 test('file_read reads content', async () => {
