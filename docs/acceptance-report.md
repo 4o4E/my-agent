@@ -32,7 +32,7 @@
 
 - 默认 provider 是 `aisdk`，复用 Vercel AI SDK 处理协议、流式、重试和工具拼装。
 - 旧的 `openai-responses`、`openai-chat`、`anthropic` 保留为兼容和回滚路径。
-- 工具通过统一 registry 执行，内置 shell、文件读写/编辑、glob、grep、web fetch、web search、ask user、render UI、update plan、finish conversation。
+- 工具通过统一 registry 执行，内置 shell、托管 shell、文件读写/编辑、glob、grep、web fetch、web search、ask user、HTML artifact、update plan、skill、workflow、subagent 和数据源访问。
 - 工具结果以 tool message 回填，并保留 `toolCallId`，满足主流模型协议对工具调用配对的要求。
 - reasoning（推理信息）只用于前端展示，不回填上下文。
 
@@ -53,16 +53,30 @@
 - 所有工具调用先经过 tool policy（工具策略）。
 - 支持 `TOOL_ALLOW` / `TOOL_DENY`、路径围栏、shell 开关、网络开关和输出上限。
 - shell 支持可选 bwrap（bubblewrap，Linux 用户态沙箱）后端；`auto` 模式在 bwrap 不可用时会回落宿主执行，强制隔离需要 `TOOL_SANDBOX_BACKEND=bwrap`。
+- 支持托管 shell session：命令可以前台等待或后台运行，后续通过 `shell_poll` 观察、`shell_kill` 终止，并在右侧 Shell 面板持续展示输出。
+- shell session 和命令日志会落库，用户也可以在 UI 中打开、关闭、重命名、执行命令和标记输出给 LLM 参考。
 
-边界：默认 `TOOL_SANDBOX=off`；当前没有 per-run workspace、CPU/内存/进程数/磁盘配额，也没有域名 allowlist。
+边界：默认 `TOOL_SANDBOX=off`；当前没有 per-run workspace、CPU/内存/进程数/磁盘配额，也没有域名 allowlist。托管 shell 仍依赖当前 server 进程和本机后端，尚未支持远程 worker 接管。
+
+### Skill、Workflow 与 Subagent
+
+- 支持 skill 文件协议：内置 skill 从 `server/src/skills/builtin` 物化到 `.agents/skills`，用户 skill 从 `.skills` 读取。
+- 初始上下文只注入 skill 名称和描述；需要正文时通过 `skill_activate` 按需加载，并记录 `skill_activated` 事件。
+- 支持 `allowed-tools` 缩小激活 skill 后可见工具集合，不能放大全局工具策略。
+- 支持 workflow 文件协议：内置 workflow 从 `server/src/workflows/builtin` 物化，LLM 可用 `workflow_list` 和 `workflow_read` 选择稳定流程。
+- 支持异步只读 subagent：主 agent 通过 `subagent_run` 创建子任务，立即拿到 `subagentRunId`，后续通过 `subagent_poll` / `subagent_list` 回收结果。
+- subagent 输出和 usage 写入 `subagent_runs`，并产生 `subagent_started`、`subagent_finished` 或 `subagent_failed` 事件；前端右侧资源栏可以查看 subagent。
+
+边界：subagent v1 只做异步只读推理，不直接调用工具或改文件；没有独立沙箱、独立资源配额、超时回收 worker 和跨进程恢复。skill 还没有远程安装、签名校验、前端管理面和 per-skill 资源配额。
 
 ### 前端与用户体验
 
 - 前端通过 REST + WebSocket 展示 step、reasoning、tool call、tool result、final、error 等事件。
 - 支持 Markdown/Mermaid/LaTeX 输出；复杂报告可用 `write_html_artifact` 生成 HTML artifact 并在文件面板预览。
 - 支持用户在 run 中途回答 `ask_user` 问题。
+- 支持右侧资源栏查看文件、托管 shell 和 subagent；shell 事件使用 thread 级 WebSocket 单独刷新。
 
-边界：subagent、常驻 shell、skill、memory 还没有实现。
+边界：跨 thread memory / gene 系统还没有实现；当前连续性主要来自 thread 内历史消息、压缩摘要和显式资源面板。
 
 ## 后续未实现能力
 
@@ -70,7 +84,7 @@
 - per-run workspace：每个 run 独立工作区、artifact 索引和清理策略。
 - 资源治理：CPU、内存、进程数、磁盘、网络 allowlist 和成本统计。
 - 鉴权与多租户：resource URL 权限模型、tenant id 隔离、用户和项目权限。
-- subagent 并行处理：主 agent 拆分子任务、并发执行、结果汇总和失败隔离。
-- 常驻 shell：支持长耗时命令的持续观察、stdin 写入和增量输出。
-- skill 系统：把业务流程、检查清单和项目经验文档化复用。
+- subagent 平台化：独立工具执行、独立沙箱、超时回收、跨 worker 恢复和更强的失败隔离。
+- 托管 shell 平台化：Docker/E2B/远程 worker 后端、run 级资源配额和更完整的 stdin/PTY 交互。
+- skill 平台化：远程安装、签名校验、前端管理面、per-skill 权限 profile 和资源配额。
 - memory 系统：跨对话沉淀用户习惯和任务处理经验，并支持可追溯更新。

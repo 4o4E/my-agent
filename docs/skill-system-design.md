@@ -448,6 +448,13 @@ sed -n '1,220p' /workspace/.skills/data-query/SKILL.md
 
 ## 推荐实施阶段
 
+当前实现状态：
+
+- 阶段 1 已落地：`server/src/skills/` 会扫描内置和用户 skill，物化内置 skill 到 `.agents/skills`，初始上下文注入 skill 名称和描述，并通过 `skill_activate` 按需加载正文。
+- 阶段 2 已部分落地：`allowed-tools` 会参与工具 schema 暴露，工具策略会保护 `.agents/skills` 写入；更细的 symlink 越界和 bwrap 只读挂载仍需要继续验收。
+- 阶段 3 已部分落地：DB events 能看到 `skill_activated`，但设置页管理、冲突展示和完整前端调试面仍未完成。
+- 阶段 4、阶段 5 仍是后续平台化方向。
+
 阶段 1：文件协议和索引。
 
 - 新增 `server/src/skills/` 模块。

@@ -6,12 +6,12 @@
 
 - Agent 编排：围绕 `thread -> run -> step` 组织多轮任务和执行步骤。
 - LLM 集成：支持 AI SDK、OpenAI Responses、OpenAI Chat、Anthropic 和离线 mock。
-- 工具调用：内置 shell、文件读写/编辑、glob/grep、web 获取/搜索、用户提问、结构化 UI 渲染等工具。
-- 执行可观测：通过 REST/WebSocket 输出 step、reasoning、tool_call、tool_result、final 等事件。
-- 持久化：使用 PostgreSQL 保存 thread、run、step、message、event 和运行配置。
+- 工具调用：内置 shell、托管 shell、文件读写/编辑、glob/grep、web 获取/搜索、用户提问、skill 激活、workflow 读取、subagent 派发等工具。
+- 执行可观测：通过 REST/WebSocket 输出 step、reasoning、tool_call、tool_result、subagent、shell、final 等事件。
+- 持久化：使用 PostgreSQL 保存 thread、run、step、message、event、shell session、subagent run 和运行配置。
 - 隔离基础：提供工具策略层和可选 bwrap shell 沙箱，为后续云端隔离执行打基础。
 
-当前实现是 Node.js/TypeScript 后端 + React/Vite 前端的单体原型。它已经能完成端到端 agent 执行闭环，并支持服务启动后恢复中断 run；但还不是完整多 worker 云平台，队列调度、跨 worker 接管、多租户鉴权、资源配额等平台能力仍在路线图中。
+当前实现是 Node.js/TypeScript 后端 + React/Vite 前端的单体原型。它已经能完成端到端 agent 执行闭环，并支持服务启动后恢复中断 run、托管 shell 长耗时命令、skill 渐进加载和异步只读 subagent；但还不是完整多 worker 云平台，队列调度、跨 worker 接管、多租户鉴权、per-run 工作区、资源配额和跨 thread memory 等平台能力仍在路线图中。
 
 ## 从 0 部署指南
 
@@ -54,7 +54,7 @@ DATABASE_URL=postgres://<user>:<password>@localhost:5432/my_agent
 createdb my_agent
 ```
 
-迁移会创建这些表：`threads`、`runs`、`steps`、`messages`、`events`、`app_settings`。其中 `app_settings` 保存运行时工具配置；保存过设置后，数据库里的值会优先于 env 默认值。
+迁移会创建核心执行表：`threads`、`runs`、`steps`、`messages`、`events`、`app_settings`，以及 `subagent_runs`、`shell_sessions`、`shell_commands`、`shell_command_logs`、`shell_session_events` 和数据源账号池相关表。其中 `app_settings` 保存运行时工具配置；保存过设置后，数据库里的值会优先于 env 默认值。
 
 ### 3. 配置 `.env`
 
@@ -144,6 +144,7 @@ pnpm run restart
 
 - 前端能看到多轮 step、reasoning、tool_call、tool_result 和 final。
 - 任务过程会使用文件读取、grep 或 shell 等工具。
+- 长耗时命令可以走右侧 Shell 面板持续观察；适合拆分的只读检查可以由 subagent 后台执行并回收结果。
 - 最终输出默认使用 Markdown/Mermaid/LaTeX；复杂报告可写入 HTML artifact，计划收口后直接以最终汇报完成。
 - 数据库中能查到对应 run、step、message 和 event。
 - 人为降低 `LLM_CONTEXT_BUDGET` 时，可以观察到 `compaction` 事件。
@@ -168,8 +169,8 @@ pnpm --filter server typecheck
 - [长任务设计](docs/long-task-design.md)：Goal 锚点、上下文压缩、token 预算、取消与长任务验证链路。
 - [托管 Shell 资源设计](docs/background-shell-design.md)：shell session、前台/后台命令、轮询、接管和跨 run 生命周期。
 - [工具沙箱设计](docs/tool-sandbox.md)：工具权限、bwrap 沙箱选型、读写范围与命令限制。
-- [Skill 系统设计](docs/skill-system-design.md)：内置/用户 skill、bash 资源暴露、allowed-tools、激活生命周期和安全边界。
-- [Subagent 与 Gene Memory 设计](docs/subagent-memory-design.md)：subagent 协作、runtime profile、gene 读写、RAG 召回、经验提升和退化流程。
+- [Skill 系统设计](docs/skill-system-design.md)：当前 skill 文件协议、内置/用户 skill、bash 资源暴露、allowed-tools、激活生命周期和安全边界。
+- [Subagent 与 Gene Memory 设计](docs/subagent-memory-design.md)：当前 subagent v1 协作语义，以及后续 runtime profile、gene 读写、RAG 召回、经验提升和退化流程。
 - [题面验收报告](docs/acceptance-report.md)：当前完成范围、未实现边界和后续平台化设计。
 - [架构改造方案](docs/refactor-plan.md)：AI SDK、AI Elements、Streamdown、HTML artifact、可观测和沙箱路线。
 - [实施日志](docs/impl-log/)：各阶段落地记录、验证结果和遗留事项。
