@@ -79,10 +79,8 @@ function languageForPath(path: string): BundledLanguage {
 
 function fileTone(path: string): string {
   const ext = extOf(path);
-  if (['ts', 'tsx', 'js', 'jsx'].includes(ext)) return 'text-yellow-600 dark:text-yellow-400';
-  if (['json', 'yaml', 'yml', 'toml'].includes(ext)) return 'text-emerald-600 dark:text-emerald-400';
-  if (['css', 'html', 'md'].includes(ext)) return 'text-sky-600 dark:text-sky-400';
-  if (['py', 'rs', 'go', 'java', 'c', 'cpp'].includes(ext)) return 'text-violet-600 dark:text-violet-400';
+  if (['ts', 'tsx', 'js', 'jsx', 'py', 'rs', 'go', 'java', 'c', 'cpp'].includes(ext)) return 'text-foreground';
+  if (['json', 'yaml', 'yml', 'toml', 'css', 'html', 'md'].includes(ext)) return 'text-muted-foreground';
   return 'text-muted-foreground';
 }
 
@@ -264,7 +262,7 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
             <span className="w-3.5 shrink-0" />
           )}
           {isDir ? (
-            isOpen ? <FolderOpen className="size-4 shrink-0 text-sky-500" /> : <Folder className="size-4 shrink-0 text-sky-500" />
+            isOpen ? <FolderOpen className="size-4 shrink-0 text-foreground" /> : <Folder className="size-4 shrink-0 text-muted-foreground" />
           ) : (
             <FileText className={cn('size-4 shrink-0', fileTone(entry.path))} />
           )}
@@ -400,7 +398,7 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
             <div
               role="separator"
               aria-label="调整文件树宽度"
-              className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/60"
+              className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-foreground/60"
               onPointerDown={(event) => startTreeResize(event, treeWidth, setTreeWidth, -1)}
             />
             <div className="flex min-h-0 shrink-0 flex-col border-l bg-muted/20" style={{ width: treeWidth }}>
@@ -417,7 +415,7 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
                   title="workspace"
                 >
                   <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', expanded.has('.') && 'rotate-90')} />
-                  {expanded.has('.') ? <FolderOpen className="size-4 shrink-0 text-sky-500" /> : <Folder className="size-4 shrink-0 text-sky-500" />}
+                  {expanded.has('.') ? <FolderOpen className="size-4 shrink-0 text-foreground" /> : <Folder className="size-4 shrink-0 text-muted-foreground" />}
                   <span className="min-w-0 flex-1 truncate">workspace</span>
                 </button>
                 {expanded.has('.') && renderRows(treeEntries['.'], 1)}

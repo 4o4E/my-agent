@@ -23,8 +23,8 @@ function statusLabel(status: SubagentRun['status']): string {
 }
 
 function statusIcon(status: SubagentRun['status']) {
-  if (status === 'running') return <LoaderCircle className="size-3.5 animate-spin text-sky-600 dark:text-sky-400" />;
-  if (status === 'done') return <Circle className="size-3.5 fill-emerald-500 text-emerald-500" />;
+  if (status === 'running') return <LoaderCircle className="size-3.5 animate-spin text-foreground" />;
+  if (status === 'done') return <Circle className="size-3.5 fill-foreground text-foreground" />;
   return <Circle className="size-3.5 fill-destructive text-destructive" />;
 }
 

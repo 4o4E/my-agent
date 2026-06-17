@@ -90,7 +90,7 @@ function ContextUsageMeter({ usage }: { usage: UsageSnapshot | null }) {
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={strokeDashoffset}
-          className={cn(percent != null && percent >= 85 ? 'text-destructive' : percent != null && percent >= 65 ? 'text-amber-600 dark:text-amber-400' : 'text-primary')}
+          className={cn(percent != null && percent >= 85 ? 'text-destructive' : percent != null && percent >= 65 ? 'text-foreground' : 'text-muted-foreground')}
         />
       </svg>
       <span className="tabular-nums">{percent != null ? `${percent}%` : used != null ? formatCompactNumber(used) : '0%'}</span>
@@ -205,7 +205,7 @@ export function Composer({
               </div>
             )}
             {waitingQuestion && (
-              <div className="mb-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+              <div className="mb-2 rounded-md border border-foreground/30 bg-muted px-3 py-2 text-sm">
                 <div className="font-medium">等待你的回答</div>
                 <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{waitingQuestion}</div>
               </div>

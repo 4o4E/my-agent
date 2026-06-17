@@ -38,18 +38,18 @@ function isRunning(command: ShellCommand | null | undefined): boolean {
 }
 
 function sessionTone(status: ShellSession['status']): string {
-  if (status === 'busy') return 'text-sky-600 dark:text-sky-400';
-  if (status === 'idle') return 'text-emerald-600 dark:text-emerald-400';
+  if (status === 'busy') return 'text-foreground';
+  if (status === 'idle') return 'text-muted-foreground';
   if (status === 'orphaned') return 'text-destructive';
   if (status === 'closed') return 'text-muted-foreground';
-  return 'text-amber-600 dark:text-amber-400';
+  return 'text-foreground';
 }
 
 function commandTone(status: ShellCommand['status']): string {
-  if (status === 'running' || status === 'queued') return 'text-sky-300';
-  if (status === 'succeeded') return 'text-emerald-300';
+  if (status === 'running' || status === 'queued') return 'text-white';
+  if (status === 'succeeded') return 'text-zinc-300';
   if (status === 'failed' || status === 'timed_out') return 'text-rose-300';
-  return 'text-slate-400';
+  return 'text-zinc-400';
 }
 
 function formatTime(value: string | null): string {
@@ -358,7 +358,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
   return (
     <aside ref={panelRef} className={cn('flex h-full shrink-0 flex-col bg-card', !embedded && 'border-l')} style={embedded ? undefined : { width }}>
       <div className="flex h-14 items-center gap-2 border-b px-3">
-        <Terminal className="size-4 shrink-0 text-primary" />
+        <Terminal className="size-4 shrink-0 text-foreground" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">Shell</div>
           <div className="truncate text-xs text-muted-foreground">{selectedSession?.cwd ?? selectedSession?.workspace_root ?? '当前会话没有 shell session'}</div>
@@ -389,7 +389,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
                     key={session.id}
                     className={cn(
                       'flex h-8 min-w-28 max-w-48 items-center gap-1.5 rounded-md border px-2 text-left text-xs hover:bg-accent',
-                      session.id === selectedSession?.id ? 'border-primary bg-background text-foreground' : 'border-transparent text-muted-foreground',
+                      session.id === selectedSession?.id ? 'border-foreground bg-background text-foreground' : 'border-transparent text-muted-foreground',
                     )}
                     onClick={() => setSelectedSessionId(session.id)}
                     title={`${session.name} (${session.id})`}
@@ -437,7 +437,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
             <>
               <div
                 ref={terminalRef}
-                className="scrollbar-thin min-h-0 flex-1 overflow-auto bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-100"
+                className="scrollbar-thin min-h-0 flex-1 overflow-auto bg-zinc-950 px-3 py-2 font-mono text-xs leading-5 text-zinc-100"
               >
                 {commands.length ? (
                   commands.map((command) => {
@@ -445,12 +445,12 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
                     const output = applyTerminalControls(logs.map((log) => log.chunk).join(''));
                     return (
                       <div key={command.id} className="py-1">
-                        <div className="whitespace-pre-wrap break-words text-slate-100">
-                          <span className="text-emerald-300">{shortCwd(command.cwd)}</span>
-                          <span className="text-slate-500"> $ </span>
+                        <div className="whitespace-pre-wrap break-words text-zinc-100">
+                          <span className="text-zinc-300">{shortCwd(command.cwd)}</span>
+                          <span className="text-zinc-500"> $ </span>
                           <span>{command.command}</span>
                         </div>
-                        {output && <pre className="whitespace-pre-wrap break-words text-slate-100">{output}</pre>}
+                        {output && <pre className="whitespace-pre-wrap break-words text-zinc-100">{output}</pre>}
                         {!isRunning(command) && (
                           <div className="flex items-center gap-2">
                             <div className={cn('min-w-0 flex-1 text-[11px]', commandTone(command.status))}>
@@ -460,7 +460,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
                               type="button"
                               variant="ghost"
                               size="icon-sm"
-                              className="size-6 text-slate-300 hover:bg-slate-800 hover:text-white"
+                              className="size-6 text-zinc-300 hover:bg-zinc-800 hover:text-white"
                               onClick={() => void attachCommand(command)}
                               disabled={acting}
                               title="添加这次 shell 交互到输入框"
@@ -473,7 +473,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
                     );
                   })
                 ) : (
-                  <div className="py-8 text-center text-slate-400">暂无命令。</div>
+                  <div className="py-8 text-center text-zinc-400">暂无命令。</div>
                 )}
               </div>
 

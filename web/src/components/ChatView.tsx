@@ -109,12 +109,12 @@ export function ChatView({
           <Button
             type="button"
             variant={showStatusCard ? 'secondary' : 'ghost'}
-            size="sm"
+            size="icon"
+            className="size-9"
             onClick={onToggleStatusCard}
             title={showStatusCard ? '关闭状态卡片' : '打开状态卡片'}
           >
             <Gauge className="size-4" />
-            状态
           </Button>
           <Button
             type="button"

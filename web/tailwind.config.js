@@ -8,18 +8,15 @@ export default {
   content: [
     './index.html',
     './src/**/*.{js,ts,jsx,tsx}',
-    // Streamdown styles its rendered output with Tailwind utilities; scan its
-    // dist so those classes are emitted. Hoisted to the repo-root node_modules.
+    // Streamdown 的渲染结果会带 Tailwind 类名，这里扫描包产物确保样式被生成。
     '../node_modules/streamdown/dist/**/*.js',
   ],
   theme: {
     extend: {
-      // Color language borrowed from the reference console (teal primary + surfaces).
-      // `surface` stops are role-preserving CSS variables that flip in dark mode:
-      // 50 = panel/card bg ... 950 = primary text, in BOTH themes.
+      // 黑白灰主题：surface 是角色化色阶，暗色模式下会整体翻转。
+      // 50 表示面板背景，950 表示主要文本，两个主题里语义保持一致。
       colors: {
-        // shadcn semantic tokens (HSL channel vars in index.css). Coexist with the
-        // custom `surface`/`primary` scales below.
+        // shadcn 语义 token 来自 index.css，通用组件只依赖这些角色色。
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
@@ -32,20 +29,19 @@ export default {
         accent: { DEFAULT: 'hsl(var(--accent))', foreground: 'hsl(var(--accent-foreground))' },
         destructive: { DEFAULT: 'hsl(var(--destructive))', foreground: 'hsl(var(--destructive-foreground))' },
         primary: {
-          // shadcn DEFAULT/foreground merged INTO the existing teal scale so both
-          // `bg-primary` (shadcn) and `bg-primary-500` (existing) keep working.
+          // 保留 primary 色阶的兼容写法，但色值全部改为中性色，不再引入青色品牌色。
           DEFAULT: 'hsl(var(--primary))',
           foreground: 'hsl(var(--primary-foreground))',
-          50: '#e9fbfb',
-          100: '#ccf6f7',
-          200: '#99ecef',
-          300: '#5bdddf',
-          400: '#23cbd0',
-          500: '#00c2c7',
-          600: '#009aa0',
-          700: '#007b80',
-          800: '#075f63',
-          900: '#0b4f53',
+          50: '#fafafa',
+          100: '#f5f5f5',
+          200: '#e5e5e5',
+          300: '#d4d4d4',
+          400: '#a3a3a3',
+          500: '#737373',
+          600: '#525252',
+          700: '#404040',
+          800: '#262626',
+          900: '#171717',
         },
         surface: {
           50: surface(50),

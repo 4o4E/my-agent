@@ -136,14 +136,14 @@ function OptionRow({
       disabled={disabled}
       className={cn(
         'flex w-full min-w-0 items-start gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors',
-        checked ? 'border-primary bg-primary/5 text-foreground' : 'bg-background hover:bg-accent',
+        checked ? 'border-foreground bg-muted text-foreground' : 'bg-background hover:bg-accent',
         disabled && 'cursor-default hover:bg-background',
       )}
     >
       {multi ? (
-        <SquareCheckBig className={cn('mt-0.5 size-4 shrink-0', checked ? 'text-primary' : 'text-muted-foreground')} />
+        <SquareCheckBig className={cn('mt-0.5 size-4 shrink-0', checked ? 'text-foreground' : 'text-muted-foreground')} />
       ) : checked ? (
-        <Check className="mt-0.5 size-4 shrink-0 text-primary" />
+        <Check className="mt-0.5 size-4 shrink-0 text-foreground" />
       ) : (
         <Circle className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       )}
@@ -151,7 +151,7 @@ function OptionRow({
         <span className="flex items-center gap-2">
           <span className="truncate font-medium">{option.label}</span>
           {option.required && <span className="rounded-sm bg-destructive/10 px-1.5 py-0.5 text-[11px] text-destructive">必选</span>}
-          {option.recommended && <span className="rounded-sm bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">推荐</span>}
+          {option.recommended && <span className="rounded-sm border bg-muted px-1.5 py-0.5 text-[11px] text-foreground">推荐</span>}
         </span>
         {option.description && <span className="mt-0.5 block text-xs text-muted-foreground">{option.description}</span>}
       </span>

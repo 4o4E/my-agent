@@ -206,7 +206,7 @@ function CopyRunButton({ runId, className }: { runId: string | null; className?:
       }}
       className={className}
     >
-      {copied ? <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" /> : <Fingerprint className="size-3.5" />}
+      {copied ? <Check className="size-3.5 text-foreground" /> : <Fingerprint className="size-3.5" />}
     </MessageAction>
   );
 }
@@ -221,7 +221,7 @@ function StreamStatusBar({ parts, active, time, runId }: { parts: Part[]; active
     <div className="not-prose mt-3 flex min-h-8 w-full flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 pt-2 text-xs text-muted-foreground">
       {stats && (
         <span className="inline-flex items-center gap-1.5">
-          <Activity className={cn('size-3.5', running && 'animate-pulse text-primary')} />
+          <Activity className={cn('size-3.5', running && 'animate-pulse text-foreground')} />
           <span>{streamStageLabel(stats)}</span>
           {running && <ProcessingDots />}
         </span>
@@ -233,7 +233,7 @@ function StreamStatusBar({ parts, active, time, runId }: { parts: Part[]; active
       {stats && running && (
         <>
           <span className="tabular-nums">{charsPerSecond.toLocaleString()} 字/秒</span>
-          <span className="text-primary/80">
+          <span className="text-foreground/80">
             <MiniSparkline values={stats.rate.history.slice(-STREAM_STATS_POINTS)} />
           </span>
         </>
@@ -826,7 +826,7 @@ function UserMessageFooter({ message, runId }: { message: UIMessage; runId: stri
             if (await copyToClipboard(text)) markCopiedText();
           }}
         >
-          {copiedText ? <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="size-3.5" />}
+          {copiedText ? <Check className="size-3.5 text-foreground" /> : <Copy className="size-3.5" />}
         </MessageAction>
         <CopyRunButton runId={runId} />
       </MessageActions>
@@ -1032,7 +1032,7 @@ export function Conversation({
             )}
             {busy && messages[messages.length - 1]?.role === 'user' && (
               <div className="flex items-center gap-2 pl-1 text-sm text-muted-foreground">
-                <span className="size-2 animate-pulse rounded-full bg-primary" />
+                <span className="size-2 animate-pulse rounded-full bg-foreground" />
                 正在思考…
               </div>
             )}

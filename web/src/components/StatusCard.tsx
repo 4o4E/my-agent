@@ -95,8 +95,8 @@ function subagentLabel(subagent: SubagentRun): string {
 }
 
 function planIcon(item: PlanItem) {
-  if (item.status === 'done') return <CheckCircle2 className="size-3.5 text-emerald-600 dark:text-emerald-400" />;
-  if (item.status === 'doing') return <LoaderCircle className="size-3.5 animate-spin text-sky-600 dark:text-sky-400" />;
+  if (item.status === 'done') return <CheckCircle2 className="size-3.5 text-foreground" />;
+  if (item.status === 'doing') return <LoaderCircle className="size-3.5 animate-spin text-foreground" />;
   if (item.status === 'failed') return <XCircle className="size-3.5 text-destructive" />;
   return <Circle className="size-3.5 text-muted-foreground" />;
 }
@@ -177,7 +177,7 @@ export function AgentStatusCard({ messages, busy, threadId, className, onOpenShe
   return (
     <section className={cn('w-64 rounded-md border bg-card p-2.5 shadow-lg', className)}>
       <div className="mb-2 flex items-center gap-2">
-        <div className={cn('flex size-8 items-center justify-center rounded-md border', busy ? 'text-primary' : 'text-muted-foreground')}>
+        <div className={cn('flex size-8 items-center justify-center rounded-md border', busy ? 'text-foreground' : 'text-muted-foreground')}>
           <Gauge className={cn('size-4', busy && 'animate-pulse')} />
         </div>
         <div className="min-w-0 flex-1">

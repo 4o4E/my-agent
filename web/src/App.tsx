@@ -870,7 +870,7 @@ export function App() {
       <div
         role="separator"
         aria-label="拖拽调整或收起会话列表"
-        className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/60"
+        className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-foreground/60"
         onPointerDown={(event) =>
           beginSidebarResize(event, {
             width: sidebarWidth,
@@ -919,7 +919,7 @@ export function App() {
         <div
           role="separator"
           aria-label="调整右侧工作区宽度"
-          className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/60"
+          className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-foreground/60"
           onPointerDown={(event) =>
             beginHorizontalResize(event, {
               width: filesPanelWidth,
