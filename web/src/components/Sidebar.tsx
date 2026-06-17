@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react';
 import { Bot, PanelLeftClose, PanelLeftOpen, Search, Settings, SquarePen, Trash2 } from 'lucide-react';
 import type { Thread } from '../api';
 import { Button } from '@/components/ui/button';
@@ -7,9 +8,13 @@ import { cn } from '@/lib/utils';
 interface Props {
   threads: Thread[];
   activeId: string | null;
-  activeView: 'chat' | 'settings' | 'search';
+  activeView: 'chat' | 'search';
+  settingsOpen: boolean;
   width: number | string;
   collapsed: boolean;
+  newHref: string;
+  searchHref: string;
+  threadHref: (id: string) => string;
   onToggleCollapsed: () => void;
   onNew: () => void;
   onSearch: () => void;
@@ -23,12 +28,20 @@ function threadLabel(t: Thread): string {
   return `会话 ${t.id.slice(0, 8)}`;
 }
 
+function shouldHandleAppLink(event: MouseEvent<HTMLAnchorElement>): boolean {
+  return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.defaultPrevented;
+}
+
 export function Sidebar({
   threads,
   activeId,
   activeView,
+  settingsOpen,
   width,
   collapsed,
+  newHref,
+  searchHref,
+  threadHref,
   onToggleCollapsed,
   onNew,
   onSearch,
@@ -49,18 +62,26 @@ export function Sidebar({
           <PanelLeftOpen className="absolute size-4 opacity-0 transition-opacity group-hover:opacity-100" />
           <span className="sr-only">展开会话列表</span>
         </button>
-        <button
-          type="button"
-          onClick={onNew}
+        <a
+          href={newHref}
+          onClick={(event) => {
+            if (!shouldHandleAppLink(event)) return;
+            event.preventDefault();
+            onNew();
+          }}
           className="mt-3 flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
           title="新建会话"
         >
           <SquarePen className="size-4" />
           <span className="sr-only">新建会话</span>
-        </button>
-        <button
-          type="button"
-          onClick={onSearch}
+        </a>
+        <a
+          href={searchHref}
+          onClick={(event) => {
+            if (!shouldHandleAppLink(event)) return;
+            event.preventDefault();
+            onSearch();
+          }}
           className={cn(
             'mt-2 flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground',
             activeView === 'search' && 'bg-accent text-accent-foreground ring-1 ring-border',
@@ -69,14 +90,14 @@ export function Sidebar({
         >
           <Search className="size-4" />
           <span className="sr-only">搜索会话</span>
-        </button>
+        </a>
         <div className="min-h-0 flex-1" />
         <button
           type="button"
           onClick={onSettings}
           className={cn(
             'flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground',
-            activeView === 'settings' && 'bg-accent text-accent-foreground ring-1 ring-border',
+            settingsOpen && 'bg-accent text-accent-foreground ring-1 ring-border',
           )}
           title="配置"
         >
@@ -108,17 +129,30 @@ export function Sidebar({
       </div>
 
       <div className="grid gap-1 px-2">
-        <Button onClick={onNew} variant="ghost" size="sm" className="h-9 w-full justify-start pl-2 pr-3 text-sm text-muted-foreground">
-          <SquarePen className="h-4 w-4" /> 新建会话
+        <Button asChild variant="ghost" size="sm" className="h-9 w-full justify-start pl-2 pr-3 text-sm text-muted-foreground">
+          <a
+            href={newHref}
+            onClick={(event) => {
+              if (!shouldHandleAppLink(event)) return;
+              event.preventDefault();
+              onNew();
+            }}
+          >
+            <SquarePen className="h-4 w-4" /> 新建会话
+          </a>
         </Button>
-        <Button
-          variant={activeView === 'search' ? 'secondary' : 'ghost'}
-          onClick={onSearch}
-          size="sm"
-          className="h-9 w-full justify-start pl-2 pr-3 text-sm text-muted-foreground data-[active=true]:text-foreground"
-          data-active={activeView === 'search'}
-        >
-          <Search className="h-4 w-4" /> 搜索会话
+        <Button asChild variant={activeView === 'search' ? 'secondary' : 'ghost'} size="sm" className="h-9 w-full justify-start pl-2 pr-3 text-sm text-muted-foreground data-[active=true]:text-foreground">
+          <a
+            href={searchHref}
+            data-active={activeView === 'search'}
+            onClick={(event) => {
+              if (!shouldHandleAppLink(event)) return;
+              event.preventDefault();
+              onSearch();
+            }}
+          >
+            <Search className="h-4 w-4" /> 搜索会话
+          </a>
         </Button>
       </div>
 
@@ -135,13 +169,18 @@ export function Sidebar({
                 : 'text-foreground hover:bg-accent/60',
             )}
           >
-            <button
-              onClick={() => onSelect(t.id)}
+            <a
+              href={threadHref(t.id)}
+              onClick={(event) => {
+                if (!shouldHandleAppLink(event)) return;
+                event.preventDefault();
+                onSelect(t.id);
+              }}
               title={threadLabel(t)}
               className="min-w-0 flex-1 truncate py-2 pl-2 pr-3 text-left text-sm transition-[padding] group-hover/thread:pr-9"
             >
               {threadLabel(t)}
-            </button>
+            </a>
             <button
               type="button"
               title="删除会话"
@@ -162,11 +201,11 @@ export function Sidebar({
         <Separator />
         <div className="px-2 py-2">
           <Button
-            variant={activeView === 'settings' ? 'secondary' : 'ghost'}
+            variant={settingsOpen ? 'secondary' : 'ghost'}
             size="sm"
             onClick={onSettings}
             className="h-9 w-full justify-start pl-2 pr-3 text-sm text-muted-foreground data-[active=true]:text-foreground"
-            data-active={activeView === 'settings'}
+            data-active={settingsOpen}
           >
             <Settings className="h-4 w-4" /> 设置
           </Button>

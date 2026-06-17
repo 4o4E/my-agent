@@ -1,17 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Database, Gauge, Moon, Palette, Plus, RefreshCw, Save, Shield, Sun, Wrench } from 'lucide-react';
+import { Activity, Database, Gauge, Moon, Palette, Plus, RefreshCw, Save, Shield, Sun, Wrench } from 'lucide-react';
 import {
   createDatasource,
   createPermissionProfile,
   getDatasourceDetail,
+  getThread,
   getToolSettings,
   listDatasources,
+  listThreads,
   testDatasource,
   testDatasourceDraft,
   updateDatasource,
   updatePermissionProfile,
   updateToolSettings,
+  type AgentEvent,
   type Datasource,
   type DatasourceAccount,
   type DatasourceInput,
@@ -28,6 +31,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
@@ -41,7 +45,44 @@ import {
   type StatusField,
 } from './StatusCard';
 
-type SettingsPanel = 'appearance' | 'usage' | 'tools' | 'datasources';
+type SettingsPanel =
+  | 'appearance'
+  | 'status-card'
+  | 'usage-stats'
+  | 'tools-sandbox'
+  | 'datasource-connection'
+  | 'datasource-permissions'
+  | 'datasource-pool'
+  | 'datasource-leases';
+
+type DatasourceSettingsPage = Extract<SettingsPanel, 'datasource-connection' | 'datasource-permissions' | 'datasource-pool' | 'datasource-leases'>;
+
+interface UsagePoint {
+  at: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  totalTokens: number;
+}
+
+interface UsageStats {
+  threads: number;
+  runs: number;
+  points: UsagePoint[];
+  totalInput: number;
+  totalOutput: number;
+  totalCached: number;
+  totalTokens: number;
+  peakTokens: number;
+  averageTokens: number;
+  daily: UsageDay[];
+}
+
+interface UsageDay {
+  date: string;
+  totalTokens: number;
+  future: boolean;
+}
 
 interface DatasourceDetail {
   datasource: Datasource;
@@ -117,6 +158,15 @@ function SectionButton({
   );
 }
 
+function NavGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid gap-1">
+      <div className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      {children}
+    </div>
+  );
+}
+
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (status === 'active' || status === 'idle' || status === 'released') return 'secondary';
   if (status === 'leased') return 'default';
@@ -189,6 +239,86 @@ function shortTime(value: string | null): string {
   return new Date(value).toLocaleString();
 }
 
+function localDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function numberField(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function usagePointFromEvent(event: AgentEvent, at: string): UsagePoint | null {
+  if (event.type !== 'usage_update') return null;
+  const inputTokens = numberField(event.inputTokens);
+  const outputTokens = numberField(event.outputTokens);
+  const cachedInputTokens = numberField(event.cachedInputTokens);
+  const totalTokens = inputTokens + outputTokens;
+  if (totalTokens <= 0 && cachedInputTokens <= 0) return null;
+  return { at, inputTokens, outputTokens, cachedInputTokens, totalTokens };
+}
+
+function buildUsageStats(details: Awaited<ReturnType<typeof getThread>>[]): UsageStats {
+  const points: UsagePoint[] = [];
+  let runs = 0;
+  for (const detail of details) {
+    runs += detail.runs.length;
+    for (const run of detail.runs) {
+      for (const event of run.events) {
+        const point = usagePointFromEvent(event, run.updated_at || run.created_at);
+        if (point) points.push(point);
+      }
+    }
+  }
+  const dailyMap = new Map<string, number>();
+  for (const point of points) {
+    const date = new Date(point.at);
+    if (!Number.isNaN(date.getTime())) {
+      const key = localDateKey(date);
+      dailyMap.set(key, (dailyMap.get(key) ?? 0) + point.totalTokens);
+    }
+  }
+  const today = startOfLocalDay(new Date());
+  const end = new Date(today);
+  end.setDate(today.getDate() + (6 - today.getDay()));
+  const start = new Date(end);
+  start.setDate(end.getDate() - 83);
+  const daily = Array.from({ length: 84 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    const key = localDateKey(date);
+    return { date: key, totalTokens: dailyMap.get(key) ?? 0, future: date > today };
+  });
+  const totalInput = points.reduce((sum, point) => sum + point.inputTokens, 0);
+  const totalOutput = points.reduce((sum, point) => sum + point.outputTokens, 0);
+  const totalCached = points.reduce((sum, point) => sum + point.cachedInputTokens, 0);
+  const totalTokens = totalInput + totalOutput;
+  const peakTokens = points.reduce((peak, point) => Math.max(peak, point.totalTokens), 0);
+  const averageTokens = points.length ? Math.round(totalTokens / points.length) : 0;
+  return {
+    threads: details.length,
+    runs,
+    points,
+    totalInput,
+    totalOutput,
+    totalCached,
+    totalTokens,
+    peakTokens,
+    averageTokens,
+    daily,
+  };
+}
+
+function formatMetric(value: number): string {
+  return value.toLocaleString();
+}
+
 function AppearanceSettingsPanel() {
   const { theme, setTheme } = useThemeCtx();
 
@@ -239,7 +369,7 @@ function AppearanceSettingsPanel() {
   );
 }
 
-function UsageSettingsPanel() {
+function StatusCardSettingsPanel() {
   const [fields, setFields] = useState<StatusField[]>(readStatusFields);
 
   const toggleField = (field: StatusField) => {
@@ -252,8 +382,8 @@ function UsageSettingsPanel() {
   return (
     <div className="grid gap-4">
       <div>
-        <h2 className="text-lg font-semibold">用量展示</h2>
-        <p className="mt-1 text-sm text-muted-foreground">控制聊天页状态卡片展示哪些运行和 token 指标</p>
+        <h2 className="text-lg font-semibold">状态卡片</h2>
+        <p className="mt-1 text-sm text-muted-foreground">控制聊天页状态卡片展示哪些运行信息</p>
       </div>
 
       <Card className="rounded-lg shadow-sm">
@@ -267,7 +397,7 @@ function UsageSettingsPanel() {
               key={field}
               className="flex min-h-12 items-center gap-3 rounded-md border p-3 text-sm transition-colors hover:bg-accent/60"
             >
-              <input type="checkbox" checked={fields.includes(field)} onChange={() => toggleField(field)} />
+              <Checkbox checked={fields.includes(field)} onCheckedChange={() => toggleField(field)} />
               <span className="min-w-0 flex-1">
                 <span className="block font-medium">{STATUS_FIELD_LABELS[field]}</span>
                 <span className="mt-0.5 block text-xs text-muted-foreground">
@@ -284,6 +414,137 @@ function UsageSettingsPanel() {
               </span>
             </label>
           ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function UsageStatsSettingsPanel() {
+  const [stats, setStats] = useState<UsageStats | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const refreshStats = () => {
+    setLoading(true);
+    setMessage('');
+    listThreads()
+      .then(async (threads) => {
+        const details = await Promise.all(threads.map((thread) => getThread(thread.id)));
+        setStats(buildUsageStats(details));
+      })
+      .catch((err) => setMessage(`读取用量失败：${(err as Error).message}`))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(refreshStats, []);
+
+  const dailyUsage = stats?.daily ?? Array.from({ length: 84 }, () => ({ date: '', totalTokens: 0, future: false }));
+  const heatmapWeeks = Array.from({ length: 12 }, (_, week) => dailyUsage.slice(week * 7, week * 7 + 7));
+  const maxDaily = Math.max(1, ...dailyUsage.map((day) => day.totalTokens));
+
+  return (
+    <div className="flex min-h-[34rem] flex-col gap-4">
+      <div className="flex shrink-0 items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">用量统计</h2>
+          <p className="mt-1 text-sm text-muted-foreground">按历史 run 事件统计 token 消耗、峰值、平均值和日热力图</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {message && <span className="max-w-md truncate text-sm text-muted-foreground">{message}</span>}
+          <Button variant="outline" onClick={refreshStats} disabled={loading}>
+            <RefreshCw className="h-4 w-4" />
+            {loading ? '刷新中' : '刷新'}
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid items-start gap-3 md:grid-cols-3 xl:grid-cols-4">
+        <Card className="rounded-lg shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription>总消耗</CardDescription>
+            <CardTitle>{formatMetric(stats?.totalTokens ?? 0)}</CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground">
+            输入 {formatMetric(stats?.totalInput ?? 0)} · 输出 {formatMetric(stats?.totalOutput ?? 0)}
+          </CardContent>
+        </Card>
+        <Card className="rounded-lg shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription>峰值</CardDescription>
+            <CardTitle>{formatMetric(stats?.peakTokens ?? 0)}</CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground">单次 usage_update 的最高 token 消耗</CardContent>
+        </Card>
+        <Card className="rounded-lg shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription>平均</CardDescription>
+            <CardTitle>{formatMetric(stats?.averageTokens ?? 0)}</CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground">按 usage_update 条数平均</CardContent>
+        </Card>
+        <Card className="rounded-lg shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription>缓存命中</CardDescription>
+            <CardTitle>{formatMetric(stats?.totalCached ?? 0)}</CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground">
+            {formatMetric(stats?.threads ?? 0)} 个会话 · {formatMetric(stats?.runs ?? 0)} 个 run
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="rounded-lg shadow-sm">
+        <CardHeader>
+          <CardTitle>日热力图</CardTitle>
+          <CardDescription>最近 12 周每日 token 消耗，颜色越深表示当天消耗越高</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 overflow-x-auto">
+          <div className="grid w-max grid-cols-[auto_repeat(12,0.875rem)] gap-1">
+            <div />
+            {heatmapWeeks.map((week, index) => (
+              <div key={`week-${index}`} className="h-3 text-[10px] tabular-nums text-muted-foreground">
+                {index % 3 === 0 ? week[0]?.date.slice(5) : ''}
+              </div>
+            ))}
+            {['日', '一', '二', '三', '四', '五', '六'].map((weekday, row) => (
+              <Fragment key={`weekday-${weekday}`}>
+                <div className="flex h-3 items-center pr-1 text-[10px] text-muted-foreground">
+                  {row % 2 === 1 ? weekday : ''}
+                </div>
+                {heatmapWeeks.map((week, column) => {
+                  const day = week[row] ?? { date: '', totalTokens: 0, future: false };
+                  const ratio = day.totalTokens / maxDaily;
+                  return (
+                    <div
+                      key={`${day.date || column}-${row}`}
+                      className={cn('size-3 rounded-[2px] border border-border/60', day.future && 'opacity-35')}
+                      style={{
+                        backgroundColor:
+                          day.future
+                            ? 'transparent'
+                            : day.totalTokens > 0
+                              ? `hsl(var(--primary) / ${Math.max(0.18, ratio).toFixed(2)})`
+                              : 'hsl(var(--muted))',
+                      }}
+                      title={day.date ? `${day.date} · ${day.future ? '未到日期' : `${formatMetric(day.totalTokens)} token`}` : '暂无数据'}
+                    />
+                  );
+                })}
+              </Fragment>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+            <span>少</span>
+            {[0.15, 0.35, 0.6, 0.85, 1].map((opacity) => (
+              <span
+                key={opacity}
+                className="size-3 rounded-[2px] border border-border/60"
+                style={{ backgroundColor: `hsl(var(--primary) / ${opacity})` }}
+              />
+            ))}
+            <span>多</span>
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -362,8 +623,8 @@ function ToolsSettingsPanel({
     <div className="grid gap-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">工具策略</h2>
-          <p className="mt-1 text-sm text-muted-foreground">沙箱、网络和 shell 运行边界</p>
+          <h2 className="text-lg font-semibold">沙箱</h2>
+          <p className="mt-1 text-sm text-muted-foreground">路径限制、网络开关、工具准入和 shell 运行边界</p>
         </div>
         <div className="flex items-center gap-3">
           {message && <span className="text-sm text-muted-foreground">{message}</span>}
@@ -437,54 +698,42 @@ function ToolsSettingsPanel({
       <Card className="rounded-lg shadow-sm">
         <CardHeader>
           <CardTitle>Shell</CardTitle>
-          <CardDescription>shell 工具、可见外部命令和命令 deny 正则</CardDescription>
+          <CardDescription>shell 可见外部命令和命令 deny 正则</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
-          <Field label="启用 shell">
-            <Select
-              value={settings.shellEnabled ? 'true' : 'false'}
-              onValueChange={(value) => setSettings({ ...settings, shellEnabled: value === 'true' })}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="true">true</SelectItem>
-                <SelectItem value="false">false</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="使用宿主机 PATH">
-            <Select
-              value={settings.shellUseHostPath ? 'true' : 'false'}
-              onValueChange={(value) => setSettings({ ...settings, shellUseHostPath: value === 'true' })}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="true">true</SelectItem>
-                <SelectItem value="false">false</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="单条工具结果上限">
-            <Input
-              type="number"
-              min={1000}
-              value={settings.maxOutput}
-              onChange={(event) => setSettings({ ...settings, maxOutput: Number(event.target.value) })}
-            />
-          </Field>
-          <Field label="bwrap 可见命令">
-            <Textarea rows={8} value={shellCommandsText} onChange={(event) => setShellCommandsText(event.target.value)} />
-          </Field>
-          <Field label="Shell deny 正则">
-            <Textarea rows={8} value={shellDenyText} onChange={(event) => setShellDenyText(event.target.value)} />
-          </Field>
+            <Field label="使用宿主机 PATH">
+              <Select
+                value={settings.shellUseHostPath ? 'true' : 'false'}
+                onValueChange={(value) => setSettings({ ...settings, shellUseHostPath: value === 'true' })}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true">true</SelectItem>
+                  <SelectItem value="false">false</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="单条工具结果上限">
+              <Input
+                type="number"
+                min={1000}
+                value={settings.maxOutput}
+                onChange={(event) => setSettings({ ...settings, maxOutput: Number(event.target.value) })}
+              />
+            </Field>
+            <Field label="bwrap 可见命令">
+              <Textarea rows={8} value={shellCommandsText} onChange={(event) => setShellCommandsText(event.target.value)} />
+            </Field>
+            <Field label="Shell deny 正则">
+              <Textarea rows={8} value={shellDenyText} onChange={(event) => setShellDenyText(event.target.value)} />
+            </Field>
         </CardContent>
       </Card>
     </div>
   );
 }
 
-function DatasourceSettingsPanel() {
+function DatasourceSettingsPanel({ page }: { page: DatasourceSettingsPage }) {
   const [datasources, setDatasources] = useState<Datasource[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DatasourceDetail | null>(null);
@@ -675,11 +924,27 @@ function DatasourceSettingsPanel() {
   }
 
   return (
-    <div className="grid gap-4">
-      <div className="flex items-center justify-between gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      <div className="flex shrink-0 items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">数据源账号池</h2>
-          <p className="mt-1 text-sm text-muted-foreground">run 级 workload token、短期数据库凭证和账号池状态</p>
+          <h2 className="text-lg font-semibold">
+            {page === 'datasource-connection'
+              ? '数据源连接'
+              : page === 'datasource-permissions'
+                ? '数据源权限'
+                : page === 'datasource-pool'
+                  ? '数据源账号池'
+                  : '数据源租约'}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {page === 'datasource-connection'
+              ? '配置数据库入口和管理连接'
+              : page === 'datasource-permissions'
+                ? '维护账号池继承的权限档位'
+                : page === 'datasource-pool'
+                  ? '查看短期数据库凭证账号状态'
+                  : '查看账号池租约记录和到期状态'}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           {message && <span className="max-w-md truncate text-sm text-muted-foreground">{message}</span>}
@@ -694,13 +959,13 @@ function DatasourceSettingsPanel() {
         </div>
       </div>
 
-      <div className="grid min-h-[34rem] gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <Card className="rounded-lg shadow-sm">
-          <CardHeader>
+      <div className="grid min-h-0 flex-1 items-stretch gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
+        <Card className="flex h-full min-h-0 flex-col rounded-lg shadow-sm">
+          <CardHeader className="shrink-0">
             <CardTitle className="text-base">数据源</CardTitle>
             <CardDescription>{datasources.length} 个连接入口</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-2">
+          <CardContent className="grid min-h-0 flex-1 content-start gap-2 overflow-y-auto">
             {datasources.length === 0 && <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">暂无数据源</div>}
             {datasources.map((item) => (
               <button
@@ -722,144 +987,148 @@ function DatasourceSettingsPanel() {
           </CardContent>
         </Card>
 
-        <div className="grid gap-4">
-          <Card className="rounded-lg shadow-sm">
-            <CardHeader>
-              <CardTitle className="text-base">连接配置</CardTitle>
-              <CardDescription>
-                {selectedDatasource?.hasAdminConfig ? '已保存管理配置；留空不会覆盖' : '尚未保存管理配置'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4 md:grid-cols-2">
-              <Field label="名称">
-                <Input value={datasourceForm.name} onChange={(event) => setDatasourceForm({ ...datasourceForm, name: event.target.value })} />
-              </Field>
-              <Field label="类型">
-                <Select
-                  value={datasourceForm.type}
-                  onValueChange={(value) => setDatasourceForm({ ...datasourceForm, type: value as DatasourceType })}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="postgres">postgres</SelectItem>
-                    <SelectItem value="mysql">mysql</SelectItem>
-                    <SelectItem value="mongodb">mongodb</SelectItem>
-                    <SelectItem value="hive">hive</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="状态">
-                <Select
-                  value={datasourceForm.status}
-                  onValueChange={(value) => setDatasourceForm({ ...datasourceForm, status: value as DatasourceStatus })}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="active">active</SelectItem>
-                    <SelectItem value="disabled">disabled</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="主机">
-                <Input value={datasourceForm.host} onChange={(event) => setDatasourceForm({ ...datasourceForm, host: event.target.value })} />
-              </Field>
-              <Field label="端口">
-                <Input
-                  type="number"
-                  min={1}
-                  value={datasourceForm.port}
-                  onChange={(event) => setDatasourceForm({ ...datasourceForm, port: event.target.value })}
-                />
-              </Field>
-              <Field label="数据库名">
-                <Input value={datasourceForm.database} onChange={(event) => setDatasourceForm({ ...datasourceForm, database: event.target.value })} />
-              </Field>
-              <Field label="最大账号数">
-                <Input
-                  type="number"
-                  min={1}
-                  value={datasourceForm.maxPoolSize}
-                  onChange={(event) => setDatasourceForm({ ...datasourceForm, maxPoolSize: event.target.value })}
-                />
-              </Field>
-              <Field label="租约有效期（秒）">
-                <Input
-                  type="number"
-                  min={1}
-                  value={datasourceForm.leaseTtlSeconds}
-                  onChange={(event) => setDatasourceForm({ ...datasourceForm, leaseTtlSeconds: event.target.value })}
-                />
-              </Field>
-              <div className="md:col-span-2">
-                <Field label="管理连接 URL">
-                  <Input
-                    type="password"
-                    value={datasourceForm.adminConnectionUrl}
-                    placeholder={selectedDatasource?.hasAdminConfig ? '已保存；留空不覆盖' : 'postgres://agent_admin:password@host:5432/db'}
-                    onChange={(event) => setDatasourceForm({ ...datasourceForm, adminConnectionUrl: event.target.value })}
-                  />
-                </Field>
-              </div>
-              <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground md:col-span-2">
-                当前 PostgreSQL 适配器使用管理连接 URL 创建、改密和锁定池账号；MySQL、MongoDB、Hive 适配器后续接入后会复用这些字段。
-              </div>
-              <div className="md:col-span-2">
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => void testCurrentDatasource()} disabled={testingDatasource || !datasourceForm.name.trim()}>
-                    <RefreshCw className="h-4 w-4" />
-                    {testingDatasource ? '测试中' : '测试连接'}
-                  </Button>
-                  <Button onClick={() => void saveDatasource()} disabled={savingDatasource || !datasourceForm.name.trim()}>
-                    <Save className="h-4 w-4" />
-                    {savingDatasource ? '保存中' : '保存数据源'}
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {testResult && (
-            <Card className="rounded-lg shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">连接测试结果</CardTitle>
-                <CardDescription>
-                  {testResult.database ? `${testResult.database} · ` : ''}
-                  {testResult.tableCount} 张表
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-2">
-                {testResult.tables.length === 0 && (
-                  <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">连接成功，但没有发现用户表</div>
-                )}
-                {testResult.tables.map((table) => (
-                  <div key={`${table.schema}.${table.name}`} className="rounded-md border">
-                    <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">{table.schema}.{table.name}</div>
-                        <div className="text-xs text-muted-foreground">{table.type}</div>
-                      </div>
-                      <Badge variant="outline">{table.columns.length} 列</Badge>
-                    </div>
-                    <div className="grid gap-1 p-3">
-                      {table.columns.slice(0, 12).map((column) => (
-                        <div key={column.name} className="grid gap-1 text-xs sm:grid-cols-[minmax(0,1fr)_10rem_4rem] sm:gap-2">
-                          <span className="truncate font-medium">{column.name}</span>
-                          <span className="truncate text-muted-foreground">{column.type}</span>
-                          <span className="text-muted-foreground">{column.nullable ? 'NULL' : 'NOT NULL'}</span>
-                        </div>
-                      ))}
-                      {table.columns.length > 12 && (
-                        <div className="text-xs text-muted-foreground">还有 {table.columns.length - 12} 列未展开</div>
-                      )}
+        <div className="h-full min-h-0">
+          {page === 'datasource-connection' && (
+            <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto pr-1">
+              <Card className="shrink-0 rounded-lg shadow-sm">
+                <CardHeader className="shrink-0">
+                  <CardTitle className="text-base">连接配置</CardTitle>
+                  <CardDescription>
+                    {selectedDatasource?.hasAdminConfig ? '已保存管理配置；留空不会覆盖' : '尚未保存管理配置'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-4 md:grid-cols-2">
+                  <Field label="名称">
+                    <Input value={datasourceForm.name} onChange={(event) => setDatasourceForm({ ...datasourceForm, name: event.target.value })} />
+                  </Field>
+                  <Field label="类型">
+                    <Select
+                      value={datasourceForm.type}
+                      onValueChange={(value) => setDatasourceForm({ ...datasourceForm, type: value as DatasourceType })}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="postgres">postgres</SelectItem>
+                        <SelectItem value="mysql">mysql</SelectItem>
+                        <SelectItem value="mongodb">mongodb</SelectItem>
+                        <SelectItem value="hive">hive</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="状态">
+                    <Select
+                      value={datasourceForm.status}
+                      onValueChange={(value) => setDatasourceForm({ ...datasourceForm, status: value as DatasourceStatus })}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="active">active</SelectItem>
+                        <SelectItem value="disabled">disabled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="主机">
+                    <Input value={datasourceForm.host} onChange={(event) => setDatasourceForm({ ...datasourceForm, host: event.target.value })} />
+                  </Field>
+                  <Field label="端口">
+                    <Input
+                      type="number"
+                      min={1}
+                      value={datasourceForm.port}
+                      onChange={(event) => setDatasourceForm({ ...datasourceForm, port: event.target.value })}
+                    />
+                  </Field>
+                  <Field label="数据库名">
+                    <Input value={datasourceForm.database} onChange={(event) => setDatasourceForm({ ...datasourceForm, database: event.target.value })} />
+                  </Field>
+                  <Field label="最大账号数">
+                    <Input
+                      type="number"
+                      min={1}
+                      value={datasourceForm.maxPoolSize}
+                      onChange={(event) => setDatasourceForm({ ...datasourceForm, maxPoolSize: event.target.value })}
+                    />
+                  </Field>
+                  <Field label="租约有效期（秒）">
+                    <Input
+                      type="number"
+                      min={1}
+                      value={datasourceForm.leaseTtlSeconds}
+                      onChange={(event) => setDatasourceForm({ ...datasourceForm, leaseTtlSeconds: event.target.value })}
+                    />
+                  </Field>
+                  <div className="md:col-span-2">
+                    <Field label="管理连接 URL">
+                      <Input
+                        type="password"
+                        value={datasourceForm.adminConnectionUrl}
+                        placeholder={selectedDatasource?.hasAdminConfig ? '已保存；留空不覆盖' : 'postgres://agent_admin:password@host:5432/db'}
+                        onChange={(event) => setDatasourceForm({ ...datasourceForm, adminConnectionUrl: event.target.value })}
+                      />
+                    </Field>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground md:col-span-2">
+                    当前 PostgreSQL 适配器使用管理连接 URL 创建、改密和锁定池账号；MySQL、MongoDB、Hive 适配器后续接入后会复用这些字段。
+                  </div>
+                  <div className="md:col-span-2">
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" onClick={() => void testCurrentDatasource()} disabled={testingDatasource || !datasourceForm.name.trim()}>
+                        <RefreshCw className="h-4 w-4" />
+                        {testingDatasource ? '测试中' : '测试连接'}
+                      </Button>
+                      <Button onClick={() => void saveDatasource()} disabled={savingDatasource || !datasourceForm.name.trim()}>
+                        <Save className="h-4 w-4" />
+                        {savingDatasource ? '保存中' : '保存数据源'}
+                      </Button>
                     </div>
                   </div>
-                ))}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+
+              {testResult && (
+                <Card className="flex min-h-80 shrink-0 flex-col rounded-lg shadow-sm">
+                  <CardHeader className="shrink-0">
+                    <CardTitle className="text-base">连接测试结果</CardTitle>
+                    <CardDescription>
+                      {testResult.database ? `${testResult.database} · ` : ''}
+                      {testResult.tableCount} 张表
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="grid max-h-80 gap-2 overflow-y-auto">
+                    {testResult.tables.length === 0 && (
+                      <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">连接成功，但没有发现用户表</div>
+                    )}
+                    {testResult.tables.map((table) => (
+                      <div key={`${table.schema}.${table.name}`} className="rounded-md border">
+                        <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium">{table.schema}.{table.name}</div>
+                            <div className="text-xs text-muted-foreground">{table.type}</div>
+                          </div>
+                          <Badge variant="outline">{table.columns.length} 列</Badge>
+                        </div>
+                        <div className="grid gap-1 p-3">
+                          {table.columns.slice(0, 12).map((column) => (
+                            <div key={column.name} className="grid gap-1 text-xs sm:grid-cols-[minmax(0,1fr)_10rem_4rem] sm:gap-2">
+                              <span className="truncate font-medium">{column.name}</span>
+                              <span className="truncate text-muted-foreground">{column.type}</span>
+                              <span className="text-muted-foreground">{column.nullable ? 'NULL' : 'NOT NULL'}</span>
+                            </div>
+                          ))}
+                          {table.columns.length > 12 && (
+                            <div className="text-xs text-muted-foreground">还有 {table.columns.length - 12} 列未展开</div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           )}
 
-          <Card className="rounded-lg shadow-sm">
-            <CardHeader>
+          {page === 'datasource-permissions' && <Card className="flex h-full min-h-0 flex-col rounded-lg shadow-sm">
+            <CardHeader className="shrink-0">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <CardTitle className="text-base">权限档位</CardTitle>
@@ -882,9 +1151,9 @@ function DatasourceSettingsPanel() {
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="grid gap-4">
+            <CardContent className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto">
               {detail?.profiles.length ? (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex max-h-28 flex-wrap content-start gap-2 overflow-y-auto rounded-md border bg-muted/20 p-2">
                   {detail.profiles.map((profile) => (
                     <Button
                       key={profile.id}
@@ -945,15 +1214,15 @@ function DatasourceSettingsPanel() {
                 {savingProfile ? '保存中' : '保存权限档位'}
               </Button>
             </CardContent>
-          </Card>
+          </Card>}
 
-          <div className="grid gap-4 xl:grid-cols-2">
-            <Card className="rounded-lg shadow-sm">
-              <CardHeader>
+          {page === 'datasource-pool' && (
+            <Card className="flex h-full min-h-0 flex-col rounded-lg shadow-sm">
+              <CardHeader className="shrink-0">
                 <CardTitle className="text-base">账号池</CardTitle>
                 <CardDescription>{detail?.accounts.length ?? 0} 个账号</CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-2">
+              <CardContent className="grid min-h-0 flex-1 content-start gap-2 overflow-y-auto">
                 {!detail?.accounts.length && <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">暂无池账号</div>}
                 {detail?.accounts.map((account) => (
                   <div key={account.id} className="grid gap-1 rounded-md border p-3 text-sm">
@@ -970,13 +1239,15 @@ function DatasourceSettingsPanel() {
                 ))}
               </CardContent>
             </Card>
+          )}
 
-            <Card className="rounded-lg shadow-sm">
-              <CardHeader>
+          {page === 'datasource-leases' && (
+            <Card className="flex h-full min-h-0 flex-col rounded-lg shadow-sm">
+              <CardHeader className="shrink-0">
                 <CardTitle className="text-base">最近租约</CardTitle>
                 <CardDescription>{detail?.leases.length ?? 0} 条记录</CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-2">
+              <CardContent className="grid min-h-0 flex-1 content-start gap-2 overflow-y-auto">
                 {!detail?.leases.length && <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">暂无租约</div>}
                 {detail?.leases.map((lease) => (
                   <div key={lease.id} className="grid gap-1 rounded-md border p-3 text-sm">
@@ -994,46 +1265,74 @@ function DatasourceSettingsPanel() {
                 ))}
               </CardContent>
             </Card>
-          </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-export function SettingsView({ onWorkspaceChanged }: { onWorkspaceChanged: () => void }) {
+export function SettingsView({ embedded = false, onWorkspaceChanged }: { embedded?: boolean; onWorkspaceChanged: () => void }) {
   const [panel, setPanel] = useState<SettingsPanel>('appearance');
+  const datasourcePanel =
+    panel === 'datasource-connection' ||
+    panel === 'datasource-permissions' ||
+    panel === 'datasource-pool' ||
+    panel === 'datasource-leases';
 
   return (
-    <main className="app-main-surface h-full flex-1 overflow-y-auto">
-      <div className="mx-auto flex max-w-7xl flex-col gap-4 px-6 py-5">
-        <div>
+    <main className={cn(embedded ? 'min-h-0 flex-1 bg-background' : 'app-main-surface h-full flex-1 overflow-y-auto')}>
+      <div className={cn('mx-auto flex max-w-7xl flex-col gap-4 px-6 py-5', embedded && 'h-full min-h-0 w-full')}>
+        {!embedded && <div>
           <h1 className="text-xl font-semibold">设置</h1>
           <p className="mt-1 text-sm text-muted-foreground">外观、用量展示、运行策略和数据源</p>
-        </div>
+        </div>}
 
-        <div className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]">
-          <Card className="h-fit rounded-lg shadow-sm">
-            <CardContent className="grid gap-2 p-3">
-              <SectionButton active={panel === 'appearance'} icon={<Palette className="h-4 w-4" />} onClick={() => setPanel('appearance')}>
-                外观
-              </SectionButton>
-              <SectionButton active={panel === 'usage'} icon={<Gauge className="h-4 w-4" />} onClick={() => setPanel('usage')}>
-                用量展示
-              </SectionButton>
-              <SectionButton active={panel === 'tools'} icon={<Wrench className="h-4 w-4" />} onClick={() => setPanel('tools')}>
-                工具策略
-              </SectionButton>
-              <SectionButton active={panel === 'datasources'} icon={<Database className="h-4 w-4" />} onClick={() => setPanel('datasources')}>
-                数据源账号池
-              </SectionButton>
+        <div className={cn('grid items-start gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]', embedded && 'h-full min-h-0 flex-1')}>
+          <Card className={cn('rounded-lg shadow-sm', embedded ? 'h-full min-h-0 overflow-hidden' : 'h-fit')}>
+            <CardContent className={cn('grid gap-2 p-3', embedded && 'max-h-full overflow-y-auto')}>
+              <NavGroup label="外观">
+                <SectionButton active={panel === 'appearance'} icon={<Palette className="h-4 w-4" />} onClick={() => setPanel('appearance')}>
+                  外观
+                </SectionButton>
+                <SectionButton active={panel === 'status-card'} icon={<Gauge className="h-4 w-4" />} onClick={() => setPanel('status-card')}>
+                  状态卡片
+                </SectionButton>
+              </NavGroup>
+              <NavGroup label="用量">
+                <SectionButton active={panel === 'usage-stats'} icon={<Activity className="h-4 w-4" />} onClick={() => setPanel('usage-stats')}>
+                  用量统计
+                </SectionButton>
+              </NavGroup>
+              <NavGroup label="工具">
+                <SectionButton active={panel === 'tools-sandbox'} icon={<Wrench className="h-4 w-4" />} onClick={() => setPanel('tools-sandbox')}>
+                  沙箱
+                </SectionButton>
+              </NavGroup>
+              <NavGroup label="数据源">
+                <SectionButton active={panel === 'datasource-connection'} icon={<Database className="h-4 w-4" />} onClick={() => setPanel('datasource-connection')}>
+                  连接
+                </SectionButton>
+                <SectionButton active={panel === 'datasource-permissions'} icon={<Shield className="h-4 w-4" />} onClick={() => setPanel('datasource-permissions')}>
+                  权限
+                </SectionButton>
+                <SectionButton active={panel === 'datasource-pool'} icon={<Database className="h-4 w-4" />} onClick={() => setPanel('datasource-pool')}>
+                  账号池
+                </SectionButton>
+                <SectionButton active={panel === 'datasource-leases'} icon={<Database className="h-4 w-4" />} onClick={() => setPanel('datasource-leases')}>
+                  租约
+                </SectionButton>
+              </NavGroup>
             </CardContent>
           </Card>
 
-          {panel === 'appearance' && <AppearanceSettingsPanel />}
-          {panel === 'usage' && <UsageSettingsPanel />}
-          {panel === 'tools' && <ToolsSettingsPanel onWorkspaceChanged={onWorkspaceChanged} />}
-          {panel === 'datasources' && <DatasourceSettingsPanel />}
+          <div className={cn('min-w-0', embedded && 'h-full min-h-0 pr-1', embedded && (datasourcePanel ? 'overflow-hidden' : 'overflow-y-auto'))}>
+            {panel === 'appearance' && <AppearanceSettingsPanel />}
+            {panel === 'status-card' && <StatusCardSettingsPanel />}
+            {panel === 'usage-stats' && <UsageStatsSettingsPanel />}
+            {panel === 'tools-sandbox' && <ToolsSettingsPanel onWorkspaceChanged={onWorkspaceChanged} />}
+            {datasourcePanel && <DatasourceSettingsPanel page={panel} />}
+          </div>
         </div>
       </div>
     </main>

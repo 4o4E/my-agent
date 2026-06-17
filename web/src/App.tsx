@@ -29,6 +29,7 @@ import { ChatView } from './components/ChatView';
 import { RightSidebar, type RightTabId } from './components/RightSidebar';
 import { SettingsView } from './components/SettingsView';
 import { SearchView } from './components/SearchView';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './components/ui/dialog';
 import type { ComposerAttachment } from './components/Composer';
 import type { AskUserDraft } from './components/AskUserCard';
 import { buildChatPath, currentBrowserPath, readChatRoute, type ChatRoute } from './router';
@@ -55,12 +56,15 @@ const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_SNAP_WIDTH = 104;
 const RIGHT_PANEL_SNAP_WIDTH = 360;
 
-type ActiveView = 'chat' | 'settings' | 'search';
+type ActiveView = 'chat' | 'search';
 
 function activeViewFromPath(pathname = window.location.pathname): ActiveView {
-  if (pathname === '/settings') return 'settings';
   if (pathname === '/search') return 'search';
   return 'chat';
+}
+
+function isSettingsPath(pathname = window.location.pathname): boolean {
+  return pathname === '/settings';
 }
 
 function beginRightPanelResize(
@@ -335,6 +339,7 @@ export function App() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [route, setRoute] = useState<ChatRoute>(() => readChatRoute());
   const [activeView, setActiveView] = useState<ActiveView>(() => activeViewFromPath());
+  const [settingsOpen, setSettingsOpen] = useState(() => isSettingsPath());
   const [composerDraft, setComposerDraft] = useState(route.draft);
   const [wide, setWide] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
@@ -560,12 +565,6 @@ export function App() {
     if (draftSyncTimerRef.current) window.clearTimeout(draftSyncTimerRef.current);
   }, []);
 
-  const navigateSettings = useCallback(() => {
-    flushPendingDraftSync();
-    if (currentBrowserPath() !== '/settings') window.history.pushState(null, '', '/settings');
-    setActiveView('settings');
-  }, [flushPendingDraftSync]);
-
   const navigateSearch = useCallback(() => {
     flushPendingDraftSync();
     if (currentBrowserPath() !== '/search') window.history.pushState(null, '', '/search');
@@ -610,9 +609,12 @@ export function App() {
 
   useEffect(() => {
     const path = buildChatPath(route);
-    if (activeView === 'settings' || activeView === 'search') {
-      const target = activeView === 'settings' ? '/settings' : '/search';
-      if (window.location.pathname !== target) window.history.replaceState(null, '', target);
+    if (isSettingsPath()) {
+      if (currentBrowserPath() !== path) window.history.replaceState(null, '', path);
+      return;
+    }
+    if (activeView === 'search') {
+      if (window.location.pathname !== '/search') window.history.replaceState(null, '', '/search');
       return;
     }
     if (currentBrowserPath() !== path) window.history.replaceState(null, '', path);
@@ -623,6 +625,18 @@ export function App() {
     const onPopState = () => {
       flushPendingDraftSync();
       stop();
+      if (isSettingsPath()) {
+        const next = readChatRoute();
+        const fallback = buildChatPath(next);
+        if (currentBrowserPath() !== fallback) window.history.replaceState(null, '', fallback);
+        setSettingsOpen(true);
+        setActiveView('chat');
+        setRoute(next);
+        draftRef.current = next.draft;
+        setComposerDraft(next.draft);
+        return;
+      }
+      setSettingsOpen(false);
       setActiveView(activeViewFromPath());
       const next = readChatRoute();
       setRoute(next);
@@ -739,7 +753,7 @@ export function App() {
   function openSettings() {
     stop();
     if (activeThreadId) rememberThreadDraft(activeThreadId, draftRef.current);
-    navigateSettings();
+    setSettingsOpen(true);
   }
 
   function openSearch() {
@@ -927,6 +941,8 @@ export function App() {
   const activeThread = threads.find((t) => t.id === activeThreadId);
   const title = activeThread?.title ?? (activeThreadId ? '会话' : '新会话');
   const rightPanelVisible = activeView === 'chat' && rightPanelOpen;
+  const threadHref = useCallback((threadId: string) => buildChatPath({ draft: '', threadId }), []);
+  const newChatHref = buildChatPath({ draft: '', threadId: null });
 
   return (
     <div className="app-main-surface flex h-full min-h-0 min-w-0 overflow-hidden">
@@ -939,8 +955,12 @@ export function App() {
           threads={threads}
           activeId={activeThreadId}
           activeView={activeView}
+          settingsOpen={settingsOpen}
           width="100%"
           collapsed={sidebarCollapsed}
+          newHref={newChatHref}
+          searchHref="/search"
+          threadHref={threadHref}
           onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
           onNew={newChat}
           onSearch={openSearch}
@@ -963,10 +983,8 @@ export function App() {
           })
         }
       />
-      {activeView === 'settings' ? (
-        <SettingsView onWorkspaceChanged={refreshWorkspaceRoot} />
-      ) : activeView === 'search' ? (
-        <SearchView onOpenThread={selectThread} />
+      {activeView === 'search' ? (
+        <SearchView threadHref={threadHref} onOpenThread={selectThread} />
       ) : (
         <ChatView
           title={title}
@@ -1039,6 +1057,15 @@ export function App() {
           onAttach={addAttachment}
         />
       </div>
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="flex h-[760px] max-h-[calc(100vh-2rem)] w-[1120px] max-w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden p-0">
+          <DialogHeader className="border-b px-6 py-4">
+            <DialogTitle>设置</DialogTitle>
+            <DialogDescription>外观、用量统计、工具策略和数据源</DialogDescription>
+          </DialogHeader>
+          <SettingsView embedded onWorkspaceChanged={refreshWorkspaceRoot} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

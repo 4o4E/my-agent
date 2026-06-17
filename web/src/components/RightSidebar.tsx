@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { WheelEvent as ReactWheelEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from 'react';
 import { Bot, FileText, FolderTree, Plus, Terminal, X } from 'lucide-react';
 import { listShellSessions, listSubagentRuns, type ShellSession, type SubagentRun } from '@/api';
 import { Button } from '@/components/ui/button';
@@ -88,12 +88,23 @@ function TabButton({
   onClick: (tab: RightTabId) => void;
   onClose: (tab: RightTabId) => void;
 }) {
+  const closeWithMiddleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    onClose(tab.id);
+  };
+
   return (
     <div
       className={cn(
         'group/tab ml-1 flex h-7 min-w-32 max-w-48 shrink-0 items-center rounded-md border bg-muted/40 text-xs',
         active ? 'border-primary/60 bg-background text-foreground shadow-sm' : 'border-border text-muted-foreground hover:bg-background',
       )}
+      onAuxClick={closeWithMiddleClick}
+      onMouseDown={(event) => {
+        if (event.button === 1) event.preventDefault();
+      }}
+      title={`${tab.label}，中键关闭`}
     >
       <button
         type="button"

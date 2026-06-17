@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { MouseEvent } from 'react';
 import { Search } from 'lucide-react';
 import { searchThreads, type ThreadSearchResult } from '@/api';
 import { Input } from '@/components/ui/input';
@@ -6,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
 interface Props {
+  threadHref: (threadId: string) => string;
   onOpenThread: (threadId: string) => void;
 }
 
@@ -125,7 +127,11 @@ function shortTime(value: string): string {
   return date.toLocaleString();
 }
 
-export function SearchView({ onOpenThread }: Props) {
+function shouldHandleAppLink(event: MouseEvent<HTMLAnchorElement>): boolean {
+  return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.defaultPrevented;
+}
+
+export function SearchView({ threadHref, onOpenThread }: Props) {
   const [query, setQuery] = useState(searchParam);
   const [results, setResults] = useState<ThreadSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -204,24 +210,32 @@ export function SearchView({ onOpenThread }: Props) {
         <div className="grid gap-3">
           {groups.map((group) => (
             <section key={group.threadId} className="rounded-md border bg-card">
-              <button
-                type="button"
-                onClick={() => onOpenThread(group.threadId)}
+              <a
+                href={threadHref(group.threadId)}
+                onClick={(event) => {
+                  if (!shouldHandleAppLink(event)) return;
+                  event.preventDefault();
+                  onOpenThread(group.threadId);
+                }}
                 className="flex w-full min-w-0 items-center gap-3 border-b px-3 py-2 text-left transition-colors hover:bg-accent/60"
               >
                 <span className="min-w-0 flex-1 truncate text-sm font-semibold">{group.title}</span>
                 <Badge variant="secondary">{group.results.length} 条</Badge>
                 <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{shortTime(group.latestAt)}</span>
-              </button>
+              </a>
 
               <div className="grid gap-1 p-2">
                 {group.results.map((result) => {
                   const snippetBlocks = resultSnippetBlocks(result.content, trimmedQuery);
                   return (
-                    <button
+                    <a
                       key={`${result.message_id}:${result.run_id}`}
-                      type="button"
-                      onClick={() => onOpenThread(result.thread_id)}
+                      href={threadHref(result.thread_id)}
+                      onClick={(event) => {
+                        if (!shouldHandleAppLink(event)) return;
+                        event.preventDefault();
+                        onOpenThread(result.thread_id);
+                      }}
                       className="grid gap-1.5 rounded-md p-2 text-left transition-colors hover:bg-accent/60"
                     >
                       <div className="flex min-w-0 items-center gap-2">
@@ -247,7 +261,7 @@ export function SearchView({ onOpenThread }: Props) {
                           </div>
                         ))}
                       </div>
-                    </button>
+                    </a>
                   );
                 })}
               </div>
