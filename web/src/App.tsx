@@ -53,32 +53,78 @@ const SIDEBAR_COLLAPSED_WIDTH = 56;
 const SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_SNAP_WIDTH = 104;
+const RIGHT_PANEL_SNAP_WIDTH = 360;
 
-function beginHorizontalResize(
+function beginRightPanelResize(
   event: ReactPointerEvent,
-  options: { width: number; min: number; max: number; direction: 1 | -1; onChange: (width: number) => void },
+  options: {
+    width: number;
+    min: number;
+    max: number;
+    onWidthChange: (width: number) => void;
+    onOpenChange: (open: boolean) => void;
+  },
 ) {
   event.preventDefault();
   const startX = event.clientX;
   const startWidth = options.width;
   const previousCursor = document.body.style.cursor;
   const previousUserSelect = document.body.style.userSelect;
+  let latestRawWidth = startWidth;
+  let pendingClientX = startX;
+  let resizeFrame = 0;
+  const previewLine = document.createElement('div');
+  previewLine.setAttribute('aria-hidden', 'true');
+  previewLine.className = 'right-panel-resize-preview';
   document.body.style.cursor = 'col-resize';
   document.body.style.userSelect = 'none';
+  document.body.appendChild(previewLine);
+
+  const movePreviewLine = (clientX: number) => {
+    latestRawWidth = startWidth + startX - clientX;
+    const previewWidth = latestRawWidth < RIGHT_PANEL_SNAP_WIDTH ? 0 : clamp(latestRawWidth, options.min, options.max);
+    previewLine.style.left = `${window.innerWidth - previewWidth}px`;
+  };
+  movePreviewLine(startX);
 
   const onMove = (moveEvent: PointerEvent) => {
-    const delta = (moveEvent.clientX - startX) * options.direction;
-    options.onChange(clamp(startWidth + delta, options.min, options.max));
+    pendingClientX = moveEvent.clientX;
+    if (resizeFrame) return;
+    resizeFrame = window.requestAnimationFrame(() => {
+      resizeFrame = 0;
+      movePreviewLine(pendingClientX);
+    });
   };
-  const onUp = () => {
+  const finishResize = (commit: boolean) => {
+    if (resizeFrame) {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = 0;
+      movePreviewLine(pendingClientX);
+    }
     document.body.style.cursor = previousCursor;
     document.body.style.userSelect = previousUserSelect;
+    previewLine.remove();
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onCancel);
+    if (!commit) return;
+    if (latestRawWidth < RIGHT_PANEL_SNAP_WIDTH) {
+      options.onOpenChange(false);
+    } else {
+      options.onWidthChange(clamp(latestRawWidth, options.min, options.max));
+      options.onOpenChange(true);
+    }
+  };
+  const onUp = () => {
+    finishResize(true);
+  };
+  const onCancel = () => {
+    finishResize(false);
   };
 
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup', onUp, { once: true });
+  window.addEventListener('pointercancel', onCancel, { once: true });
 }
 
 function beginSidebarResize(
@@ -100,14 +146,29 @@ function beginSidebarResize(
   let latestCollapsed = options.collapsed;
   let pendingWidth = startWidth;
   let resizeFrame = 0;
+  let snapTimer = 0;
   document.body.style.cursor = 'col-resize';
   document.body.style.userSelect = 'none';
+  if (options.previewElement) {
+    options.previewElement.dataset.sidebarResizing = 'true';
+  }
+
+  const markSidebarSnap = () => {
+    if (!options.previewElement) return;
+    options.previewElement.dataset.sidebarSnap = 'true';
+    if (snapTimer) window.clearTimeout(snapTimer);
+    snapTimer = window.setTimeout(() => {
+      delete options.previewElement?.dataset.sidebarSnap;
+      snapTimer = 0;
+    }, 220);
+  };
 
   const applyWidth = (rawWidth: number) => {
     latestWidth = rawWidth;
     const shouldCollapse = rawWidth < SIDEBAR_SNAP_WIDTH;
     const previewWidth = shouldCollapse ? SIDEBAR_COLLAPSED_WIDTH : clamp(rawWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
     if (shouldCollapse !== latestCollapsed) {
+      markSidebarSnap();
       latestCollapsed = shouldCollapse;
       if (!shouldCollapse) {
         flushSync(() => {
@@ -141,6 +202,9 @@ function beginSidebarResize(
     }
     document.body.style.cursor = previousCursor;
     document.body.style.userSelect = previousUserSelect;
+    if (options.previewElement) {
+      delete options.previewElement.dataset.sidebarResizing;
+    }
     if (latestWidth < SIDEBAR_SNAP_WIDTH) {
       options.onCollapsedChange(true);
     } else {
@@ -844,12 +908,13 @@ export function App() {
 
   const activeThread = threads.find((t) => t.id === activeThreadId);
   const title = activeThread?.title ?? (activeThreadId ? '会话' : '新会话');
+  const rightPanelVisible = activeView === 'chat' && rightPanelOpen;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
+    <div className="app-main-surface flex h-full min-h-0 min-w-0 overflow-hidden">
       <div
         ref={sidebarFrameRef}
-        className="h-full shrink-0 overflow-hidden"
+        className="sidebar-frame h-full shrink-0 overflow-hidden"
         style={{ width: sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth }}
       >
         <Sidebar
@@ -901,7 +966,7 @@ export function App() {
           onCancel={cancelActiveRun}
           onToggleWide={() => setWide((v) => !v)}
           onRemoveAttachment={(path) => setAttachments((current) => current.filter((a) => a.path !== path))}
-          rightPanelOpen={rightPanelOpen}
+          rightPanelOpen={rightPanelVisible}
           statusCardOpen={statusCardOpen}
           onToggleStatusCard={() => setStatusCardOpen((open) => !open)}
           onToggleRightPanel={toggleRightPanel}
@@ -915,38 +980,46 @@ export function App() {
           onAskUserCancel={cancelAskUser}
         />
       )}
-      {activeView === 'chat' && rightPanelOpen && (
+      {activeView === 'chat' && (
         <div
           role="separator"
           aria-label="调整右侧工作区宽度"
-          className="h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-foreground/60"
-          onPointerDown={(event) =>
-            beginHorizontalResize(event, {
+          className="h-full shrink-0 overflow-hidden bg-border/40 transition-[width,background-color] duration-200 ease-out hover:bg-foreground/60"
+          style={{ width: rightPanelVisible ? 4 : 0 }}
+          onPointerDown={(event) => {
+            if (!rightPanelVisible) return;
+            beginRightPanelResize(event, {
               width: filesPanelWidth,
               min: 460,
               max: Math.max(520, window.innerWidth - (sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth) - 360),
-              direction: -1,
-              onChange: setFilesPanelWidth,
-            })
-          }
+              onWidthChange: setFilesPanelWidth,
+              onOpenChange: setRightPanelOpen,
+            });
+          }}
         />
       )}
-      <RightSidebar
-        open={activeView === 'chat' && rightPanelOpen}
-        width={filesPanelWidth}
-        tabs={rightPanelTabs}
-        activeTab={rightPanelMode}
-        threadId={activeThreadId}
-        workspaceRoot={workspaceRoot}
-        onTabChange={setRightPanelMode}
-        onOpenFileBrowser={() => openRightTab('files')}
-        onOpenFileTab={openRemoteFile}
-        onOpenShellTab={(sessionId) => openRightTab(`shell:${sessionId}`)}
-        onOpenSubagentTab={(subagentId) => openRightTab(`subagent:${subagentId}`)}
-        onCloseTab={closeRightTab}
-        onClose={() => setRightPanelOpen(false)}
-        onAttach={addAttachment}
-      />
+      <div
+        className="h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-out"
+        style={{ width: rightPanelVisible ? filesPanelWidth : 0 }}
+        aria-hidden={!rightPanelVisible}
+      >
+        <RightSidebar
+          open={rightPanelVisible}
+          width={filesPanelWidth}
+          tabs={rightPanelTabs}
+          activeTab={rightPanelMode}
+          threadId={activeThreadId}
+          workspaceRoot={workspaceRoot}
+          onTabChange={setRightPanelMode}
+          onOpenFileBrowser={() => openRightTab('files')}
+          onOpenFileTab={openRemoteFile}
+          onOpenShellTab={(sessionId) => openRightTab(`shell:${sessionId}`)}
+          onOpenSubagentTab={(subagentId) => openRightTab(`subagent:${subagentId}`)}
+          onCloseTab={closeRightTab}
+          onClose={() => setRightPanelOpen(false)}
+          onAttach={addAttachment}
+        />
+      </div>
     </div>
   );
 }

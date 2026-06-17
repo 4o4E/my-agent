@@ -4,9 +4,9 @@
 
 /* 角色化表面色阶：50 是面板背景，950 是主要文本。 */
 :root {
-  --surface-50: 255 255 255;
-  --surface-100: 250 250 250;
-  --surface-200: 245 245 245;
+  --surface-50: 248 249 250;
+  --surface-100: 243 245 247;
+  --surface-200: 237 240 243;
   --surface-300: 229 229 229;
   --surface-400: 212 212 212;
   --surface-500: 163 163 163;
@@ -33,19 +33,19 @@
 
 /* shadcn/ui 黑白灰设计令牌：主色只表达层级和选中态，不再承载青色品牌色。 */
 :root {
-  --background: 0 0% 100%;
+  --background: 210 10% 96%;
   --foreground: 0 0% 3.9%;
-  --card: 0 0% 100%;
+  --card: 210 12% 98%;
   --card-foreground: 0 0% 3.9%;
-  --popover: 0 0% 100%;
+  --popover: 210 12% 98%;
   --popover-foreground: 0 0% 3.9%;
   --primary: 0 0% 9%;
   --primary-foreground: 0 0% 98%;
-  --secondary: 0 0% 96.1%;
+  --secondary: 214 10% 91%;
   --secondary-foreground: 0 0% 9%;
-  --muted: 0 0% 96.1%;
+  --muted: 214 9% 92%;
   --muted-foreground: 0 0% 45.1%;
-  --accent: 0 0% 96.1%;
+  --accent: 215 11% 88%;
   --accent-foreground: 0 0% 9%;
   --destructive: 0 84.2% 60.2%;
   --destructive-foreground: 0 0% 98%;
@@ -55,6 +55,11 @@
   --radius: 0.5rem;
   --scrollbar-thumb: 0 0% 78%;
   --scrollbar-thumb-hover: 0 0% 58%;
+  --app-main: 210 10% 96%;
+  --app-main-tile-a: 210 12% 95%;
+  --app-main-tile-b: 215 10% 97%;
+  --app-sidebar: 214 12% 94%;
+  --app-topbar: 210 12% 97%;
 }
 
 .dark {
@@ -66,11 +71,11 @@
   --popover-foreground: 0 0% 98%;
   --primary: 0 0% 98%;
   --primary-foreground: 0 0% 9%;
-  --secondary: 0 0% 14.9%;
+  --secondary: 0 0% 20%;
   --secondary-foreground: 0 0% 98%;
-  --muted: 0 0% 14.9%;
+  --muted: 0 0% 17%;
   --muted-foreground: 0 0% 63.9%;
-  --accent: 0 0% 14.9%;
+  --accent: 0 0% 24%;
   --accent-foreground: 0 0% 98%;
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 0 0% 98%;
@@ -79,6 +84,11 @@
   --ring: 0 0% 83.1%;
   --scrollbar-thumb: 0 0% 28%;
   --scrollbar-thumb-hover: 0 0% 50%;
+  --app-main: 0 0% 5.2%;
+  --app-main-tile-a: 0 0% 5.9%;
+  --app-main-tile-b: 0 0% 4.6%;
+  --app-sidebar: 0 0% 7.2%;
+  --app-topbar: 0 0% 6.2%;
 }
 
 @layer base {
@@ -121,6 +131,55 @@
 }
 
 @layer utilities {
+  .app-main-surface {
+    background-color: hsl(var(--app-main));
+    background-image:
+      linear-gradient(90deg, hsl(var(--app-main-tile-a)) 1px, transparent 1px),
+      linear-gradient(0deg, hsl(var(--app-main-tile-b)) 1px, transparent 1px);
+    background-size: 2px 2px;
+  }
+
+  .app-sidebar-surface {
+    background-color: hsl(var(--app-sidebar));
+  }
+
+  .app-topbar-surface {
+    background-color: hsl(var(--app-topbar));
+  }
+
+  .sidebar-frame {
+    transition: width 180ms ease;
+    will-change: width;
+  }
+
+  .sidebar-frame[data-sidebar-resizing='true']:not([data-sidebar-snap='true']) {
+    transition: none;
+  }
+
+  .composer-single-line [data-slot='input-group'] {
+    gap: 0.5rem;
+    height: 3rem;
+    min-height: 3rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+
+  .composer-single-line textarea[data-slot='input-group-control'] {
+    height: 2rem;
+    min-height: 2rem;
+  }
+
+  .right-panel-resize-preview {
+    background-color: hsl(var(--foreground) / 0.75);
+    bottom: 0;
+    pointer-events: none;
+    position: fixed;
+    top: 0;
+    transform: translateX(-50%);
+    width: 2px;
+    z-index: 60;
+  }
+
   .scrollbar-thin {
     scrollbar-width: thin;
     scrollbar-color: hsl(var(--scrollbar-thumb)) transparent;

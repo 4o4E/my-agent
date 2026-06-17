@@ -41,7 +41,7 @@ export function Sidebar({
 }: Props) {
   if (collapsed) {
     return (
-      <aside className="flex h-full w-full shrink-0 flex-col items-center border-r bg-card py-3">
+      <aside className="app-sidebar-surface flex h-full w-full shrink-0 flex-col items-center border-r py-3">
         <button
           type="button"
           onClick={onToggleCollapsed}
@@ -66,7 +66,7 @@ export function Sidebar({
           onClick={onSettings}
           className={cn(
             'mt-2 flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground',
-            activeView === 'settings' && 'bg-accent text-accent-foreground',
+            activeView === 'settings' && 'bg-accent text-accent-foreground ring-1 ring-border',
           )}
           title="配置"
         >
@@ -89,8 +89,8 @@ export function Sidebar({
   }
 
   return (
-    <aside className="flex h-full shrink-0 flex-col bg-card" style={{ width }}>
-      <div className="flex items-center gap-2 px-4 py-4">
+    <aside className="app-sidebar-surface flex h-full shrink-0 flex-col border-r" style={{ width }}>
+      <div className="flex h-14 items-center gap-2 px-3">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
           <Bot className="h-4 w-4" />
         </div>
@@ -98,7 +98,7 @@ export function Sidebar({
         <Button
           type="button"
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           className="size-8 shrink-0 text-muted-foreground"
           onClick={onToggleCollapsed}
           title="收起会话列表"
@@ -109,7 +109,7 @@ export function Sidebar({
       </div>
 
       <div className="px-3">
-        <Button onClick={onNew} className="w-full">
+        <Button onClick={onNew} size="sm" className="h-8 w-full">
           <Plus className="h-4 w-4" /> 新建会话
         </Button>
       </div>
@@ -118,7 +118,9 @@ export function Sidebar({
         <Button
           variant={activeView === 'settings' ? 'secondary' : 'ghost'}
           onClick={onSettings}
-          className="w-full justify-start text-muted-foreground"
+          size="sm"
+          className="h-8 w-full justify-start text-muted-foreground data-[active=true]:text-foreground"
+          data-active={activeView === 'settings'}
         >
           <Settings className="h-4 w-4" /> 配置
         </Button>
@@ -133,7 +135,7 @@ export function Sidebar({
             className={cn(
               'group/thread relative flex items-center rounded-md transition-colors',
               activeView === 'chat' && t.id === activeId
-                ? 'bg-accent font-medium text-accent-foreground'
+                ? 'bg-accent font-semibold text-accent-foreground shadow-sm ring-1 ring-border'
                 : 'text-foreground hover:bg-accent/60',
             )}
           >
@@ -162,7 +164,7 @@ export function Sidebar({
 
       <Separator />
       <div className="p-3">
-        <Button variant="ghost" onClick={onToggleTheme} className="w-full justify-start text-muted-foreground">
+        <Button variant="ghost" size="sm" onClick={onToggleTheme} className="h-8 w-full justify-start text-muted-foreground">
           {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           {theme === 'dark' ? '浅色模式' : '深色模式'}
         </Button>

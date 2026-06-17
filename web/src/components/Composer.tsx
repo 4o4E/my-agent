@@ -8,9 +8,9 @@ import {
   type PromptInputMessage,
 } from '@/components/ai-elements/prompt-input';
 import { Button } from '@/components/ui/button';
-import { FileUp, Folder, FolderUp, Maximize2, Minimize2, Paperclip, RefreshCw, Terminal } from 'lucide-react';
+import { FileUp, Folder, FolderUp, Paperclip, RefreshCw, Terminal } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,7 +40,6 @@ interface Props {
   onDraftChange: (text: string) => void;
   onSend: (text: string) => void;
   onCancel: () => void;
-  onToggleWide: () => void;
   onRemoveAttachment: (path: string) => void;
   onOpenRemoteFiles: () => void;
   onUploadLocal: (file: File, path: string) => Promise<void>;
@@ -108,12 +107,14 @@ export function Composer({
   onDraftChange,
   onSend,
   onCancel,
-  onToggleWide,
   onRemoveAttachment,
   onOpenRemoteFiles,
   onUploadLocal,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const promptFrameRef = useRef<HTMLDivElement>(null);
+  const restorePromptFocusRef = useRef(false);
+  const previousMultilineRef = useRef(false);
   const waitingForAskUser = !!waitingQuestion;
   const [localDraft, setLocalDraft] = useState(draft);
   const [localFile, setLocalFile] = useState<File | null>(null);
@@ -124,12 +125,28 @@ export function Composer({
   const [dirParent, setDirParent] = useState<string | null>(null);
   const [dirLoading, setDirLoading] = useState(false);
   const [dirError, setDirError] = useState<string | null>(null);
+  const multilineDraft = localDraft.includes('\n');
+
+  useLayoutEffect(() => {
+    const previousMultiline = previousMultilineRef.current;
+    previousMultilineRef.current = multilineDraft;
+    if (!restorePromptFocusRef.current || previousMultiline === multilineDraft) return;
+    restorePromptFocusRef.current = false;
+    const textarea = promptFrameRef.current?.querySelector('textarea');
+    if (!textarea) return;
+    textarea.focus({ preventScroll: true });
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+  }, [multilineDraft]);
 
   useEffect(() => {
     setLocalDraft(draft);
   }, [draft]);
 
   function handleDraftChange(text: string) {
+    if (text.includes('\n') !== multilineDraft && promptFrameRef.current?.contains(document.activeElement)) {
+      restorePromptFocusRef.current = true;
+    }
     setLocalDraft(text);
     onDraftChange(text);
   }
@@ -137,6 +154,9 @@ export function Composer({
   function handleSubmit(message: PromptInputMessage) {
     const text = message.text?.trim();
     if (!text || disabled || waitingForAskUser) return;
+    if (multilineDraft && promptFrameRef.current?.contains(document.activeElement)) {
+      restorePromptFocusRef.current = true;
+    }
     setLocalDraft('');
     onSend(text);
   }
@@ -186,7 +206,7 @@ export function Composer({
     <div className="bg-card px-6 py-4">
       <div className="flex min-w-0">
         <div className="min-w-0 flex-1">
-          <div className={cn('mx-auto', wide ? 'max-w-5xl' : 'max-w-3xl')}>
+          <div ref={promptFrameRef} className={cn('mx-auto', wide ? 'max-w-5xl' : 'max-w-3xl')}>
             {attachments.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-2">
                 {attachments.map((att) => (
@@ -210,20 +230,53 @@ export function Composer({
                 <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{waitingQuestion}</div>
               </div>
             )}
-            <PromptInput onSubmit={handleSubmit}>
-              <PromptInputBody>
-                <PromptInputTextarea
-                  onChange={(event) => handleDraftChange(event.currentTarget.value)}
-                  disabled={disabled || waitingForAskUser}
-                  placeholder={waitingForAskUser ? '请在上方 ask_user 表单中回答' : '描述一个任务…（Enter 发送，Shift+Enter 换行）'}
-                  value={localDraft}
-                />
-              </PromptInputBody>
-              <PromptInputFooter>
-                <PromptInputTools>
+            <PromptInput className={cn(!multilineDraft && 'composer-single-line')} onSubmit={handleSubmit}>
+              {multilineDraft ? (
+                <>
+                  <PromptInputBody>
+                    <PromptInputTextarea
+                      onChange={(event) => handleDraftChange(event.currentTarget.value)}
+                      disabled={disabled || waitingForAskUser}
+                      placeholder={waitingForAskUser ? '请在上方 ask_user 表单中回答' : '描述一个任务…（Enter 发送，Shift+Enter 换行）'}
+                      value={localDraft}
+                      className="max-h-[14rem] min-h-16 overflow-y-auto"
+                    />
+                  </PromptInputBody>
+                  <PromptInputFooter>
+                    <PromptInputTools>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button type="button" variant="ghost" size="icon" disabled={disabled} title="添加附件">
+                            <Paperclip className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuItem onClick={onOpenRemoteFiles}>
+                            <Paperclip className="size-4" />
+                            选择远程文件
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+                            <FileUp className="size-4" />
+                            上传本地文件
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </PromptInputTools>
+                    <div className="ml-auto flex shrink-0 items-center gap-1">
+                      <ContextUsageMeter usage={usage} />
+                      <PromptInputSubmit
+                        status={disabled && !waitingForAskUser ? 'streaming' : undefined}
+                        disabled={waitingForAskUser || (!disabled && !localDraft.trim())}
+                        onStop={onCancel}
+                      />
+                    </div>
+                  </PromptInputFooter>
+                </>
+              ) : (
+                <>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button type="button" variant="ghost" size="icon" disabled={disabled} title="添加附件">
+                      <Button type="button" variant="ghost" size="icon-sm" disabled={disabled} title="添加附件" className="ml-1 shrink-0">
                         <Paperclip className="size-4" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -238,26 +291,30 @@ export function Composer({
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    className="hidden"
-                    onChange={(event) => chooseLocal(event.currentTarget.files?.[0])}
+                  <PromptInputTextarea
+                    onChange={(event) => handleDraftChange(event.currentTarget.value)}
+                    disabled={disabled || waitingForAskUser}
+                    placeholder={waitingForAskUser ? '请在上方 ask_user 表单中回答' : '描述一个任务…（Enter 发送，Shift+Enter 换行）'}
+                    value={localDraft}
+                    wrap="off"
+                    className="h-8 min-h-8 max-h-8 min-w-0 whitespace-pre overflow-x-auto overflow-y-hidden px-2 py-1.5 leading-5"
                   />
-                  <Button type="button" variant="ghost" size="sm" onClick={onToggleWide} className="text-muted-foreground">
-                    {wide ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-                    {wide ? '正常宽度' : '加宽对话'}
-                  </Button>
-                </PromptInputTools>
-                <div className="ml-auto flex shrink-0 items-center gap-1">
-                  <ContextUsageMeter usage={usage} />
-                  <PromptInputSubmit
-                    status={disabled && !waitingForAskUser ? 'streaming' : undefined}
-                    disabled={waitingForAskUser || (!disabled && !localDraft.trim())}
-                    onStop={onCancel}
-                  />
-                </div>
-              </PromptInputFooter>
+                  <div className="ml-auto mr-1 flex shrink-0 items-center gap-1">
+                    <ContextUsageMeter usage={usage} />
+                    <PromptInputSubmit
+                      status={disabled && !waitingForAskUser ? 'streaming' : undefined}
+                      disabled={waitingForAskUser || (!disabled && !localDraft.trim())}
+                      onStop={onCancel}
+                    />
+                  </div>
+                </>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={(event) => chooseLocal(event.currentTarget.files?.[0])}
+              />
             </PromptInput>
           </div>
         </div>

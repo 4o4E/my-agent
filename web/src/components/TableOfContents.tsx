@@ -192,8 +192,8 @@ export function TableOfContents({
               onClick={() => handleClick(item.index)}
               title={item.time ? `${item.time}\n${item.text}` : item.text}
               className={cn(
-                'h-1 w-9 rounded-full transition-all hover:bg-white',
-                activeIndex === item.index ? 'bg-white shadow-[0_0_0_1px_hsl(var(--background)/0.45)]' : 'bg-white/45',
+                'h-1 w-9 rounded-full transition-all hover:bg-foreground/70',
+                activeIndex === item.index ? 'bg-foreground shadow-[0_0_0_1px_hsl(var(--background)/0.65)]' : 'bg-foreground/35',
               )}
               aria-label={item.text}
             />

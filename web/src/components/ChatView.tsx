@@ -4,7 +4,7 @@ import { Conversation, latestUsageSnapshot } from './Conversation';
 import { Composer, type ComposerAttachment } from './Composer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Gauge, PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
+import { Gauge, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
 import type { AskUserAnswer } from '@/api';
 import type { AskUserDraft } from './AskUserCard';
 import { AgentStatusCard } from './StatusCard';
@@ -93,8 +93,8 @@ export function ChatView({
     />
   );
   return (
-    <main className="relative flex h-full min-w-0 flex-1 flex-col bg-background">
-      <header className="flex h-14 shrink-0 items-center border-b bg-card px-6">
+    <main className="app-main-surface relative flex h-full min-w-0 flex-1 flex-col">
+      <header className="app-topbar-surface flex h-14 shrink-0 items-center border-b px-6">
         <h1 className="truncate text-sm font-semibold">{title}</h1>
         <Badge variant={busy ? 'default' : 'secondary'} className="ml-3">
           {busy ? '运行中' : '空闲'}
@@ -118,6 +118,16 @@ export function ChatView({
           </Button>
           <Button
             type="button"
+            variant={wide ? 'secondary' : 'ghost'}
+            size="icon"
+            className="size-9"
+            onClick={onToggleWide}
+            title={wide ? '恢复正常宽度' : '加宽对话'}
+          >
+            {wide ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+          </Button>
+          <Button
+            type="button"
             variant={rightPanelOpen ? 'secondary' : 'ghost'}
             size="icon"
             className="size-9"
@@ -130,7 +140,7 @@ export function ChatView({
       </header>
 
       {showStatusCard && (
-        <div className={cn('shrink-0 border-b bg-background px-3 py-2', !rightPanelOpen && '2xl:hidden')}>
+        <div className={cn('shrink-0 border-b px-3 py-2', !rightPanelOpen && '2xl:hidden')}>
           {renderStatusCard()}
         </div>
       )}
@@ -168,7 +178,6 @@ export function ChatView({
         onDraftChange={onDraftChange}
         onSend={onSend}
         onCancel={onCancel}
-        onToggleWide={onToggleWide}
         onRemoveAttachment={onRemoveAttachment}
         onOpenRemoteFiles={onOpenRemoteFiles}
         onUploadLocal={onUploadLocal}

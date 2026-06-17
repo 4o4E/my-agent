@@ -896,7 +896,7 @@ export function SettingsView({ onWorkspaceChanged }: { onWorkspaceChanged: () =>
   const [panel, setPanel] = useState<SettingsPanel>('tools');
 
   return (
-    <main className="h-full flex-1 overflow-y-auto bg-background">
+    <main className="app-main-surface h-full flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-7xl flex-col gap-4 px-6 py-5">
         <div>
           <h1 className="text-xl font-semibold">配置</h1>

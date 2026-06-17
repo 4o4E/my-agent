@@ -231,8 +231,6 @@ export function RightSidebar({
     tab?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
   }, [activeTab, open, tabs]);
 
-  if (!open) return null;
-
   const activeShellSessionId = activeTab?.startsWith('shell:') ? activeTab.slice('shell:'.length) : null;
   const activeSubagentId = activeTab?.startsWith('subagent:') ? activeTab.slice('subagent:'.length) : null;
   const activeFilePath = activeTab?.startsWith('file:') ? activeTab.slice('file:'.length) : null;
