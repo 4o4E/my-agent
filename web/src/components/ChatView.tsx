@@ -4,7 +4,7 @@ import { Conversation, latestUsageSnapshot } from './Conversation';
 import { Composer, type ComposerAttachment } from './Composer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Gauge, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
+import { Gauge, Maximize2, Minimize2, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import type { AskUserAnswer } from '@/api';
 import type { AskUserDraft } from './AskUserCard';
 import { AgentStatusCard } from './StatusCard';
@@ -100,12 +100,6 @@ export function ChatView({
           {busy ? '运行中' : '空闲'}
         </Badge>
         <div className="ml-auto flex items-center gap-2">
-          {busy && (
-            <Button type="button" variant="outline" size="sm" onClick={onCancel} title="终止当前对话">
-              <Square className="size-3.5" />
-              终止
-            </Button>
-          )}
           <Button
             type="button"
             variant={showStatusCard ? 'secondary' : 'ghost'}

@@ -203,7 +203,7 @@ export function Composer({
   }, [localFile]);
 
   return (
-    <div className="bg-card px-6 py-4">
+    <div className="px-6 py-3">
       <div className="flex min-w-0">
         <div className="min-w-0 flex-1">
           <div ref={promptFrameRef} className={cn('mx-auto', wide ? 'max-w-5xl' : 'max-w-3xl')}>

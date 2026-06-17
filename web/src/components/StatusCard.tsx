@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { UIMessage } from 'ai';
-import { Bot, CheckCircle2, Circle, Gauge, LoaderCircle, Terminal, XCircle } from 'lucide-react';
-import { listShellSessions, listSubagentRuns, type PlanItem, type ShellSession, type SubagentRun } from '@/api';
-import { latestPlanState, type UsageSnapshot } from './Conversation';
+import { Activity, Bot, CheckCircle2, Circle, Gauge, LoaderCircle, Terminal, XCircle } from 'lucide-react';
+import { listShellSessions, listSubagentRuns, type PlanItem, type ShellSession, type StreamStats, type SubagentRun } from '@/api';
+import { latestPlanState, latestStreamStats, type UsageSnapshot } from './Conversation';
 import { cn } from '@/lib/utils';
 
 export type StatusField = 'run' | 'plan' | 'shell' | 'tokens' | 'cache';
@@ -17,6 +17,7 @@ interface Props {
 }
 
 const STORAGE_KEY = 'my-agent:right-status-fields';
+const STREAM_STATS_POINTS = 24;
 export const DEFAULT_STATUS_FIELDS: StatusField[] = ['run', 'plan', 'shell', 'tokens', 'cache'];
 export const STATUS_FIELD_LABELS: Record<StatusField, string> = {
   run: '当前信息',
@@ -53,6 +54,109 @@ function latestTokenUsage(messages: UIMessage[]): UsageSnapshot | null {
     }
   }
   return null;
+}
+
+// 状态面板只取最近一条 assistant 的流式统计，避免用户消息或旧 run 抢占展示。
+function latestAssistantStreamStats(messages: UIMessage[]) {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
+    const message = messages[messageIndex];
+    if (message.role !== 'assistant') continue;
+    const stats = latestStreamStats(message.parts);
+    if (stats) return stats;
+  }
+  return null;
+}
+
+function streamStageLabel(stats: StreamStats): string {
+  const tool = stats.activeTool?.name ? ` · ${stats.activeTool.name}` : '';
+  if (stats.stage === 'llm_waiting') return '等待模型';
+  if (stats.stage === 'reasoning') return '思考中';
+  if (stats.stage === 'output') return '输出中';
+  if (stats.stage === 'tool_call') return `准备调用工具${tool}`;
+  if (stats.stage === 'tool_running') return `工具执行中${tool}`;
+  if (stats.stage === 'tool_result') return `工具已返回${tool}`;
+  if (stats.stage === 'error') return '运行出错';
+  return '输出完成';
+}
+
+function MiniSparkline({ values }: { values: number[] }) {
+  const width = 192;
+  const height = 40;
+  const samples = values.length ? values.map((value) => Math.max(0, value)) : [0];
+  const max = Math.max(1, ...samples);
+  const points = samples.map((value, index) => {
+    const x = samples.length === 1 ? width : (index / (samples.length - 1)) * width;
+    const y = height - (value / max) * (height - 6) - 3;
+    return { value, x, y };
+  });
+  const segmentPath = (index: number) => {
+    const p0 = points[Math.max(0, index - 1)];
+    const p1 = points[index];
+    const p2 = points[index + 1];
+    const p3 = points[Math.min(points.length - 1, index + 2)];
+    if (p1.value === 0 && p2.value === 0) return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    return [
+      `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)}`,
+      `C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)} ${cp2x.toFixed(1)} ${cp2y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`,
+    ].join(' ');
+  };
+
+  return (
+    <svg className="h-10 w-full overflow-visible" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+      {points.length === 1 ? (
+        <circle
+          cx={points[0].x}
+          cy={points[0].y}
+          r="1.5"
+          fill={points[0].value === 0 ? 'hsl(var(--muted-foreground))' : 'currentColor'}
+          opacity={points[0].value === 0 ? 0.45 : 1}
+        />
+      ) : (
+        points.slice(0, -1).map((point, index) => {
+          const next = points[index + 1];
+          const isZero = point.value === 0 && next.value === 0;
+          return (
+            <path
+              key={index}
+              d={segmentPath(index)}
+              fill="none"
+              stroke={isZero ? 'hsl(var(--muted-foreground))' : 'currentColor'}
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity={isZero ? 0.45 : 1}
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        })
+      )}
+    </svg>
+  );
+}
+
+function StreamStatsPanel({ messages, busy }: { messages: UIMessage[]; busy: boolean }) {
+  const stats = latestAssistantStreamStats(messages);
+  if (!stats) return <StatusRow label="输出速度" value="暂无" />;
+  const running = busy && stats.stage !== 'done' && stats.stage !== 'error';
+  const charsPerSecond = Math.round(stats.rate.charsPerSecond);
+  return (
+    <div className="space-y-1.5 pt-1">
+      <div className="flex min-h-6 items-center justify-between gap-3 text-xs">
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-muted-foreground">
+          <Activity className={cn('size-3.5 shrink-0', running && 'animate-pulse text-foreground')} />
+          <span className="truncate">{streamStageLabel(stats)}</span>
+        </span>
+        <span className="shrink-0 tabular-nums font-medium text-foreground">{charsPerSecond.toLocaleString()} 字/秒</span>
+      </div>
+      <div className="rounded-lg border bg-background/70 px-2 py-1.5 text-foreground/80">
+        <MiniSparkline values={stats.rate.history.slice(-STREAM_STATS_POINTS)} />
+      </div>
+    </div>
+  );
 }
 
 export function readStatusFields(): StatusField[] {
@@ -171,7 +275,7 @@ export function AgentStatusCard({ messages, busy, threadId, className, onOpenShe
   const show = (field: StatusField) => fields.includes(field);
 
   return (
-    <section className={cn('w-64 rounded-md border bg-card p-2.5 shadow-lg', className)}>
+    <section className={cn('w-64 rounded-xl border bg-card p-2.5 shadow-sm', className)}>
       <div className="mb-2 flex items-center gap-2">
         <div className={cn('flex size-8 items-center justify-center rounded-md border', busy ? 'text-foreground' : 'text-muted-foreground')}>
           <Gauge className={cn('size-4', busy && 'animate-pulse')} />
@@ -187,6 +291,7 @@ export function AgentStatusCard({ messages, busy, threadId, className, onOpenShe
           <>
             <StatusRow label="状态" value={busy ? '运行中' : '空闲'} />
             <StatusRow label="消息" value={messageSummary} />
+            <StreamStatsPanel messages={messages} busy={busy} />
           </>
         )}
         {show('plan') && <PlanList messages={messages} />}

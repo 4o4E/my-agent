@@ -27,7 +27,6 @@ type FileToken = { kind?: string; path: string; name?: string; size?: number };
 
 const RELATIVE_PATH_RE = /(?:\.{1,2}\/)?(?:server|web|docs|src|uploads|tests)\/[A-Za-z0-9._~+/@:-]+/g;
 const FILE_LINK_PREFIX = 'my-agent-file://';
-const STREAM_STATS_POINTS = 24;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -112,69 +111,6 @@ function durationFromTiming(t?: Timing): number | undefined {
   return t.durationMs;
 }
 
-function MiniSparkline({ values }: { values: number[] }) {
-  const width = 92;
-  const height = 24;
-  const samples = values.length ? values.map((value) => Math.max(0, value)) : [0];
-  const max = Math.max(1, ...samples);
-  const points = samples.map((value, index) => {
-    const x = samples.length === 1 ? width : (index / (samples.length - 1)) * width;
-    const y = height - (value / max) * (height - 4) - 2;
-    return {
-      value,
-      x,
-      y,
-    };
-  });
-  const segmentPath = (index: number) => {
-    const p0 = points[Math.max(0, index - 1)];
-    const p1 = points[index];
-    const p2 = points[index + 1];
-    const p3 = points[Math.min(points.length - 1, index + 2)];
-    if (p1.value === 0 && p2.value === 0) return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} L ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
-    const cp1x = p1.x + (p2.x - p0.x) / 6;
-    const cp1y = p1.y + (p2.y - p0.y) / 6;
-    const cp2x = p2.x - (p3.x - p1.x) / 6;
-    const cp2y = p2.y - (p3.y - p1.y) / 6;
-    return [
-      `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)}`,
-      `C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)} ${cp2x.toFixed(1)} ${cp2y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`,
-    ].join(' ');
-  };
-
-  return (
-    <svg className="h-6 w-[92px] overflow-visible" viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
-      {points.length === 1 ? (
-        <circle
-          cx={points[0].x}
-          cy={points[0].y}
-          r="1.5"
-          fill={points[0].value === 0 ? 'hsl(var(--muted-foreground))' : 'currentColor'}
-          opacity={points[0].value === 0 ? 0.45 : 1}
-        />
-      ) : (
-        points.slice(0, -1).map((point, index) => {
-          const next = points[index + 1];
-          const isZero = point.value === 0 && next.value === 0;
-          return (
-            <path
-              key={index}
-              d={segmentPath(index)}
-              fill="none"
-              stroke={isZero ? 'hsl(var(--muted-foreground))' : 'currentColor'}
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              opacity={isZero ? 0.45 : 1}
-              vectorEffect="non-scaling-stroke"
-            />
-          );
-        })
-      )}
-    </svg>
-  );
-}
-
 function ProcessingDots() {
   return (
     <span className="flex items-end gap-0.5" aria-hidden="true">
@@ -216,7 +152,6 @@ function StreamStatusBar({ parts, active, time, runId }: { parts: Part[]; active
   const stats = latestStreamStats(parts);
   if (!stats && !time && !runId) return null;
   const running = !!stats && active && stats.stage !== 'done' && stats.stage !== 'error';
-  const charsPerSecond = Math.round(stats?.rate.charsPerSecond ?? 0);
 
   return (
     <div className="not-prose mt-3 flex min-h-8 w-full flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 pt-2 text-xs text-muted-foreground">
@@ -231,14 +166,6 @@ function StreamStatusBar({ parts, active, time, runId }: { parts: Part[]; active
       <span className="inline-flex items-center">
         <CopyRunButton runId={runId} className="size-6 text-muted-foreground" />
       </span>
-      {stats && running && (
-        <>
-          <span className="tabular-nums">{charsPerSecond.toLocaleString()} 字/秒</span>
-          <span className="text-foreground/80">
-            <MiniSparkline values={stats.rate.history.slice(-STREAM_STATS_POINTS)} />
-          </span>
-        </>
-      )}
     </div>
   );
 }
