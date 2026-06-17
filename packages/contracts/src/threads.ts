@@ -26,6 +26,21 @@ export interface ThreadDetailResponse {
   runs: RunWithEvents[];
 }
 
+export interface ThreadSearchResult {
+  thread_id: string;
+  thread_title: string | null;
+  run_id: string;
+  message_id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
+export interface ThreadSearchResponse {
+  query: string;
+  results: ThreadSearchResult[];
+}
+
 export type SubagentRunStatus = 'running' | 'done' | 'error';
 
 export interface SubagentRun {

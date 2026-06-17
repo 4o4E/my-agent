@@ -94,11 +94,12 @@ function messageTime(message: UIMessage): string | null {
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
     const monthDay = `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const hourMinute = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
     if (date < oneYearAgo) {
       const year = date.getFullYear();
-      return `${year}-${monthDay}`;
+      return `${year}-${monthDay} ${hourMinute}`;
     }
-    return monthDay;
+    return `${monthDay} ${hourMinute}`;
   }
   return null;
 }

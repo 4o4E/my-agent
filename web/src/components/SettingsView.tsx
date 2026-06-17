@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Database, Plus, RefreshCw, Save, Shield, Wrench } from 'lucide-react';
+import { Database, Gauge, Moon, Palette, Plus, RefreshCw, Save, Shield, Sun, Wrench } from 'lucide-react';
 import {
   createDatasource,
   createPermissionProfile,
@@ -32,8 +32,16 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { useThemeCtx } from '@/theme';
+import {
+  DEFAULT_STATUS_FIELDS,
+  STATUS_FIELD_LABELS,
+  readStatusFields,
+  writeStatusFields,
+  type StatusField,
+} from './StatusCard';
 
-type SettingsPanel = 'tools' | 'datasources';
+type SettingsPanel = 'appearance' | 'usage' | 'tools' | 'datasources';
 
 interface DatasourceDetail {
   datasource: Datasource;
@@ -179,6 +187,107 @@ function accountProfileName(account: DatasourceAccount, profiles: PermissionProf
 function shortTime(value: string | null): string {
   if (!value) return '-';
   return new Date(value).toLocaleString();
+}
+
+function AppearanceSettingsPanel() {
+  const { theme, setTheme } = useThemeCtx();
+
+  return (
+    <div className="grid gap-4">
+      <div>
+        <h2 className="text-lg font-semibold">外观</h2>
+        <p className="mt-1 text-sm text-muted-foreground">浅色、深色和界面显示偏好</p>
+      </div>
+
+      <Card className="rounded-lg shadow-sm">
+        <CardHeader>
+          <CardTitle>颜色模式</CardTitle>
+          <CardDescription>设置会立即应用，并保存在当前浏览器中</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setTheme('light')}
+            className={cn(
+              'flex min-h-24 items-center gap-3 rounded-md border p-4 text-left transition-colors hover:bg-accent/60',
+              theme === 'light' && 'border-primary bg-primary/5 ring-1 ring-primary/30',
+            )}
+          >
+            <Sun className="size-5 shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">浅色模式</span>
+              <span className="mt-1 block text-xs text-muted-foreground">适合明亮环境，页面对比更轻。</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTheme('dark')}
+            className={cn(
+              'flex min-h-24 items-center gap-3 rounded-md border p-4 text-left transition-colors hover:bg-accent/60',
+              theme === 'dark' && 'border-primary bg-primary/5 ring-1 ring-primary/30',
+            )}
+          >
+            <Moon className="size-5 shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">深色模式</span>
+              <span className="mt-1 block text-xs text-muted-foreground">适合低光环境，降低大面积亮度。</span>
+            </span>
+          </button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function UsageSettingsPanel() {
+  const [fields, setFields] = useState<StatusField[]>(readStatusFields);
+
+  const toggleField = (field: StatusField) => {
+    setFields((current) => {
+      const next = current.includes(field) ? current.filter((item) => item !== field) : [...current, field];
+      return writeStatusFields(next);
+    });
+  };
+
+  return (
+    <div className="grid gap-4">
+      <div>
+        <h2 className="text-lg font-semibold">用量展示</h2>
+        <p className="mt-1 text-sm text-muted-foreground">控制聊天页状态卡片展示哪些运行和 token 指标</p>
+      </div>
+
+      <Card className="rounded-lg shadow-sm">
+        <CardHeader>
+          <CardTitle>状态卡片字段</CardTitle>
+          <CardDescription>至少保留一项；全部取消时会自动恢复默认字段</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-2 sm:grid-cols-2">
+          {DEFAULT_STATUS_FIELDS.map((field) => (
+            <label
+              key={field}
+              className="flex min-h-12 items-center gap-3 rounded-md border p-3 text-sm transition-colors hover:bg-accent/60"
+            >
+              <input type="checkbox" checked={fields.includes(field)} onChange={() => toggleField(field)} />
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium">{STATUS_FIELD_LABELS[field]}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  {field === 'tokens'
+                    ? '输入、输出 token'
+                    : field === 'cache'
+                      ? '缓存命中 token 占比'
+                      : field === 'shell'
+                        ? 'Shell 和子任务资源'
+                        : field === 'plan'
+                          ? '当前计划进度'
+                          : '运行状态和消息数量'}
+                </span>
+              </span>
+            </label>
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 function ToolsSettingsPanel({
@@ -893,19 +1002,25 @@ function DatasourceSettingsPanel() {
 }
 
 export function SettingsView({ onWorkspaceChanged }: { onWorkspaceChanged: () => void }) {
-  const [panel, setPanel] = useState<SettingsPanel>('tools');
+  const [panel, setPanel] = useState<SettingsPanel>('appearance');
 
   return (
     <main className="app-main-surface h-full flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-7xl flex-col gap-4 px-6 py-5">
         <div>
-          <h1 className="text-xl font-semibold">配置</h1>
-          <p className="mt-1 text-sm text-muted-foreground">运行策略、数据源和凭证租约</p>
+          <h1 className="text-xl font-semibold">设置</h1>
+          <p className="mt-1 text-sm text-muted-foreground">外观、用量展示、运行策略和数据源</p>
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]">
           <Card className="h-fit rounded-lg shadow-sm">
             <CardContent className="grid gap-2 p-3">
+              <SectionButton active={panel === 'appearance'} icon={<Palette className="h-4 w-4" />} onClick={() => setPanel('appearance')}>
+                外观
+              </SectionButton>
+              <SectionButton active={panel === 'usage'} icon={<Gauge className="h-4 w-4" />} onClick={() => setPanel('usage')}>
+                用量展示
+              </SectionButton>
               <SectionButton active={panel === 'tools'} icon={<Wrench className="h-4 w-4" />} onClick={() => setPanel('tools')}>
                 工具策略
               </SectionButton>
@@ -915,7 +1030,10 @@ export function SettingsView({ onWorkspaceChanged }: { onWorkspaceChanged: () =>
             </CardContent>
           </Card>
 
-          {panel === 'tools' ? <ToolsSettingsPanel onWorkspaceChanged={onWorkspaceChanged} /> : <DatasourceSettingsPanel />}
+          {panel === 'appearance' && <AppearanceSettingsPanel />}
+          {panel === 'usage' && <UsageSettingsPanel />}
+          {panel === 'tools' && <ToolsSettingsPanel onWorkspaceChanged={onWorkspaceChanged} />}
+          {panel === 'datasources' && <DatasourceSettingsPanel />}
         </div>
       </div>
     </main>

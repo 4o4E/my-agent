@@ -28,10 +28,10 @@ import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { RightSidebar, type RightTabId } from './components/RightSidebar';
 import { SettingsView } from './components/SettingsView';
+import { SearchView } from './components/SearchView';
 import type { ComposerAttachment } from './components/Composer';
 import type { AskUserDraft } from './components/AskUserCard';
 import { buildChatPath, currentBrowserPath, readChatRoute, type ChatRoute } from './router';
-import { useThemeCtx } from './theme';
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -54,6 +54,14 @@ const SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_SNAP_WIDTH = 104;
 const RIGHT_PANEL_SNAP_WIDTH = 360;
+
+type ActiveView = 'chat' | 'settings' | 'search';
+
+function activeViewFromPath(pathname = window.location.pathname): ActiveView {
+  if (pathname === '/settings') return 'settings';
+  if (pathname === '/search') return 'search';
+  return 'chat';
+}
 
 function beginRightPanelResize(
   event: ReactPointerEvent,
@@ -326,9 +334,7 @@ function replaceAssistantMessage(messages: UIMessage[], runId: string, events: A
 export function App() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [route, setRoute] = useState<ChatRoute>(() => readChatRoute());
-  const [activeView, setActiveView] = useState<'chat' | 'settings'>(() =>
-    window.location.pathname === '/settings' ? 'settings' : 'chat',
-  );
+  const [activeView, setActiveView] = useState<ActiveView>(() => activeViewFromPath());
   const [composerDraft, setComposerDraft] = useState(route.draft);
   const [wide, setWide] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
@@ -348,7 +354,6 @@ export function App() {
   const [resumingRunId, setResumingRunId] = useState<string | null>(null);
   const [askUserDrafts, setAskUserDrafts] = useState<Record<string, AskUserDraft>>({});
   const [pageStateLoaded, setPageStateLoaded] = useState(false);
-  const { theme, toggle: toggleTheme } = useThemeCtx();
   const activeThreadId = route.threadId;
   const sidebarFrameRef = useRef<HTMLDivElement>(null);
   const conversationContentRef = useRef<HTMLDivElement>(null);
@@ -561,6 +566,12 @@ export function App() {
     setActiveView('settings');
   }, [flushPendingDraftSync]);
 
+  const navigateSearch = useCallback(() => {
+    flushPendingDraftSync();
+    if (currentBrowserPath() !== '/search') window.history.pushState(null, '', '/search');
+    setActiveView('search');
+  }, [flushPendingDraftSync]);
+
   const handle = useMemo<ChatThreadHandle>(
     () => ({
       getThreadId: () => threadIdRef.current,
@@ -599,8 +610,9 @@ export function App() {
 
   useEffect(() => {
     const path = buildChatPath(route);
-    if (activeView === 'settings') {
-      if (currentBrowserPath() !== '/settings') window.history.replaceState(null, '', '/settings');
+    if (activeView === 'settings' || activeView === 'search') {
+      const target = activeView === 'settings' ? '/settings' : '/search';
+      if (window.location.pathname !== target) window.history.replaceState(null, '', target);
       return;
     }
     if (currentBrowserPath() !== path) window.history.replaceState(null, '', path);
@@ -611,7 +623,7 @@ export function App() {
     const onPopState = () => {
       flushPendingDraftSync();
       stop();
-      setActiveView(window.location.pathname === '/settings' ? 'settings' : 'chat');
+      setActiveView(activeViewFromPath());
       const next = readChatRoute();
       setRoute(next);
       draftRef.current = next.draft;
@@ -728,6 +740,12 @@ export function App() {
     stop();
     if (activeThreadId) rememberThreadDraft(activeThreadId, draftRef.current);
     navigateSettings();
+  }
+
+  function openSearch() {
+    stop();
+    if (activeThreadId) rememberThreadDraft(activeThreadId, draftRef.current);
+    navigateSearch();
   }
 
   async function removeThread(id: string) {
@@ -923,10 +941,9 @@ export function App() {
           activeView={activeView}
           width="100%"
           collapsed={sidebarCollapsed}
-          theme={theme}
-          onToggleTheme={toggleTheme}
           onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
           onNew={newChat}
+          onSearch={openSearch}
           onSettings={openSettings}
           onSelect={selectThread}
           onDelete={(id) => void removeThread(id)}
@@ -948,6 +965,8 @@ export function App() {
       />
       {activeView === 'settings' ? (
         <SettingsView onWorkspaceChanged={refreshWorkspaceRoot} />
+      ) : activeView === 'search' ? (
+        <SearchView onOpenThread={selectThread} />
       ) : (
         <ChatView
           title={title}

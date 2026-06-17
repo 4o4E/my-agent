@@ -38,10 +38,6 @@ function isLiveSession(session: ShellSession): boolean {
   return session.status !== 'closed';
 }
 
-function shortShellId(id: string): string {
-  return id.length > 10 ? `${id.slice(0, 6)}…${id.slice(-3)}` : id;
-}
-
 function shortSubagentId(id: string): string {
   return id.length > 10 ? `${id.slice(0, 6)}…${id.slice(-3)}` : id;
 }
@@ -51,13 +47,16 @@ function fileName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-function tabSpec(tab: RightTabId): TabSpec {
+function tabSpec(tab: RightTabId, shellNames: Map<string, string>): TabSpec {
   if (tab === 'files') return { id: tab, label: '文件', icon: <FolderTree className="size-3.5 shrink-0" /> };
   if (tab.startsWith('file:')) {
     const path = tab.slice('file:'.length);
     return { id: tab, label: fileName(path) || '文件', icon: <FileText className="size-3.5 shrink-0" /> };
   }
-  if (tab.startsWith('shell:')) return { id: tab, label: shortShellId(tab.slice('shell:'.length)), icon: <Terminal className="size-3.5 shrink-0" /> };
+  if (tab.startsWith('shell:')) {
+    const sessionId = tab.slice('shell:'.length);
+    return { id: tab, label: shellNames.get(sessionId) ?? sessionId, icon: <Terminal className="size-3.5 shrink-0" /> };
+  }
   return { id: tab, label: shortSubagentId(tab.slice('subagent:'.length)), icon: <Bot className="size-3.5 shrink-0" /> };
 }
 
@@ -213,7 +212,8 @@ export function RightSidebar({
     return () => window.clearInterval(timer);
   }, [open, refreshShells, refreshSubagents, threadId]);
 
-  const tabSpecs = useMemo(() => tabs.map(tabSpec), [tabs]);
+  const shellNames = useMemo(() => new Map(sessions.map((session) => [session.id, session.name])), [sessions]);
+  const tabSpecs = useMemo(() => tabs.map((tab) => tabSpec(tab, shellNames)), [shellNames, tabs]);
 
   useEffect(() => {
     if (!open) return;

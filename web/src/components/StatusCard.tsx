@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { UIMessage } from 'ai';
-import { Bot, CheckCircle2, Circle, Gauge, LoaderCircle, Settings2, Terminal, XCircle } from 'lucide-react';
+import { Bot, CheckCircle2, Circle, Gauge, LoaderCircle, Terminal, XCircle } from 'lucide-react';
 import { listShellSessions, listSubagentRuns, type PlanItem, type ShellSession, type SubagentRun } from '@/api';
-import { Button } from '@/components/ui/button';
 import { latestPlanState, type UsageSnapshot } from './Conversation';
 import { cn } from '@/lib/utils';
 
-type StatusField = 'run' | 'plan' | 'shell' | 'tokens' | 'cache';
+export type StatusField = 'run' | 'plan' | 'shell' | 'tokens' | 'cache';
 
 interface Props {
   messages: UIMessage[];
@@ -18,8 +17,8 @@ interface Props {
 }
 
 const STORAGE_KEY = 'my-agent:right-status-fields';
-const DEFAULT_FIELDS: StatusField[] = ['run', 'plan', 'shell', 'tokens', 'cache'];
-const FIELD_LABELS: Record<StatusField, string> = {
+export const DEFAULT_STATUS_FIELDS: StatusField[] = ['run', 'plan', 'shell', 'tokens', 'cache'];
+export const STATUS_FIELD_LABELS: Record<StatusField, string> = {
   run: '当前信息',
   plan: '计划',
   shell: '资源',
@@ -56,18 +55,24 @@ function latestTokenUsage(messages: UIMessage[]): UsageSnapshot | null {
   return null;
 }
 
-function readFields(): StatusField[] {
+export function readStatusFields(): StatusField[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     if (Array.isArray(parsed)) {
-      const fields = parsed.filter((item): item is StatusField => DEFAULT_FIELDS.includes(item));
+      const fields = parsed.filter((item): item is StatusField => DEFAULT_STATUS_FIELDS.includes(item));
       if (fields.length) return fields;
     }
   } catch {
     // 展示配置损坏时回到默认项。
   }
-  return DEFAULT_FIELDS;
+  return DEFAULT_STATUS_FIELDS;
+}
+
+export function writeStatusFields(fields: StatusField[]): StatusField[] {
+  const next = fields.length ? fields : DEFAULT_STATUS_FIELDS;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  return next;
 }
 
 function StatusRow({ label, value, title }: { label: string; value: string; title?: string }) {
@@ -124,8 +129,7 @@ function PlanList({ messages }: { messages: UIMessage[] }) {
 }
 
 export function AgentStatusCard({ messages, busy, threadId, className, onOpenShellPreview, onOpenSubagentPreview }: Props) {
-  const [fields, setFields] = useState<StatusField[]>(readFields);
-  const [configOpen, setConfigOpen] = useState(false);
+  const [fields] = useState<StatusField[]>(readStatusFields);
   const [sessions, setSessions] = useState<ShellSession[]>([]);
   const [subagents, setSubagents] = useState<SubagentRun[]>([]);
   const usage = latestTokenUsage(messages);
@@ -164,14 +168,6 @@ export function AgentStatusCard({ messages, busy, threadId, className, onOpenShe
     return () => window.clearInterval(timer);
   }, [refreshShells, refreshSubagents, threadId]);
 
-  const toggleField = (field: StatusField) => {
-    setFields((current) => {
-      const next = current.includes(field) ? current.filter((item) => item !== field) : [...current, field];
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next.length ? next : DEFAULT_FIELDS));
-      return next.length ? next : DEFAULT_FIELDS;
-    });
-  };
-
   const show = (field: StatusField) => fields.includes(field);
 
   return (
@@ -184,21 +180,7 @@ export function AgentStatusCard({ messages, busy, threadId, className, onOpenShe
           <div className="truncate text-sm font-semibold">{busy ? '运行中' : '空闲'}</div>
           <div className="truncate text-xs text-muted-foreground">状态卡片</div>
         </div>
-        <Button variant="ghost" size="icon" className="size-8" onClick={() => setConfigOpen((open) => !open)} title="配置状态卡片">
-          <Settings2 className="size-4" />
-        </Button>
       </div>
-
-      {configOpen && (
-        <div className="mb-2 grid grid-cols-2 gap-1 rounded-md border bg-background p-2">
-          {DEFAULT_FIELDS.map((field) => (
-            <label key={field} className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input type="checkbox" checked={fields.includes(field)} onChange={() => toggleField(field)} />
-              <span>{FIELD_LABELS[field]}</span>
-            </label>
-          ))}
-        </div>
-      )}
 
       <div className="space-y-1">
         {show('run') && (

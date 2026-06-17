@@ -1,6 +1,5 @@
-import { Bot, Moon, PanelLeftClose, PanelLeftOpen, Plus, Settings, Sun, Trash2 } from 'lucide-react';
+import { Bot, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, Trash2 } from 'lucide-react';
 import type { Thread } from '../api';
-import type { Theme } from '../useTheme';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
@@ -8,13 +7,12 @@ import { cn } from '@/lib/utils';
 interface Props {
   threads: Thread[];
   activeId: string | null;
-  activeView: 'chat' | 'settings';
+  activeView: 'chat' | 'settings' | 'search';
   width: number | string;
   collapsed: boolean;
-  theme: Theme;
-  onToggleTheme: () => void;
   onToggleCollapsed: () => void;
   onNew: () => void;
+  onSearch: () => void;
   onSettings: () => void;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
@@ -31,10 +29,9 @@ export function Sidebar({
   activeView,
   width,
   collapsed,
-  theme,
-  onToggleTheme,
   onToggleCollapsed,
   onNew,
+  onSearch,
   onSettings,
   onSelect,
   onDelete,
@@ -55,7 +52,7 @@ export function Sidebar({
         <button
           type="button"
           onClick={onNew}
-          className="mt-3 flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+          className="mt-3 flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
           title="新建会话"
         >
           <Plus className="size-4" />
@@ -63,26 +60,28 @@ export function Sidebar({
         </button>
         <button
           type="button"
-          onClick={onSettings}
+          onClick={onSearch}
           className={cn(
             'mt-2 flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground',
+            activeView === 'search' && 'bg-accent text-accent-foreground ring-1 ring-border',
+          )}
+          title="搜索会话"
+        >
+          <Search className="size-4" />
+          <span className="sr-only">搜索会话</span>
+        </button>
+        <div className="min-h-0 flex-1" />
+        <button
+          type="button"
+          onClick={onSettings}
+          className={cn(
+            'flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground',
             activeView === 'settings' && 'bg-accent text-accent-foreground ring-1 ring-border',
           )}
           title="配置"
         >
           <Settings className="size-4" />
           <span className="sr-only">配置</span>
-        </button>
-        <div className="min-h-0 flex-1" />
-        <Separator className="my-3 w-8" />
-        <button
-          type="button"
-          onClick={onToggleTheme}
-          className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-          title={theme === 'dark' ? '浅色模式' : '深色模式'}
-        >
-          {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
-          <span className="sr-only">{theme === 'dark' ? '浅色模式' : '深色模式'}</span>
         </button>
       </aside>
     );
@@ -108,21 +107,18 @@ export function Sidebar({
         </Button>
       </div>
 
-      <div className="px-3">
-        <Button onClick={onNew} size="sm" className="h-8 w-full">
+      <div className="grid gap-1 px-3">
+        <Button onClick={onNew} variant="ghost" size="sm" className="h-8 w-full justify-start text-muted-foreground">
           <Plus className="h-4 w-4" /> 新建会话
         </Button>
-      </div>
-
-      <div className="mt-2 px-3">
         <Button
-          variant={activeView === 'settings' ? 'secondary' : 'ghost'}
-          onClick={onSettings}
+          variant={activeView === 'search' ? 'secondary' : 'ghost'}
+          onClick={onSearch}
           size="sm"
           className="h-8 w-full justify-start text-muted-foreground data-[active=true]:text-foreground"
-          data-active={activeView === 'settings'}
+          data-active={activeView === 'search'}
         >
-          <Settings className="h-4 w-4" /> 配置
+          <Search className="h-4 w-4" /> 搜索会话
         </Button>
       </div>
 
@@ -162,12 +158,19 @@ export function Sidebar({
         ))}
       </nav>
 
-      <Separator />
-      <div className="p-3">
-        <Button variant="ghost" size="sm" onClick={onToggleTheme} className="h-8 w-full justify-start text-muted-foreground">
-          {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          {theme === 'dark' ? '浅色模式' : '深色模式'}
-        </Button>
+      <div className="mt-auto">
+        <Separator />
+        <div className="p-3">
+          <Button
+            variant={activeView === 'settings' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={onSettings}
+            className="h-8 w-full justify-start text-muted-foreground data-[active=true]:text-foreground"
+            data-active={activeView === 'settings'}
+          >
+            <Settings className="h-4 w-4" /> 设置
+          </Button>
+        </div>
       </div>
     </aside>
   );

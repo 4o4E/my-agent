@@ -18,6 +18,7 @@ import type {
   SubagentRun,
   Thread,
   ThreadDetailResponse,
+  ThreadSearchResponse,
   ToolSettings,
 } from '@my-agent/contracts';
 
@@ -38,6 +39,11 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 export const listThreads = () => fetch('/api/threads').then(json<Thread[]>);
+
+export const searchThreads = (query: string, limit = 50) => {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  return fetch(`/api/search?${params.toString()}`).then(json<ThreadSearchResponse>);
+};
 
 export const getThread = (id: string) =>
   fetch(`/api/threads/${id}`).then(json<ThreadDetailResponse>);

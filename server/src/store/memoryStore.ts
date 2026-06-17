@@ -13,6 +13,7 @@ import type {
   SubagentRunRow,
   StepRow,
   ThreadMessage,
+  ThreadSearchResultRow,
   ThreadRow,
 } from './types.js';
 import { newRunId, newShellCommandId, newShellSessionId, newStepId, newSubagentRunId, newThreadId } from '../id.js';
@@ -81,6 +82,28 @@ export class MemoryStore implements Store {
     this.steps = this.steps.filter((s) => !runIds.has(s.run_id));
     this.messages = this.messages.filter((m) => m.thread_id !== id);
     return true;
+  }
+
+  async searchThreadMessages(searchText: string, limit = 50): Promise<ThreadSearchResultRow[]> {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return [];
+    return this.messages
+      .filter((message) => (
+        (message.role === 'user' || message.role === 'assistant')
+        && typeof message.content === 'string'
+        && message.content.toLowerCase().includes(q)
+      ))
+      .sort((a, b) => b.seq - a.seq)
+      .slice(0, Math.min(Math.max(limit, 1), 100))
+      .map((message) => ({
+        thread_id: message.thread_id,
+        thread_title: this.threads.get(message.thread_id)?.title ?? null,
+        run_id: message.run_id,
+        message_id: message.seq,
+        role: message.role as 'user' | 'assistant',
+        content: message.content ?? '',
+        created_at: this.runs.get(message.run_id)?.created_at ?? this.now(),
+      }));
   }
 
   async createRun(threadId: string, input: string): Promise<RunRow> {

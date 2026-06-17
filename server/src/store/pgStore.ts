@@ -14,6 +14,7 @@ import type {
   SubagentRunRow,
   StepRow,
   ThreadMessage,
+  ThreadSearchResultRow,
   ThreadRow,
 } from './types.js';
 import { newRunId, newShellCommandId, newShellSessionId, newStepId, newSubagentRunId, newThreadId } from '../id.js';
@@ -48,6 +49,38 @@ export class PgStore implements Store {
   async deleteThread(id: string): Promise<boolean> {
     const result = await query(`DELETE FROM threads WHERE id = $1`, [id]);
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async searchThreadMessages(searchText: string, limit = 50): Promise<ThreadSearchResultRow[]> {
+    const q = searchText.trim();
+    if (!q) return [];
+    const { rows } = await query<{
+      thread_id: string;
+      thread_title: string | null;
+      run_id: string;
+      message_id: string;
+      role: 'user' | 'assistant';
+      content: string;
+      created_at: string;
+    }>(
+      `SELECT
+         m.thread_id,
+         t.title AS thread_title,
+         m.run_id,
+         m.id::text AS message_id,
+         m.role,
+         m.content,
+         m.created_at
+      FROM messages m
+      JOIN threads t ON t.id = m.thread_id
+      WHERE m.content IS NOT NULL
+        AND m.role IN ('user', 'assistant')
+        AND m.content ILIKE '%' || $1 || '%'
+      ORDER BY m.created_at DESC, m.id DESC
+      LIMIT $2`,
+      [q, Math.min(Math.max(limit, 1), 100)],
+    );
+    return rows.map((row) => ({ ...row, message_id: Number(row.message_id) }));
   }
 
   async createRun(threadId: string, input: string): Promise<RunRow> {

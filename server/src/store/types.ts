@@ -121,6 +121,16 @@ export interface ThreadMessage extends LlmMessage {
   id: number;
 }
 
+export interface ThreadSearchResultRow {
+  thread_id: string;
+  thread_title: string | null;
+  run_id: string;
+  message_id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
 /**
  * Persistence port. The executor depends on this interface, not on PG directly,
  * so it can be unit-tested with an in-memory implementation.
@@ -130,6 +140,7 @@ export interface Store {
   getThread(id: string): Promise<ThreadRow | null>;
   listThreads(limit?: number): Promise<ThreadRow[]>;
   deleteThread(id: string): Promise<boolean>;
+  searchThreadMessages(query: string, limit?: number): Promise<ThreadSearchResultRow[]>;
 
   createRun(threadId: string, input: string): Promise<RunRow>;
   getRun(id: string): Promise<RunRow | null>;

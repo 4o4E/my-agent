@@ -8,8 +8,8 @@ function initialTheme(): Theme {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-/** Manages the `.dark` class on <html> and persists the choice. */
-export function useTheme(): [Theme, () => void] {
+/** 同步 html 的暗色类名，并持久化用户选择。 */
+export function useTheme(): [Theme, (theme: Theme) => void, () => void] {
   const [theme, setTheme] = useState<Theme>(initialTheme);
 
   useEffect(() => {
@@ -18,5 +18,5 @@ export function useTheme(): [Theme, () => void] {
   }, [theme]);
 
   const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
-  return [theme, toggle];
+  return [theme, setTheme, toggle];
 }

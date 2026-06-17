@@ -46,10 +46,9 @@ function sessionTone(status: ShellSession['status']): string {
 }
 
 function commandTone(status: ShellCommand['status']): string {
-  if (status === 'running' || status === 'queued') return 'text-white';
-  if (status === 'succeeded') return 'text-zinc-300';
-  if (status === 'failed' || status === 'timed_out') return 'text-rose-300';
-  return 'text-zinc-400';
+  if (status === 'failed' || status === 'timed_out') return 'text-destructive';
+  if (status === 'running' || status === 'queued') return 'text-foreground';
+  return 'text-muted-foreground';
 }
 
 function formatTime(value: string | null): string {
@@ -437,7 +436,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
             <>
               <div
                 ref={terminalRef}
-                className="scrollbar-thin min-h-0 flex-1 overflow-auto bg-zinc-950 px-3 py-2 font-mono text-xs leading-5 text-zinc-100"
+                className="scrollbar-thin min-h-0 flex-1 overflow-auto bg-background px-3 py-2 font-mono text-xs leading-5 text-foreground"
               >
                 {commands.length ? (
                   commands.map((command) => {
@@ -445,12 +444,12 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
                     const output = applyTerminalControls(logs.map((log) => log.chunk).join(''));
                     return (
                       <div key={command.id} className="py-1">
-                        <div className="whitespace-pre-wrap break-words text-zinc-100">
-                          <span className="text-zinc-300">{shortCwd(command.cwd)}</span>
-                          <span className="text-zinc-500"> $ </span>
+                        <div className="whitespace-pre-wrap break-words text-foreground">
+                          <span className="text-muted-foreground">{shortCwd(command.cwd)}</span>
+                          <span className="text-muted-foreground"> $ </span>
                           <span>{command.command}</span>
                         </div>
-                        {output && <pre className="whitespace-pre-wrap break-words text-zinc-100">{output}</pre>}
+                        {output && <pre className="whitespace-pre-wrap break-words text-foreground">{output}</pre>}
                         {!isRunning(command) && (
                           <div className="flex items-center gap-2">
                             <div className={cn('min-w-0 flex-1 text-[11px]', commandTone(command.status))}>
@@ -460,7 +459,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
                               type="button"
                               variant="ghost"
                               size="icon-sm"
-                              className="size-6 text-zinc-300 hover:bg-zinc-800 hover:text-white"
+                              className="size-6 text-muted-foreground hover:bg-accent hover:text-foreground"
                               onClick={() => void attachCommand(command)}
                               disabled={acting}
                               title="添加这次 shell 交互到输入框"
@@ -473,7 +472,7 @@ export function ShellPanel({ open, width, threadId, embedded = false, previewSes
                     );
                   })
                 ) : (
-                  <div className="py-8 text-center text-zinc-400">暂无命令。</div>
+                  <div className="py-8 text-center text-muted-foreground">暂无命令。</div>
                 )}
               </div>
 

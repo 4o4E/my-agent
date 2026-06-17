@@ -78,6 +78,12 @@ function headTail(text: string, maxChars: number): string {
 
 // --- Threads ---
 
+api.get('/search', async (req, res) => {
+  const q = String(req.query.q ?? '').trim();
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 50) || 50));
+  res.json({ query: q, results: await store.searchThreadMessages(q, limit) });
+});
+
 // 创建 thread。
 api.post('/threads', async (req, res) => {
   const title = req.body?.title ? String(req.body.title) : undefined;

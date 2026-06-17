@@ -52,13 +52,6 @@ function formatSize(size?: number): string {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function formatCompactNumber(value?: number): string {
-  if (value == null) return '--';
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-  return value.toLocaleString();
-}
-
 function ContextUsageMeter({ usage }: { usage: UsageSnapshot | null }) {
   const used = usage?.estContextTokens;
   const budget = usage?.contextBudget;
@@ -67,13 +60,21 @@ function ContextUsageMeter({ usage }: { usage: UsageSnapshot | null }) {
   const radius = 9;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference * (1 - ratio);
-  const title = used != null
-    ? `上下文占用：${used.toLocaleString()}${budget ? ` / ${budget.toLocaleString()} token` : ' token'}${percent != null ? `，${percent}%` : ''}`
-    : '上下文占用暂无数据';
+  const cacheRatio = usage?.cachedInputTokens != null && usage.inputTokens && usage.inputTokens > 0
+    ? `${((usage.cachedInputTokens / usage.inputTokens) * 100).toFixed(1)}%`
+    : '暂无';
+  const title = [
+    used != null
+      ? `上下文：${used.toLocaleString()}${budget ? ` / ${budget.toLocaleString()}` : ''} token${percent != null ? `，占比 ${percent}%` : ''}`
+      : '上下文：暂无数据',
+    `输入 token：${usage?.inputTokens?.toLocaleString() ?? '暂无'}`,
+    `输出 token：${usage?.outputTokens?.toLocaleString() ?? '暂无'}`,
+    `缓存命中：${usage?.cachedInputTokens?.toLocaleString() ?? '暂无'}，占比 ${cacheRatio}`,
+  ].join('\n');
 
   return (
     <div
-      className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border bg-background px-2 text-xs text-muted-foreground"
+      className="flex size-8 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
       title={title}
       aria-label={title}
     >
@@ -92,7 +93,6 @@ function ContextUsageMeter({ usage }: { usage: UsageSnapshot | null }) {
           className={cn(percent != null && percent >= 85 ? 'text-destructive' : percent != null && percent >= 65 ? 'text-foreground' : 'text-muted-foreground')}
         />
       </svg>
-      <span className="tabular-nums">{percent != null ? `${percent}%` : used != null ? formatCompactNumber(used) : '0%'}</span>
     </div>
   );
 }
@@ -246,7 +246,14 @@ export function Composer({
                     <PromptInputTools>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button type="button" variant="ghost" size="icon" disabled={disabled} title="添加附件">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            disabled={disabled}
+                            title="添加附件"
+                            className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+                          >
                             <Paperclip className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -265,6 +272,8 @@ export function Composer({
                     <div className="ml-auto flex shrink-0 items-center gap-1">
                       <ContextUsageMeter usage={usage} />
                       <PromptInputSubmit
+                        size="icon-sm"
+                        className="!size-8 !p-0 shrink-0"
                         status={disabled && !waitingForAskUser ? 'streaming' : undefined}
                         disabled={waitingForAskUser || (!disabled && !localDraft.trim())}
                         onStop={onCancel}
@@ -276,7 +285,14 @@ export function Composer({
                 <>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button type="button" variant="ghost" size="icon-sm" disabled={disabled} title="添加附件" className="ml-1 shrink-0">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled={disabled}
+                        title="添加附件"
+                        className="ml-1 size-8 shrink-0 text-muted-foreground hover:text-foreground"
+                      >
                         <Paperclip className="size-4" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -302,6 +318,8 @@ export function Composer({
                   <div className="ml-auto mr-1 flex shrink-0 items-center gap-1">
                     <ContextUsageMeter usage={usage} />
                     <PromptInputSubmit
+                      size="icon-sm"
+                      className="!size-8 !p-0 shrink-0"
                       status={disabled && !waitingForAskUser ? 'streaming' : undefined}
                       disabled={waitingForAskUser || (!disabled && !localDraft.trim())}
                       onStop={onCancel}
