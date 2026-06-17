@@ -16,6 +16,7 @@ import { shellExecTool } from './managedShell.js';
 import { requiresDatabaseAccess } from './databaseAccessGuard.js';
 import type { ToolResult, ToolRunContext } from './types.js';
 import { normalizeToolSettings } from '../settings.js';
+import { shellCommandOptions, toolOptions } from '../api/settings.js';
 
 /** 工具可能返回 string 或 ToolResult，测试统一取文本断言。 */
 const text = (r: string | ToolResult): string => (typeof r === 'string' ? r : r.text);
@@ -50,6 +51,18 @@ test('registry exposes neutral tool schemas and dispatches by name', async () =>
   assert.ok(toolSchemas(['datasource_list']).some((s) => s.name === 'datasource_list'));
   assert.ok(getTool('glob'));
   assert.match((await runTool('does_not_exist', {})).text, /未知工具/);
+});
+
+test('tool settings options come from backend tool registry and command resolution', () => {
+  const tools = toolOptions();
+  assert.ok(tools.find((tool) => tool.name === 'shell'));
+  assert.ok(tools.find((tool) => tool.name === 'file_read'));
+  assert.equal(tools.some((tool) => tool.name === 'finish_conversation'), false);
+
+  const commands = shellCommandOptions(['sh', 'definitely_missing_command_for_test', 'sh']);
+  assert.deepEqual(commands.map((command) => command.name).sort(), ['definitely_missing_command_for_test', 'sh']);
+  assert.equal(commands.find((command) => command.name === 'sh')?.available, true);
+  assert.equal(commands.find((command) => command.name === 'definitely_missing_command_for_test')?.available, false);
 });
 
 test('datasource_list public view redacts secrets and admin config', () => {

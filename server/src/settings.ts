@@ -12,10 +12,13 @@ const TOOL_SETTING_KEYS = [
   'tools.sandbox',
   'tools.sandboxBackend',
   'tools.workspaceRoot',
+  'tools.toolAccessMode',
   'tools.allow',
   'tools.deny',
   'tools.shellEnabled',
   'tools.shellUseHostPath',
+  'tools.shellPathMode',
+  'tools.shellPath',
   'tools.shellAllowCommands',
   'tools.network',
   'tools.shellDeny',
@@ -66,15 +69,26 @@ function networkValue(value: unknown, fallback: ToolSettings['network']): ToolSe
   return value === 'enabled' || value === 'disabled' ? value : fallback;
 }
 
+function toolAccessModeValue(value: unknown, fallback: ToolSettings['toolAccessMode']): ToolSettings['toolAccessMode'] {
+  return value === 'allow' || value === 'deny' ? value : fallback;
+}
+
+function shellPathModeValue(value: unknown, fallback: ToolSettings['shellPathMode']): ToolSettings['shellPathMode'] {
+  return value === 'system' || value === 'custom' ? value : fallback;
+}
+
 function defaultToolSettings(): ToolSettings {
   return {
     sandbox: config.tools.sandbox,
     sandboxBackend: config.tools.sandboxBackend,
     workspaceRoot: config.tools.workspaceRoot,
+    toolAccessMode: config.tools.toolAccessMode,
     allow: config.tools.allow,
     deny: config.tools.deny,
     shellEnabled: config.tools.shellEnabled,
     shellUseHostPath: config.tools.shellUseHostPath,
+    shellPathMode: config.tools.shellPathMode,
+    shellPath: config.tools.shellPath,
     shellAllowCommands: config.tools.shellAllowCommands,
     network: config.tools.network,
     shellDeny: config.tools.shellDeny,
@@ -88,14 +102,19 @@ function rowsToMap(rows: SettingRow[]): Map<string, unknown> {
 
 function mergeToolSettings(values: Map<string, unknown>): ToolSettings {
   const defaults = defaultToolSettings();
+  const allow = stringList(values.get('tools.allow'), defaults.allow);
+  const deny = stringList(values.get('tools.deny'), defaults.deny);
   return {
     sandbox: sandboxValue(values.get('tools.sandbox'), defaults.sandbox),
     sandboxBackend: backendValue(values.get('tools.sandboxBackend'), defaults.sandboxBackend),
     workspaceRoot: resolve(stringValue(values.get('tools.workspaceRoot'), defaults.workspaceRoot)),
-    allow: stringList(values.get('tools.allow'), defaults.allow),
-    deny: stringList(values.get('tools.deny'), defaults.deny),
+    toolAccessMode: toolAccessModeValue(values.get('tools.toolAccessMode'), allow.length ? 'allow' : defaults.toolAccessMode),
+    allow,
+    deny,
     shellEnabled: boolValue(values.get('tools.shellEnabled'), defaults.shellEnabled),
     shellUseHostPath: boolValue(values.get('tools.shellUseHostPath'), defaults.shellUseHostPath),
+    shellPathMode: shellPathModeValue(values.get('tools.shellPathMode'), defaults.shellPathMode),
+    shellPath: stringValue(values.get('tools.shellPath'), defaults.shellPath),
     shellAllowCommands: stringList(values.get('tools.shellAllowCommands'), defaults.shellAllowCommands),
     network: networkValue(values.get('tools.network'), defaults.network),
     shellDeny: stringList(values.get('tools.shellDeny'), defaults.shellDeny),
@@ -138,10 +157,13 @@ function toolSettingsToEntries(settings: ToolSettings): Array<[string, unknown]>
     ['tools.sandbox', settings.sandbox],
     ['tools.sandboxBackend', settings.sandboxBackend],
     ['tools.workspaceRoot', settings.workspaceRoot],
+    ['tools.toolAccessMode', settings.toolAccessMode],
     ['tools.allow', settings.allow],
     ['tools.deny', settings.deny],
     ['tools.shellEnabled', settings.shellEnabled],
     ['tools.shellUseHostPath', settings.shellUseHostPath],
+    ['tools.shellPathMode', settings.shellPathMode],
+    ['tools.shellPath', settings.shellPath],
     ['tools.shellAllowCommands', settings.shellAllowCommands],
     ['tools.network', settings.network],
     ['tools.shellDeny', settings.shellDeny],
@@ -156,6 +178,10 @@ export function normalizeToolSettings(input: unknown): ToolSettings {
     values.set(`tools.${key}`, value);
   }
   return mergeToolSettings(values);
+}
+
+export function shellPathForSettings(settings: ToolSettings): string {
+  return settings.shellPathMode === 'custom' ? settings.shellPath : process.env.PATH ?? '';
 }
 
 export async function saveToolSettings(input: unknown): Promise<ToolSettings> {

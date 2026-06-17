@@ -17,6 +17,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 export interface ToolPolicyConfig {
   sandbox: 'off' | 'enforce';
   workspaceRoot: string;
+  toolAccessMode: 'allow' | 'deny';
   allow: string[];
   deny: string[];
   shellEnabled: boolean;
@@ -86,7 +87,7 @@ export function createPolicy(cfg: ToolPolicyConfig): ToolPolicy {
   function check(name: string, args: Record<string, unknown>): PolicyDecision {
     // 1) deny/allow lists — honored in every mode.
     if (cfg.deny.includes(name)) return { ok: false, reason: `工具 '${name}' 被策略拒绝` };
-    if (cfg.allow.length && !cfg.allow.includes(name)) {
+    if (cfg.toolAccessMode === 'allow' && !cfg.allow.includes(name)) {
       return { ok: false, reason: `工具 '${name}' 不在允许列表中` };
     }
     const meta = META[name] ?? { kind: 'safe' as const };

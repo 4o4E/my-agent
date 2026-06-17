@@ -14,12 +14,15 @@ import type {
   ShellCommand,
   ShellCommandAttachment,
   ShellCommandLog,
+  ShellCommandScanInput,
+  ShellCommandScanResult,
   ShellSession,
   SubagentRun,
   Thread,
   ThreadDetailResponse,
   ThreadSearchResponse,
   ToolSettings,
+  ToolSettingsOptions,
 } from '@my-agent/contracts';
 
 export type * from '@my-agent/contracts';
@@ -83,6 +86,15 @@ export const uploadLocalFile = (path: string, contentBase64: string) =>
   }).then(json<{ path: string; size: number }>);
 
 export const getToolSettings = () => fetch('/api/settings/tools').then(json<ToolSettings>);
+
+export const getToolSettingsOptions = () => fetch('/api/settings/tools/options').then(json<ToolSettingsOptions>);
+
+export const scanShellCommandOptions = (input: ShellCommandScanInput) =>
+  fetch('/api/settings/tools/shell-commands/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }).then(json<ShellCommandScanResult>);
 
 export const updateToolSettings = (settings: ToolSettings) =>
   fetch('/api/settings/tools', {

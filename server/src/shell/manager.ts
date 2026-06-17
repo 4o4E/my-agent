@@ -3,7 +3,7 @@ import { readFile, unlink } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { runBus } from '../agent/bus.js';
 import type { AgentEvent } from '../agent/types.js';
-import type { ToolSettings } from '../settings.js';
+import { shellPathForSettings, type ToolSettings } from '../settings.js';
 import { store } from '../store/index.js';
 import type { ShellActor, ShellCommandRow, ShellLogStream, ShellSessionRow } from '../store/types.js';
 import { buildShellSpawnSpec } from '../tools/sandbox.js';
@@ -134,6 +134,8 @@ function settingsSnapshot(settings: ToolSettings): Record<string, unknown> {
     sandbox: settings.sandbox,
     sandboxBackend: settings.sandboxBackend,
     shellUseHostPath: settings.shellUseHostPath,
+    shellPathMode: settings.shellPathMode,
+    shellPath: settings.shellPath,
     shellAllowCommands: settings.shellAllowCommands,
     network: settings.network,
   };
@@ -150,6 +152,8 @@ function restoredSettings(session: ShellSessionRow, current: ToolSettings): Tool
         ? snap.sandboxBackend
         : current.sandboxBackend,
     shellUseHostPath: typeof snap.shellUseHostPath === 'boolean' ? snap.shellUseHostPath : current.shellUseHostPath,
+    shellPathMode: snap.shellPathMode === 'system' || snap.shellPathMode === 'custom' ? snap.shellPathMode : current.shellPathMode,
+    shellPath: typeof snap.shellPath === 'string' ? snap.shellPath : current.shellPath,
     shellAllowCommands: Array.isArray(snap.shellAllowCommands) ? snap.shellAllowCommands.map(String) : current.shellAllowCommands,
     network: snap.network === 'enabled' || snap.network === 'disabled' ? snap.network : current.network,
   };
@@ -384,6 +388,7 @@ export class ShellManager {
       workspaceRoot: input.session.workspace_root,
       allowCommands: input.settings.shellAllowCommands,
       useHostPath: input.settings.shellUseHostPath,
+      envPath: shellPathForSettings(input.settings),
       shareNet: input.settings.network === 'enabled',
       env: input.env,
     };

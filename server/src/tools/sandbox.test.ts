@@ -9,6 +9,7 @@ import {
   findExecutable,
   parentDirs,
   resolveAllowedCommands,
+  scanExecutableNames,
 } from './sandbox.js';
 
 const tempDirs: string[] = [];
@@ -45,6 +46,18 @@ test('resolveAllowedCommands skips missing commands', async () => {
     ['present'],
   );
   assert.equal(resolved[0]?.dest, bin);
+});
+
+test('scanExecutableNames returns executable files from PATH directories', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'my-agent-sandbox-'));
+  tempDirs.push(dir);
+  const bin = join(dir, 'scan-me');
+  const text = join(dir, 'skip-me');
+  await writeFile(bin, '#!/bin/sh\n');
+  await writeFile(text, 'not executable\n');
+  await chmod(bin, 0o755);
+
+  assert.deepEqual(scanExecutableNames(dir), ['scan-me']);
 });
 
 test('buildBwrapArgs confines workspace and hides network by default', () => {

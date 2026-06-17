@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process';
-import { accessSync, constants, existsSync, realpathSync } from 'node:fs';
+import { accessSync, constants, existsSync, readdirSync, realpathSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { SandboxBackendName } from '@my-agent/contracts';
@@ -14,6 +14,7 @@ export interface ShellSandboxConfig {
   workspaceRoot: string;
   allowCommands: string[];
   useHostPath: boolean;
+  envPath?: string;
   shareNet: boolean;
   env?: Record<string, string>;
 }
@@ -93,6 +94,25 @@ export function findExecutable(name: string, envPath = process.env.PATH ?? ''): 
     if (canExecute(candidate)) return candidate;
   }
   return undefined;
+}
+
+/** 扫描 PATH 中真实可执行文件名,用于设置页给用户直接选择。 */
+export function scanExecutableNames(envPath = process.env.PATH ?? ''): string[] {
+  const names = new Set<string>();
+  for (const dir of unique(envPath.split(delimiter).filter(Boolean))) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      const candidate = resolve(dir, entry.name);
+      if (canExecute(candidate)) names.add(entry.name);
+    }
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
 }
 
 /** bwrap 需要提前创建挂载点的父目录,这里只返回从浅到深的目录列表。 */
@@ -177,9 +197,9 @@ export function buildBwrapArgs(opts: BwrapOptions): string[] {
   return args;
 }
 
-function hostShellEnv(workspaceRoot: string, env?: Record<string, string>): NodeJS.ProcessEnv {
+function hostShellEnv(workspaceRoot: string, env?: Record<string, string>, envPath = process.env.PATH ?? ''): NodeJS.ProcessEnv {
   return {
-    PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    PATH: envPath || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
     ...(process.env.LANG ? { LANG: process.env.LANG } : {}),
     ...(process.env.LC_ALL ? { LC_ALL: process.env.LC_ALL } : {}),
     ...env,
@@ -188,8 +208,8 @@ function hostShellEnv(workspaceRoot: string, env?: Record<string, string>): Node
   };
 }
 
-function hostShell(command: string, timeout: number, workspaceRoot: string, env?: Record<string, string>): Promise<ShellExecResult> {
-  const childEnv = hostShellEnv(workspaceRoot, env);
+function hostShell(command: string, timeout: number, workspaceRoot: string, env?: Record<string, string>, envPath?: string): Promise<ShellExecResult> {
+  const childEnv = hostShellEnv(workspaceRoot, env, envPath);
   if (isWindows) {
     return execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
       timeout,
@@ -227,9 +247,9 @@ function shouldUseBwrap(cfg: ShellSandboxConfig): { use: true; bwrapPath: string
 /** shell 工具的统一执行入口:默认直通, enforce+bwrap 时切到 OS 沙箱。 */
 export async function runShellCommand(command: string, timeout: number, cfg: ShellSandboxConfig): Promise<ShellExecResult> {
   const selected = shouldUseBwrap(cfg);
-  if (!selected.use) return hostShell(command, timeout, cfg.workspaceRoot, cfg.env);
+  if (!selected.use) return hostShell(command, timeout, cfg.workspaceRoot, cfg.env, cfg.envPath);
 
-  const missing = cfg.allowCommands.filter((name) => !findExecutable(name));
+  const missing = cfg.allowCommands.filter((name) => !findExecutable(name, cfg.envPath));
   if (missing.length) {
     warnOnce(
       `bwrap-missing-commands:${missing.join(',')}`,
@@ -242,6 +262,7 @@ export async function runShellCommand(command: string, timeout: number, cfg: She
     command,
     allowCommands: cfg.allowCommands,
     shareNet: cfg.shareNet,
+    envPath: cfg.envPath,
     env: cfg.env,
   });
   return execFileAsync(selected.bwrapPath, args, { timeout, maxBuffer: 1024 * 1024 * 10 });
@@ -256,14 +277,14 @@ export function buildShellSpawnSpec(command: string, cfg: ShellSandboxConfig): S
           file: 'powershell.exe',
           args: ['-NoProfile', '-NonInteractive', '-Command', command],
           cwd: cfg.workspaceRoot,
-          env: hostShellEnv(cfg.workspaceRoot, cfg.env),
+          env: hostShellEnv(cfg.workspaceRoot, cfg.env, cfg.envPath),
           backend: 'host',
         }
       : {
           file: '/bin/sh',
           args: ['-c', command],
           cwd: cfg.workspaceRoot,
-          env: hostShellEnv(cfg.workspaceRoot, cfg.env),
+          env: hostShellEnv(cfg.workspaceRoot, cfg.env, cfg.envPath),
           backend: 'host',
         };
   }
@@ -273,6 +294,7 @@ export function buildShellSpawnSpec(command: string, cfg: ShellSandboxConfig): S
     command,
     allowCommands: cfg.allowCommands,
     shareNet: cfg.shareNet,
+    envPath: cfg.envPath,
     env: cfg.env,
   });
   return { file: selected.bwrapPath, args, backend: 'bwrap' };

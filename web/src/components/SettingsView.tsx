@@ -7,8 +7,10 @@ import {
   getDatasourceDetail,
   getThread,
   getToolSettings,
+  getToolSettingsOptions,
   listDatasources,
   listThreads,
+  scanShellCommandOptions,
   testDatasource,
   testDatasourceDraft,
   updateDatasource,
@@ -26,6 +28,7 @@ import {
   type PermissionProfile,
   type PermissionProfileInput,
   type ToolSettings,
+  type ToolSettingsOptions,
   createReadonlyProfile,
 } from '../api';
 import { Badge } from '@/components/ui/badge';
@@ -123,6 +126,13 @@ function textToList(value: string): string[] {
     .filter(Boolean);
 }
 
+function toggleListValue(items: string[], value: string, checked: boolean): string[] {
+  const next = new Set(items);
+  if (checked) next.add(value);
+  else next.delete(value);
+  return [...next].sort();
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="grid gap-2 text-sm font-medium">
@@ -163,6 +173,41 @@ function NavGroup({ label, children }: { label: string; children: ReactNode }) {
     <div className="grid gap-1">
       <div className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
       {children}
+    </div>
+  );
+}
+
+function OptionList({
+  empty,
+  items,
+  selected,
+  renderMeta,
+  onToggle,
+}: {
+  empty: string;
+  items: Array<{ name: string; description?: string }>;
+  selected: (name: string) => boolean;
+  renderMeta?: (item: { name: string; description?: string }) => ReactNode;
+  onToggle: (name: string, checked: boolean) => void;
+}) {
+  return (
+    <div className="grid max-h-64 content-start gap-2 overflow-y-auto rounded-md border p-2">
+      {items.length === 0 && <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">{empty}</div>}
+      {items.map((item) => (
+        <label
+          key={item.name}
+          className="grid min-h-11 grid-cols-[auto,minmax(0,1fr)] items-start gap-3 rounded-md px-2 py-2 text-sm transition-colors hover:bg-accent/60"
+        >
+          <Checkbox checked={selected(item.name)} onCheckedChange={(checked) => onToggle(item.name, checked === true)} className="mt-0.5" />
+          <span className="grid min-w-0 gap-0.5">
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="min-w-0 break-all font-medium">{item.name}</span>
+              <span className="shrink-0">{renderMeta?.(item)}</span>
+            </span>
+            {item.description && <span className="block break-words text-xs leading-5 text-muted-foreground">{item.description}</span>}
+          </span>
+        </label>
+      ))}
     </div>
   );
 }
@@ -557,22 +602,19 @@ function ToolsSettingsPanel({
   onWorkspaceChanged: () => void;
 }) {
   const [settings, setSettings] = useState<ToolSettings | null>(null);
-  const [allowText, setAllowText] = useState('');
-  const [denyText, setDenyText] = useState('');
-  const [shellCommandsText, setShellCommandsText] = useState('');
+  const [options, setOptions] = useState<ToolSettingsOptions | null>(null);
   const [shellDenyText, setShellDenyText] = useState('');
   const [saving, setSaving] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     let canceled = false;
-    getToolSettings()
-      .then((data) => {
+    Promise.all([getToolSettings(), getToolSettingsOptions()])
+      .then(([data, nextOptions]) => {
         if (canceled) return;
         setSettings(data);
-        setAllowText(listToText(data.allow));
-        setDenyText(listToText(data.deny));
-        setShellCommandsText(listToText(data.shellAllowCommands));
+        setOptions(nextOptions);
         setShellDenyText(listToText(data.shellDeny));
       })
       .catch((err) => {
@@ -587,13 +629,80 @@ function ToolsSettingsPanel({
     if (!settings) return null;
     return {
       ...settings,
-      allow: textToList(allowText),
-      deny: textToList(denyText),
-      shellAllowCommands: textToList(shellCommandsText),
+      deny: settings.toolAccessMode === 'deny' ? settings.deny : [],
+      allow: settings.toolAccessMode === 'allow' ? settings.allow : [],
       shellDeny: textToList(shellDenyText),
       maxOutput: Math.max(1000, Math.floor(Number(settings.maxOutput) || 1000)),
     };
-  }, [allowText, denyText, settings, shellCommandsText, shellDenyText]);
+  }, [settings, shellDenyText]);
+
+  const toolOptions = options?.tools ?? [];
+  const shellCommandOptions = options?.shellCommands ?? [];
+  const allToolNames = useMemo(() => toolOptions.map((tool) => tool.name), [toolOptions]);
+  const selectedToolSet = useMemo(
+    () => new Set(settings?.toolAccessMode === 'allow' ? settings.allow : settings?.deny ?? []),
+    [settings?.allow, settings?.deny, settings?.toolAccessMode],
+  );
+  const shellCommandSet = useMemo(() => new Set(settings?.shellAllowCommands ?? []), [settings?.shellAllowCommands]);
+
+  function setToolMode(mode: ToolSettings['toolAccessMode']) {
+    if (!settings) return;
+    if (mode === settings.toolAccessMode) return;
+    if (mode === 'allow') {
+      const denied = new Set(settings.deny);
+      setSettings({ ...settings, toolAccessMode: 'allow', allow: allToolNames.filter((name) => !denied.has(name)), deny: [] });
+      return;
+    }
+    const allowed = new Set(settings.allow);
+    setSettings({ ...settings, toolAccessMode: 'deny', allow: [], deny: allToolNames.filter((name) => !allowed.has(name)) });
+  }
+
+  function setToolSelected(name: string, checked: boolean) {
+    if (!settings) return;
+    if (settings.toolAccessMode === 'allow') {
+      setSettings({ ...settings, allow: toggleListValue(settings.allow, name, checked), deny: [] });
+      return;
+    }
+    setSettings({ ...settings, allow: [], deny: toggleListValue(settings.deny, name, checked) });
+  }
+
+  function setAllTools(checked: boolean) {
+    if (!settings) return;
+    if (settings.toolAccessMode === 'allow') {
+      setSettings({ ...settings, allow: checked ? allToolNames : [], deny: [] });
+      return;
+    }
+    setSettings({ ...settings, allow: [], deny: checked ? allToolNames : [] });
+  }
+
+  function resetTools() {
+    if (!settings) return;
+    setSettings({ ...settings, toolAccessMode: 'deny', allow: [], deny: [] });
+  }
+
+  function setShellCommand(name: string, checked: boolean) {
+    if (!settings) return;
+    setSettings({ ...settings, shellAllowCommands: toggleListValue(settings.shellAllowCommands, name, checked) });
+  }
+
+  async function scanShellCommands() {
+    if (!settings || !options) return;
+    setScanning(true);
+    setMessage('');
+    try {
+      const result = await scanShellCommandOptions({
+        shellPathMode: settings.shellPathMode,
+        shellPath: settings.shellPath,
+        include: settings.shellAllowCommands,
+      });
+      setOptions({ ...options, shellCommands: result.shellCommands });
+      setMessage(`已扫描 PATH：发现 ${result.shellCommands.length} 个候选指令`);
+    } catch (err) {
+      setMessage(`扫描失败：${(err as Error).message}`);
+    } finally {
+      setScanning(false);
+    }
+  }
 
   async function save() {
     if (!prepared) return;
@@ -602,9 +711,7 @@ function ToolsSettingsPanel({
     try {
       const next = await updateToolSettings(prepared);
       setSettings(next);
-      setAllowText(listToText(next.allow));
-      setDenyText(listToText(next.deny));
-      setShellCommandsText(listToText(next.shellAllowCommands));
+      setOptions(await getToolSettingsOptions());
       setShellDenyText(listToText(next.shellDeny));
       onWorkspaceChanged();
       setMessage('已保存');
@@ -615,7 +722,7 @@ function ToolsSettingsPanel({
     }
   }
 
-  if (!settings) {
+  if (!settings || !options) {
     return <div className="flex min-h-64 items-center justify-center text-sm text-muted-foreground">正在读取配置...</div>;
   }
 
@@ -683,33 +790,52 @@ function ToolsSettingsPanel({
       <Card className="rounded-lg shadow-sm">
         <CardHeader>
           <CardTitle>工具准入</CardTitle>
-          <CardDescription>allow 非空时只允许列表内工具，deny 始终优先</CardDescription>
+          <CardDescription>工具候选由后端真实注册表下发；白名单只允许选中项，黑名单拒绝选中项</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2">
-          <Field label="允许工具">
-            <Textarea rows={5} value={allowText} onChange={(event) => setAllowText(event.target.value)} />
-          </Field>
-          <Field label="禁用工具">
-            <Textarea rows={5} value={denyText} onChange={(event) => setDenyText(event.target.value)} />
-          </Field>
+        <CardContent className="grid gap-4">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),auto] md:items-end">
+            <Field label="准入模式">
+              <Select value={settings.toolAccessMode} onValueChange={(value) => setToolMode(value as ToolSettings['toolAccessMode'])}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="allow">白名单</SelectItem>
+                  <SelectItem value="deny">黑名单</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => setAllTools(true)}>全选</Button>
+              <Button variant="outline" size="sm" onClick={() => setAllTools(false)}>全不选</Button>
+              <Button variant="outline" size="sm" onClick={resetTools}>重置</Button>
+            </div>
+          </div>
+          <div className="grid gap-2">
+            <div className="text-sm font-medium">{settings.toolAccessMode === 'allow' ? '白名单工具' : '黑名单工具'}</div>
+            <OptionList
+              empty="后端没有下发工具候选"
+              items={toolOptions}
+              selected={(name) => selectedToolSet.has(name)}
+              onToggle={setToolSelected}
+            />
+          </div>
         </CardContent>
       </Card>
 
       <Card className="rounded-lg shadow-sm">
         <CardHeader>
           <CardTitle>Shell</CardTitle>
-          <CardDescription>shell 可见外部命令和命令 deny 正则</CardDescription>
+          <CardDescription>可见指令由后端按当前配置和 PATH 下发，命令 deny 仍支持正则</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
-            <Field label="使用宿主机 PATH">
+            <Field label="Shell 执行方式">
               <Select
-                value={settings.shellUseHostPath ? 'true' : 'false'}
-                onValueChange={(value) => setSettings({ ...settings, shellUseHostPath: value === 'true' })}
+                value={settings.shellUseHostPath ? 'host' : 'sandbox'}
+                onValueChange={(value) => setSettings({ ...settings, shellUseHostPath: value === 'host' })}
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="true">true</SelectItem>
-                  <SelectItem value="false">false</SelectItem>
+                  <SelectItem value="host">宿主执行</SelectItem>
+                  <SelectItem value="sandbox">沙箱投射</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
@@ -721,9 +847,55 @@ function ToolsSettingsPanel({
                 onChange={(event) => setSettings({ ...settings, maxOutput: Number(event.target.value) })}
               />
             </Field>
-            <Field label="bwrap 可见命令">
-              <Textarea rows={8} value={shellCommandsText} onChange={(event) => setShellCommandsText(event.target.value)} />
+            <Field label="PATH 来源">
+              <Select
+                value={settings.shellPathMode}
+                onValueChange={(value) => setSettings({ ...settings, shellPathMode: value as ToolSettings['shellPathMode'] })}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="system">使用系统 PATH</SelectItem>
+                  <SelectItem value="custom">手动输入 PATH</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
+            <Field label="PATH">
+              <Input
+                value={settings.shellPathMode === 'system' ? options.systemPath : settings.shellPath}
+                disabled={settings.shellPathMode === 'system'}
+                onChange={(event) => setSettings({ ...settings, shellPath: event.target.value })}
+              />
+            </Field>
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium">可见指令</div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setSettings({ ...settings, shellAllowCommands: shellCommandOptions.map((command) => command.name) })}>
+                    全选
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setSettings({ ...settings, shellAllowCommands: [] })}>
+                    全不选
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => void scanShellCommands()} disabled={scanning}>
+                    <RefreshCw className={cn('h-4 w-4', scanning && 'animate-spin')} />
+                    {scanning ? '扫描中' : '扫描'}
+                  </Button>
+                </div>
+              </div>
+              <OptionList
+                empty="后端没有下发可见指令候选"
+                items={shellCommandOptions.map((command) => ({
+                  name: command.name,
+                  description: command.path ?? '当前 PATH 未找到，保存后也不会被 bwrap 投射',
+                }))}
+                selected={(name) => shellCommandSet.has(name)}
+                renderMeta={(item) => {
+                  const command = shellCommandOptions.find((option) => option.name === item.name);
+                  return command?.available ? null : <Badge variant="outline">未找到</Badge>;
+                }}
+                onToggle={setShellCommand}
+              />
+            </div>
             <Field label="Shell deny 正则">
               <Textarea rows={8} value={shellDenyText} onChange={(event) => setShellDenyText(event.target.value)} />
             </Field>

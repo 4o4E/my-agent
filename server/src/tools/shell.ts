@@ -1,4 +1,4 @@
-import { getToolSettings } from '../settings.js';
+import { getToolSettings, shellPathForSettings } from '../settings.js';
 import { formatCommandResult, shellManager } from '../shell/manager.js';
 import { redactShellOutput } from '../shell/redact.js';
 import { runShellCommand } from './sandbox.js';
@@ -60,6 +60,7 @@ export const shellTool: Tool = {
         workspaceRoot: settings.workspaceRoot,
         allowCommands: settings.shellAllowCommands,
         useHostPath: settings.shellUseHostPath,
+        envPath: shellPathForSettings(settings),
         shareNet: settings.network === 'enabled',
         env: ctx?.env,
       });

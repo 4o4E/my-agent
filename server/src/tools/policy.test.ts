@@ -9,6 +9,7 @@ function cfg(over: Partial<ToolPolicyConfig> = {}): ToolPolicyConfig {
   return {
     sandbox: 'enforce',
     workspaceRoot: ROOT,
+    toolAccessMode: 'deny',
     allow: [],
     deny: [],
     shellEnabled: true,
@@ -33,7 +34,7 @@ test('deny list blocks in any mode', () => {
 });
 
 test('allow list permits only listed tools', () => {
-  const p = createPolicy(cfg({ allow: ['glob', 'grep'] }));
+  const p = createPolicy(cfg({ toolAccessMode: 'allow', allow: ['glob', 'grep'] }));
   assert.equal(p.check('glob', { pattern: '*' }).ok, true);
   assert.equal(p.check('shell', { command: 'echo hi' }).ok, false);
 });
