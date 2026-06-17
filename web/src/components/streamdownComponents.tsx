@@ -1,4 +1,4 @@
-import { mermaid as mermaidPlugin } from '@streamdown/mermaid';
+import rawMermaid, { type MermaidConfig } from 'mermaid';
 import { CopyIcon, DownloadIcon, Maximize2Icon, RotateCcwIcon, XIcon, ZoomInIcon, ZoomOutIcon } from 'lucide-react';
 import {
   type ComponentProps,
@@ -10,6 +10,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -75,6 +76,55 @@ function hashString(value: string): string {
   return String(Math.abs(hash));
 }
 
+function normalizedRenderWidth(width: number): number {
+  if (!Number.isFinite(width) || width <= 0) return 0;
+  return Math.max(320, Math.round(width));
+}
+
+function normalizedRenderSize(width: number, height: number): { width: number; height: number } {
+  return {
+    height: Math.max(240, Math.round(height)),
+    width: normalizedRenderWidth(width),
+  };
+}
+
+function isXyChart(chart: string): boolean {
+  return /^\s*xychart(?:-beta)?\b/im.test(chart);
+}
+
+function mermaidResizeTargets(element: HTMLElement): Element[] {
+  const targets: Element[] = [element];
+  let current = element.parentElement;
+  while (current && targets.length < 8) {
+    targets.push(current);
+    current = current.parentElement;
+  }
+  return targets;
+}
+
+function mermaidRenderConfig(
+  chart: string,
+  baseConfig: MermaidConfig,
+  config: MermaidConfig | undefined,
+  renderSize: { width: number; height: number },
+): MermaidConfig {
+  const nextConfig: MermaidConfig = { ...baseConfig, ...config };
+
+  if (isXyChart(chart)) {
+    return {
+      ...nextConfig,
+      xyChart: {
+        ...nextConfig.xyChart,
+        // xychart 会用配置里的 width/height 生成 SVG 尺寸，不能只依赖外层 CSS 拉伸。
+        height: renderSize.height,
+        width: renderSize.width,
+      },
+    };
+  }
+
+  return nextConfig;
+}
+
 function downloadText(filename: string, content: string, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const link = document.createElement('a');
@@ -82,6 +132,73 @@ function downloadText(filename: string, content: string, type: string) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function createMermaidRenderHost(width: number, height: number): HTMLDivElement {
+  const host = document.createElement('div');
+  host.style.background = 'transparent';
+  host.style.contain = 'layout style paint';
+  host.style.height = `${height}px`;
+  host.style.left = '-10000px';
+  host.style.maxWidth = `${width}px`;
+  host.style.minWidth = `${width}px`;
+  host.style.opacity = '0';
+  host.style.overflow = 'hidden';
+  host.style.pointerEvents = 'none';
+  host.style.position = 'fixed';
+  host.style.top = '0';
+  host.style.width = `${width}px`;
+  host.style.zIndex = '-1';
+  document.body.appendChild(host);
+  return host;
+}
+
+function numericSvgLength(value: string | null): number | null {
+  if (!value) return null;
+  const number = Number.parseFloat(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function svgNaturalSize(svg: string): { width: number; height: number } {
+  // Mermaid 输出通常带 viewBox，优先用它读取这次原生渲染后的真实尺寸。
+  const viewBox = svg.match(/\bviewBox=(["'])([^"']+)\1/i)?.[2]
+    ?.trim()
+    .split(/[\s,]+/)
+    .map((item) => Number.parseFloat(item));
+  if (viewBox && viewBox.length === 4 && viewBox.every((item) => Number.isFinite(item)) && viewBox[2] > 0 && viewBox[3] > 0) {
+    return { width: viewBox[2], height: viewBox[3] };
+  }
+
+  const width = numericSvgLength(svg.match(/\bwidth=(["'])([^"']+)\1/i)?.[2] ?? null);
+  const height = numericSvgLength(svg.match(/\bheight=(["'])([^"']+)\1/i)?.[2] ?? null);
+  return { width: width ?? 960, height: height ?? 540 };
+}
+
+function renderedMermaidSvgSize(svg: string): { svg: string; width: number; height: number } {
+  const naturalSize = svgNaturalSize(svg);
+  return { svg, width: naturalSize.width, height: naturalSize.height };
+}
+
+function flowchartDirection(chart: string): 'horizontal' | 'vertical' | null {
+  const firstDiagramLine = chart
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith('%%'));
+  if (!firstDiagramLine || !/^(flowchart|graph)\b/i.test(firstDiagramLine)) return null;
+
+  const direction = chart.match(/^\s*(?:flowchart|graph)\s+(LR|RL|TB|TD|BT)\b/im)?.[1]
+    ?? chart.match(/^\s*direction\s+(LR|RL|TB|TD|BT)\b/im)?.[1]
+    ?? 'TB';
+  return direction === 'LR' || direction === 'RL' ? 'horizontal' : 'vertical';
+}
+
+function shouldRefitFlowchart(chart: string, actualWidth: number, targetWidth: number): boolean {
+  return Boolean(flowchartDirection(chart) && actualWidth > 0 && targetWidth > actualWidth * 1.12);
+}
+
+function flowchartFitSpacing(actualWidth: number, targetWidth: number): number {
+  const ratio = Math.max(1, targetWidth / Math.max(1, actualWidth));
+  return Math.min(260, Math.max(50, Math.round(50 * ratio)));
 }
 
 function IconButton({
@@ -108,12 +225,14 @@ function IconButton({
   );
 }
 
-function MermaidViewport({ svg, fullscreen = false }: { svg: string; fullscreen?: boolean }) {
+function MermaidViewport({ height, svg, fullscreen = false, width }: { height: number; svg: string; fullscreen?: boolean; width: number }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [fitScale, setFitScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragStartRef = useRef({ pointerX: 0, pointerY: 0, panX: 0, panY: 0 });
+  const naturalSize = useMemo(() => ({ height, width }), [height, width]);
 
   const zoomBy = useCallback((delta: number) => {
     setZoom((value) => Math.max(0.5, Math.min(3, Number((value + delta).toFixed(2)))));
@@ -123,6 +242,37 @@ function MermaidViewport({ svg, fullscreen = false }: { svg: string; fullscreen?
     setZoom(1);
     setPan({ x: 0, y: 0 });
   }, []);
+
+  useEffect(() => {
+    resetView();
+  }, [resetView, svg]);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    const updateFitScale = () => {
+      const rect = viewport.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      if (!fullscreen) {
+        setFitScale(1);
+        return;
+      }
+      const padding = fullscreen ? 16 : 24;
+      const availableWidth = Math.max(1, rect.width - padding);
+      const availableHeight = Math.max(1, rect.height - padding);
+      const fitWidth = availableWidth / naturalSize.width;
+      const fitBoth = Math.min(fitWidth, availableHeight / naturalSize.height);
+      const next = Math.min(3, Math.max(0.2, fitBoth));
+      setFitScale(Number(next.toFixed(3)));
+    };
+
+    // 外层宽度切换、右侧栏开合、全屏变化都会触发重新计算视图尺寸。
+    updateFitScale();
+    const observer = new ResizeObserver(updateFitScale);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [fullscreen, naturalSize.height, naturalSize.width, svg]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -193,7 +343,12 @@ function MermaidViewport({ svg, fullscreen = false }: { svg: string; fullscreen?
           aria-label="Mermaid chart"
           role="img"
           className="mermaid-svg-shell"
-          style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: 'center center' }}
+          style={{
+            height: `${naturalSize.height}px`,
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${fitScale * zoom})`,
+            transformOrigin: 'center center',
+            width: `${naturalSize.width}px`,
+          }}
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       </div>
@@ -202,13 +357,17 @@ function MermaidViewport({ svg, fullscreen = false }: { svg: string; fullscreen?
 }
 
 function MermaidFullscreen({
+  height,
   open,
   onOpenChange,
   svg,
+  width,
 }: {
+  height: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   svg: string;
+  width: number;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -254,7 +413,7 @@ function MermaidFullscreen({
         role="presentation"
       >
         <div data-streamdown="mermaid" className="mermaid-fullscreen size-full">
-          <MermaidViewport svg={svg} fullscreen />
+          <MermaidViewport height={height} svg={svg} fullscreen width={width} />
         </div>
       </div>
     </div>,
@@ -266,11 +425,14 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
   const { controls, mermaid } = useContext(StreamdownContext);
   const { streaming } = useContext(MarkdownRenderOptionsContext);
   const reactId = useId().replace(/[^a-zA-Z0-9_-]/g, '-');
+  const diagramRef = useRef<HTMLDivElement | null>(null);
   const [svg, setSvg] = useState('');
+  const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [retry, setRetry] = useState(0);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
+  const [renderSize, setRenderSize] = useState({ width: 0, height: 0 });
 
   const config = mermaid?.config;
   const ErrorComponent = mermaid?.errorComponent;
@@ -280,25 +442,81 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
   const showPanZoom = getControl(controls, 'mermaid', 'panZoom');
   const showActions = !isIncomplete && (showCopy || showDownload || showFullscreen);
 
+  useLayoutEffect(() => {
+    const element = diagramRef.current;
+    if (!element) return;
+    let frame = 0;
+    let settleTimer = 0;
+    const updateSize = () => {
+      frame = 0;
+      const rect = element.getBoundingClientRect();
+      const next = normalizedRenderSize(element.clientWidth || rect.width, element.clientHeight || rect.height);
+      setRenderSize((current) => (next.width && next.height && (next.width !== current.width || next.height !== current.height) ? next : current));
+    };
+    const scheduleUpdate = () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(updateSize);
+      if (settleTimer) window.clearTimeout(settleTimer);
+      // 右侧栏动画和加宽切换可能分多帧完成，补一次收敛后的真实尺寸。
+      settleTimer = window.setTimeout(updateSize, 220);
+    };
+    updateSize();
+    const observer = new ResizeObserver(() => {
+      scheduleUpdate();
+    });
+    mermaidResizeTargets(element).forEach((target) => observer.observe(target));
+    window.addEventListener('resize', scheduleUpdate);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      if (settleTimer) window.clearTimeout(settleTimer);
+      observer.disconnect();
+      window.removeEventListener('resize', scheduleUpdate);
+    };
+  }, []);
+
   useEffect(() => {
-    if (isIncomplete && !streaming) return;
+    if ((isIncomplete && !streaming) || !renderSize.width || !renderSize.height) return;
 
     let canceled = false;
-    const renderId = `mermaid-${reactId}-${hashString(chart)}-${retry}`;
+    const renderId = `mermaid-${reactId}-${hashString(chart)}-${renderSize.width}x${renderSize.height}-${retry}`;
 
     setLoading(true);
     setError(null);
 
     void (async () => {
+      let renderHost: HTMLDivElement | null = null;
       try {
-        const mermaidApi = await Promise.resolve(mermaidPlugin.getMermaid(config));
-        const parseableMermaid = mermaidApi as typeof mermaidApi & { parse?: (source: string) => unknown | Promise<unknown> };
+        renderHost = createMermaidRenderHost(renderSize.width, renderSize.height);
+        const baseConfig: MermaidConfig = { fontFamily: 'monospace', securityLevel: 'strict', startOnLoad: false, suppressErrorRendering: true };
+        const responsiveConfig = mermaidRenderConfig(chart, baseConfig, config, renderSize);
+        rawMermaid.initialize(responsiveConfig);
         // 流式输出期间先做 Mermaid 基础语法校验；不通过就保留上一张有效图，等待下一次同步。
-        if (typeof parseableMermaid.parse === 'function') await parseableMermaid.parse(chart);
-        const { svg: nextSvg } = await mermaidApi.render(renderId, chart);
+        await rawMermaid.parse(chart);
+        // 宽度变化时在同宽离屏宿主里重新布局，生成目标宽度下的 SVG。
+        const { svg: nextSvg } = await rawMermaid.render(renderId, chart, renderHost);
+        let normalizedSvg = renderedMermaidSvgSize(nextSvg);
+        for (let attempt = 0; attempt < 2 && shouldRefitFlowchart(chart, normalizedSvg.width, renderSize.width); attempt += 1) {
+          const direction = flowchartDirection(chart);
+          const spacing = flowchartFitSpacing(normalizedSvg.width, renderSize.width);
+          const flowchartConfig = {
+            ...responsiveConfig,
+            flowchart: {
+              ...responsiveConfig.flowchart,
+              rankSpacing: direction === 'horizontal' ? spacing : responsiveConfig.flowchart?.rankSpacing,
+              nodeSpacing: direction === 'vertical' ? spacing : responsiveConfig.flowchart?.nodeSpacing,
+              useMaxWidth: false,
+            },
+          };
+          rawMermaid.initialize(flowchartConfig);
+          const { svg: fittedSvg } = await rawMermaid.render(`${renderId}-fit-${attempt}`, chart, renderHost);
+          const fittedSize = renderedMermaidSvgSize(fittedSvg);
+          if (fittedSize.width <= normalizedSvg.width + 2) break;
+          normalizedSvg = fittedSize;
+        }
         if (canceled) return;
         setError(null);
-        setSvg(nextSvg);
+        setSvg(normalizedSvg.svg);
+        setSvgSize({ width: normalizedSvg.width, height: normalizedSvg.height });
       } catch (reason) {
         if (canceled) return;
         if (streaming) {
@@ -306,8 +524,10 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
           return;
         }
         setSvg('');
+        setSvgSize({ width: 0, height: 0 });
         setError(reason instanceof Error ? reason.message : 'Mermaid 图表渲染失败');
       } finally {
+        renderHost?.remove();
         if (!canceled) setLoading(false);
       }
     })();
@@ -315,7 +535,7 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
     return () => {
       canceled = true;
     };
-  }, [chart, config, isIncomplete, reactId, retry, streaming]);
+  }, [chart, config, isIncomplete, reactId, renderSize, retry, streaming]);
 
   const copySource = useCallback(() => {
     void navigator.clipboard?.writeText(chart);
@@ -328,7 +548,7 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
   const retryRender = useCallback(() => setRetry((value) => value + 1), []);
 
   const body = useMemo(() => {
-    if ((isIncomplete && !svg) || (loading && !svg) || (streaming && !svg && !error)) {
+    if (!renderSize.width || !renderSize.height || (isIncomplete && !svg) || (loading && !svg) || (streaming && !svg && !error)) {
       return (
         <div className="flex size-full items-center justify-center text-sm text-muted-foreground">
           Mermaid 图表生成中...
@@ -349,14 +569,14 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
     }
 
     return (
-      <MermaidViewport svg={svg} />
+      <MermaidViewport height={svgSize.height || 1} svg={svg} width={svgSize.width || renderSize.width} />
     );
-  }, [ErrorComponent, chart, error, isIncomplete, loading, retryRender, streaming, svg]);
+  }, [ErrorComponent, chart, error, isIncomplete, loading, renderSize.height, renderSize.width, retryRender, streaming, svg, svgSize.height, svgSize.width]);
 
   return (
     <div
       data-streamdown="mermaid-block"
-      className={cn('group relative my-4 flex w-full flex-col gap-2 rounded-xl border border-border bg-sidebar p-2', className)}
+      className={cn('group relative my-4 flex w-full flex-col gap-2 rounded-md border border-border bg-white p-2 dark:bg-[#1f2020]', className)}
     >
       <div className="flex h-8 items-center text-muted-foreground text-xs">
         <span className="ml-1 font-mono lowercase">mermaid</span>
@@ -385,10 +605,36 @@ function EagerMermaidBlock({ chart, className, isIncomplete }: { chart: string; 
           </div>
         </div>
       ) : null}
-      <div data-streamdown="mermaid" className="rounded-md border border-border bg-background">
-        {showPanZoom ? body : <div className="flex size-full items-center justify-center overflow-auto">{svg ? <div className="mermaid-svg-shell" dangerouslySetInnerHTML={{ __html: svg }} /> : body}</div>}
+      <div
+        ref={diagramRef}
+        data-streamdown="mermaid"
+        className="h-[min(70vh,32rem)] min-h-60 rounded-md border border-border bg-white dark:bg-[#1f2020]"
+      >
+        {showPanZoom ? (
+          body
+        ) : (
+          <div className="flex size-full items-center justify-center overflow-auto">
+            {svg ? (
+              <div
+                className="mermaid-svg-shell"
+                style={{ height: `${svgSize.height || 1}px`, width: `${svgSize.width || renderSize.width}px` }}
+                dangerouslySetInnerHTML={{ __html: svg }}
+              />
+            ) : (
+              body
+            )}
+          </div>
+        )}
       </div>
-      {svg ? <MermaidFullscreen open={fullscreenOpen} onOpenChange={setFullscreenOpen} svg={svg} /> : null}
+      {svg ? (
+        <MermaidFullscreen
+          height={svgSize.height || 1}
+          open={fullscreenOpen}
+          onOpenChange={setFullscreenOpen}
+          svg={svg}
+          width={svgSize.width || renderSize.width}
+        />
+      ) : null}
     </div>
   );
 }
