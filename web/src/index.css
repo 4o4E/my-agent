@@ -203,25 +203,42 @@
   }
 }
 
-/* Mermaid 挂载时立即占满固定画布，加载态和 SVG 完成态保持同尺寸。 */
+/* Mermaid 画布高度固定，宽度变化时由组件重新生成对应宽度的 SVG。 */
 [data-streamdown='mermaid-block'] {
   contain: layout paint;
 }
 
 [data-streamdown='mermaid'] {
+  background-color: #fff;
   contain: layout paint;
-  height: min(70vh, 32rem);
   overflow: hidden;
+}
+
+.dark [data-streamdown='mermaid'] {
+  background-color: #1f2020;
 }
 
 [data-streamdown='mermaid'].mermaid-fullscreen {
   height: 100%;
 }
 
-[data-streamdown='mermaid'] > div,
-[data-streamdown='mermaid'] .mermaid-svg-shell,
-[data-streamdown='mermaid'] svg[id^='mermaid-'] {
+[data-streamdown='mermaid'] > div {
   height: 100%;
+  width: 100%;
+}
+
+[data-streamdown='mermaid'] .mermaid-svg-shell {
+  align-items: center;
+  background-color: inherit;
+  display: inline-flex;
+  justify-content: center;
+  max-width: none;
+}
+
+[data-streamdown='mermaid'] .mermaid-svg-shell > svg[id^='mermaid-'] {
+  display: block;
+  height: 100%;
+  max-width: none;
   width: 100%;
 }
 
@@ -236,20 +253,4 @@
   height: min(100%, calc(100vh - 2rem));
   justify-content: center;
   width: min(100%, calc(100vw - 2rem));
-}
-
-[data-streamdown='mermaid'].mermaid-fullscreen svg[id^='mermaid-'] {
-  height: 100%;
-  width: 100%;
-}
-
-[data-streamdown='mermaid'] svg[id^='mermaid-'] {
-  display: block;
-  max-width: 100%;
-}
-
-@media (max-width: 640px) {
-  [data-streamdown='mermaid'] {
-    height: min(65vh, 24rem);
-  }
 }
