@@ -72,6 +72,7 @@ test('datasource_list public view redacts secrets and admin config', () => {
       name: 'sales',
       type: 'postgres',
       status: 'active',
+      enabled: true,
       connection: { host: 'db.example.com', port: 5432, database: 'sales', password: 'secret' },
       admin_config: { connectionUrl: 'postgres://admin:secret@db.example.com/sales' },
       pool_config: {},

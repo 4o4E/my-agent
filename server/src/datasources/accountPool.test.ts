@@ -28,6 +28,7 @@ test('返回给容器的凭证不会包含管理连接配置', () => {
       name: 'sales',
       type: 'postgres',
       status: 'active',
+      enabled: true,
       connection: { host: 'db.example.com', port: 5432, database: 'sales' },
       admin_config: { connectionUrl: 'postgres://admin:secret@db.example.com/sales' },
       pool_config: {},

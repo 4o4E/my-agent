@@ -1,6 +1,7 @@
 import { execFile, execFileSync } from 'node:child_process';
-import { accessSync, constants, existsSync, readdirSync, realpathSync } from 'node:fs';
-import { delimiter, dirname, isAbsolute, resolve } from 'node:path';
+import { accessSync, constants, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { SandboxBackendName } from '@my-agent/contracts';
 export type { SandboxBackendName } from '@my-agent/contracts';
@@ -30,6 +31,7 @@ export interface ShellSpawnSpec {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   backend: 'host' | 'bwrap';
+  cleanupPaths?: string[];
 }
 
 export interface ResolvedCommand {
@@ -138,6 +140,16 @@ function safeEnvEntries(env: Record<string, string> | undefined): Array<[string,
   return Object.entries(env ?? {}).filter(([key, value]) => /^[A-Z_][A-Z0-9_]*$/.test(key) && typeof value === 'string');
 }
 
+function cleanupTempPaths(paths: string[]): void {
+  for (const path of paths) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+    } catch {
+      // 临时 PATH 清理失败不影响命令结果；下次系统 tmp 清理会兜底。
+    }
+  }
+}
+
 /** 把命令白名单解析成源路径和沙箱内目标路径,缺失命令会被跳过。 */
 export function resolveAllowedCommands(names: string[], envPath = process.env.PATH ?? ''): ResolvedCommand[] {
   return unique(names)
@@ -147,6 +159,26 @@ export function resolveAllowedCommands(names: string[], envPath = process.env.PA
       return { name, source: realpathSync(dest), dest };
     })
     .filter((cmd): cmd is ResolvedCommand => Boolean(cmd));
+}
+
+function hostPathForConfig(cfg: ShellSandboxConfig): { envPath: string; cleanupPaths: string[] } {
+  const envPath = cfg.envPath ?? process.env.PATH ?? '';
+  const commands = resolveAllowedCommands(cfg.allowCommands, envPath);
+  if (!commands.length) return { envPath: '', cleanupPaths: [] };
+
+  const dir = mkdtempSync(join(tmpdir(), 'my-agent-shell-path-'));
+  const linked = new Set<string>();
+  for (const command of commands) {
+    const linkName = basename(command.dest);
+    if (!linkName || linked.has(linkName)) continue;
+    linked.add(linkName);
+    try {
+      symlinkSync(command.source, join(dir, linkName));
+    } catch {
+      // 单个命令投射失败时跳过，避免一个坏链接让整个 shell 不可用。
+    }
+  }
+  return { envPath: dir, cleanupPaths: [dir] };
 }
 
 /** 生成 bwrap 参数;纯函数便于单测,实际执行由 runShellCommand 完成。 */
@@ -247,7 +279,14 @@ function shouldUseBwrap(cfg: ShellSandboxConfig): { use: true; bwrapPath: string
 /** shell 工具的统一执行入口:默认直通, enforce+bwrap 时切到 OS 沙箱。 */
 export async function runShellCommand(command: string, timeout: number, cfg: ShellSandboxConfig): Promise<ShellExecResult> {
   const selected = shouldUseBwrap(cfg);
-  if (!selected.use) return hostShell(command, timeout, cfg.workspaceRoot, cfg.env, cfg.envPath);
+  if (!selected.use) {
+    const hostPath = hostPathForConfig(cfg);
+    try {
+      return await hostShell(command, timeout, cfg.workspaceRoot, cfg.env, hostPath.envPath);
+    } finally {
+      cleanupTempPaths(hostPath.cleanupPaths);
+    }
+  }
 
   const missing = cfg.allowCommands.filter((name) => !findExecutable(name, cfg.envPath));
   if (missing.length) {
@@ -272,20 +311,23 @@ export async function runShellCommand(command: string, timeout: number, cfg: She
 export function buildShellSpawnSpec(command: string, cfg: ShellSandboxConfig): ShellSpawnSpec {
   const selected = shouldUseBwrap(cfg);
   if (!selected.use) {
+    const hostPath = hostPathForConfig(cfg);
     return isWindows
       ? {
           file: 'powershell.exe',
           args: ['-NoProfile', '-NonInteractive', '-Command', command],
           cwd: cfg.workspaceRoot,
-          env: hostShellEnv(cfg.workspaceRoot, cfg.env, cfg.envPath),
+          env: hostShellEnv(cfg.workspaceRoot, cfg.env, hostPath.envPath),
           backend: 'host',
+          cleanupPaths: hostPath.cleanupPaths,
         }
       : {
           file: '/bin/sh',
           args: ['-c', command],
           cwd: cfg.workspaceRoot,
-          env: hostShellEnv(cfg.workspaceRoot, cfg.env, cfg.envPath),
+          env: hostShellEnv(cfg.workspaceRoot, cfg.env, hostPath.envPath),
           backend: 'host',
+          cleanupPaths: hostPath.cleanupPaths,
         };
   }
 
@@ -302,7 +344,7 @@ export function buildShellSpawnSpec(command: string, cfg: ShellSandboxConfig): S
 
 export function describeShellSandbox(cfg: ShellSandboxConfig): string {
   if (cfg.policyMode !== 'enforce') return 'host';
-  if (cfg.useHostPath) return 'host (PATH: host)';
+  if (cfg.useHostPath) return 'host (visible commands)';
   if (cfg.backend === 'none') return 'host (backend: none)';
   return `${cfg.backend}${cfg.shareNet ? ', net: enabled' : ', net: disabled'}`;
 }

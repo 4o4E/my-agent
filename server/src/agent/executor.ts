@@ -229,7 +229,7 @@ function commandFromToolCall(name: string, args: unknown): string | null {
 }
 
 async function createDefaultDatabaseRuntimeEnv(runId: string): Promise<DatabaseRuntimeEnv> {
-  const activeDatasources = (await listDatasources()).filter((datasource) => datasource.status === 'active');
+  const activeDatasources = (await listDatasources()).filter((datasource) => datasource.enabled && datasource.status === 'active');
   const allowedDatasourceIds = activeDatasources.map((datasource) => datasource.id);
   const created = await createWorkloadToken({
     runId,
@@ -482,7 +482,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     const ensureDatabaseToolEnv = async (activation: SkillActivation): Promise<string> => {
       if (toolEnv.DB_WORKLOAD_TOKEN) return '数据库访问运行环境已在 run 初始化时注入；database-access skill 只提供脚本和操作规范。';
 
-      const activeDatasources = (await listDatasources()).filter((datasource) => datasource.status === 'active');
+      const activeDatasources = (await listDatasources()).filter((datasource) => datasource.enabled && datasource.status === 'active');
       const allowedDatasourceIds = activeDatasources.map((datasource) => datasource.id);
       const created = await createWorkloadToken({
         runId,

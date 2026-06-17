@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useId, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Activity, Database, Gauge, Moon, Palette, Plus, RefreshCw, Save, Shield, Sun, Wrench } from 'lucide-react';
+import { Activity, Database, Gauge, Moon, Palette, Plus, RefreshCw, Save, Shield, Sun, Trash2, Wrench } from 'lucide-react';
 import {
   createDatasource,
   createPermissionProfile,
@@ -36,7 +36,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { useThemeCtx } from '@/theme';
@@ -53,6 +55,7 @@ type SettingsPanel =
   | 'status-card'
   | 'usage-stats'
   | 'tools-sandbox'
+  | 'tools-access'
   | 'datasource-connection'
   | 'datasource-permissions'
   | 'datasource-pool'
@@ -98,6 +101,7 @@ interface DatasourceForm {
   name: string;
   type: DatasourceType;
   status: DatasourceStatus;
+  enabled: boolean;
   host: string;
   port: string;
   database: string;
@@ -126,6 +130,17 @@ function textToList(value: string): string[] {
     .filter(Boolean);
 }
 
+function pathToList(value: string): string[] {
+  return value
+    .split(':')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function listToPath(items: string[]): string {
+  return items.map((item) => item.trim()).filter(Boolean).join(':');
+}
+
 function toggleListValue(items: string[], value: string, checked: boolean): string[] {
   const next = new Set(items);
   if (checked) next.add(value);
@@ -139,6 +154,98 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+function SettingsPanelShell({
+  actions,
+  children,
+  contentClassName,
+  description,
+  title,
+}: {
+  actions?: ReactNode;
+  children: ReactNode;
+  contentClassName?: string;
+  description: string;
+  title: string;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      <div className="flex shrink-0 items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+        </div>
+        {actions && <div className="flex shrink-0 items-center gap-3">{actions}</div>}
+      </div>
+      <div className={cn('min-h-0 flex-1 overflow-y-auto pr-1', contentClassName)}>{children}</div>
+    </div>
+  );
+}
+
+function PathListField({
+  disabled,
+  label,
+  value,
+  onChange,
+}: {
+  disabled: boolean;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [rows, setRows] = useState<string[]>(() => pathToList(value));
+
+  useEffect(() => {
+    setRows(pathToList(value));
+  }, [value]);
+
+  function updateRows(nextRows: string[]) {
+    setRows(nextRows);
+    onChange(listToPath(nextRows));
+  }
+
+  const visibleRows = rows.length ? rows : [''];
+
+  return (
+    <div className="grid gap-2 text-sm font-medium">
+      <div className="flex items-center justify-between gap-3">
+        <span>{label}</span>
+        <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => setRows([...rows, ''])}>
+          <Plus className="h-4 w-4" />
+          添加路径
+        </Button>
+      </div>
+      <ScrollArea className="min-w-0 rounded-md border" viewportClassName="max-h-48 !h-auto">
+        <div className="grid gap-2 p-2">
+          {visibleRows.map((path, index) => (
+            <div key={`path-${index}`} className="grid min-w-0 grid-cols-[minmax(0,1fr),auto] gap-2">
+              <Input
+                value={path}
+                disabled={disabled}
+                placeholder="/usr/local/bin"
+                onChange={(event) => {
+                  const nextRows = [...visibleRows];
+                  nextRows[index] = event.target.value;
+                  updateRows(nextRows);
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                disabled={disabled}
+                onClick={() => updateRows(visibleRows.filter((_, rowIndex) => rowIndex !== index))}
+                aria-label="删除路径"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
+    </div>
   );
 }
 
@@ -179,36 +286,60 @@ function NavGroup({ label, children }: { label: string; children: ReactNode }) {
 
 function OptionList({
   empty,
+  fill = false,
   items,
   selected,
   renderMeta,
   onToggle,
 }: {
   empty: string;
+  fill?: boolean;
   items: Array<{ name: string; description?: string }>;
   selected: (name: string) => boolean;
   renderMeta?: (item: { name: string; description?: string }) => ReactNode;
   onToggle: (name: string, checked: boolean) => void;
 }) {
+  const optionId = useId();
+
   return (
-    <div className="grid max-h-64 content-start gap-2 overflow-y-auto rounded-md border p-2">
-      {items.length === 0 && <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">{empty}</div>}
-      {items.map((item) => (
-        <label
-          key={item.name}
-          className="grid min-h-11 grid-cols-[auto,minmax(0,1fr)] items-start gap-3 rounded-md px-2 py-2 text-sm transition-colors hover:bg-accent/60"
-        >
-          <Checkbox checked={selected(item.name)} onCheckedChange={(checked) => onToggle(item.name, checked === true)} className="mt-0.5" />
-          <span className="grid min-w-0 gap-0.5">
-            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="min-w-0 break-all font-medium">{item.name}</span>
-              <span className="shrink-0">{renderMeta?.(item)}</span>
-            </span>
-            {item.description && <span className="block break-words text-xs leading-5 text-muted-foreground">{item.description}</span>}
-          </span>
-        </label>
-      ))}
-    </div>
+    <ScrollArea className={cn('min-w-0', fill && 'min-h-0 flex-1')} viewportClassName={fill ? 'h-full' : 'max-h-64 !h-auto'}>
+      <div className={cn('grid min-w-0 divide-y rounded-md border', fill && 'min-h-full content-start')}>
+        {items.length === 0 && <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">{empty}</div>}
+        {items.map((item, index) => {
+          const id = `${optionId}-${index}`;
+          const checked = selected(item.name);
+          return (
+            <div
+              key={item.name}
+              className="grid min-w-0 cursor-pointer grid-cols-[auto,minmax(0,1fr)] items-start gap-3 px-3 py-2 text-sm transition-colors hover:bg-accent/60"
+              onClick={() => onToggle(item.name, !checked)}
+            >
+              <Checkbox
+                id={id}
+                checked={checked}
+                onCheckedChange={(checked) => onToggle(item.name, checked === true)}
+                onClick={(event) => event.stopPropagation()}
+                className="mt-0.5"
+                aria-label={item.name}
+              />
+              <div className="min-w-0 space-y-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="min-w-0 max-w-full break-all font-medium leading-5 [overflow-wrap:anywhere]">
+                    {item.name}
+                  </span>
+                  {renderMeta && <span className="shrink-0">{renderMeta(item)}</span>}
+                </div>
+                {item.description && (
+                  <p className="m-0 min-w-0 max-w-full whitespace-normal break-all text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                    {item.description}
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </ScrollArea>
   );
 }
 
@@ -226,6 +357,7 @@ function datasourceToForm(datasource?: Datasource): DatasourceForm {
     name: datasource?.name ?? '',
     type: datasource?.type ?? 'postgres',
     status: datasource?.status ?? 'active',
+    enabled: datasource?.enabled ?? true,
     host: stringField(connection.host),
     port: stringField(connection.port, datasource?.type === 'hive' ? '10000' : datasource?.type === 'mongodb' ? '27017' : datasource?.type === 'mysql' ? '3306' : '5432'),
     database: stringField(connection.database),
@@ -368,12 +500,7 @@ function AppearanceSettingsPanel() {
   const { theme, setTheme } = useThemeCtx();
 
   return (
-    <div className="grid gap-4">
-      <div>
-        <h2 className="text-lg font-semibold">外观</h2>
-        <p className="mt-1 text-sm text-muted-foreground">浅色、深色和界面显示偏好</p>
-      </div>
-
+    <SettingsPanelShell title="外观" description="浅色、深色和界面显示偏好" contentClassName="grid content-start gap-4">
       <Card className="rounded-lg shadow-sm">
         <CardHeader>
           <CardTitle>颜色模式</CardTitle>
@@ -410,7 +537,7 @@ function AppearanceSettingsPanel() {
           </button>
         </CardContent>
       </Card>
-    </div>
+    </SettingsPanelShell>
   );
 }
 
@@ -425,12 +552,7 @@ function StatusCardSettingsPanel() {
   };
 
   return (
-    <div className="grid gap-4">
-      <div>
-        <h2 className="text-lg font-semibold">状态卡片</h2>
-        <p className="mt-1 text-sm text-muted-foreground">控制聊天页状态卡片展示哪些运行信息</p>
-      </div>
-
+    <SettingsPanelShell title="状态卡片" description="控制聊天页状态卡片展示哪些运行信息" contentClassName="grid content-start gap-4">
       <Card className="rounded-lg shadow-sm">
         <CardHeader>
           <CardTitle>状态卡片字段</CardTitle>
@@ -461,7 +583,7 @@ function StatusCardSettingsPanel() {
           ))}
         </CardContent>
       </Card>
-    </div>
+    </SettingsPanelShell>
   );
 }
 
@@ -489,21 +611,20 @@ function UsageStatsSettingsPanel() {
   const maxDaily = Math.max(1, ...dailyUsage.map((day) => day.totalTokens));
 
   return (
-    <div className="flex min-h-[34rem] flex-col gap-4">
-      <div className="flex shrink-0 items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">用量统计</h2>
-          <p className="mt-1 text-sm text-muted-foreground">按历史 run 事件统计 token 消耗、峰值、平均值和日热力图</p>
-        </div>
-        <div className="flex items-center gap-3">
+    <SettingsPanelShell
+      title="用量统计"
+      description="按历史 run 事件统计 token 消耗、峰值、平均值和日热力图"
+      contentClassName="grid content-start gap-4"
+      actions={
+        <>
           {message && <span className="max-w-md truncate text-sm text-muted-foreground">{message}</span>}
           <Button variant="outline" onClick={refreshStats} disabled={loading}>
             <RefreshCw className="h-4 w-4" />
             {loading ? '刷新中' : '刷新'}
           </Button>
-        </div>
-      </div>
-
+        </>
+      }
+    >
       <div className="grid items-start gap-3 md:grid-cols-3 xl:grid-cols-4">
         <Card className="rounded-lg shadow-sm">
           <CardHeader className="pb-2">
@@ -592,18 +713,21 @@ function UsageStatsSettingsPanel() {
           </div>
         </CardContent>
       </Card>
-    </div>
+    </SettingsPanelShell>
   );
 }
 
 function ToolsSettingsPanel({
   onWorkspaceChanged,
+  section,
 }: {
   onWorkspaceChanged: () => void;
+  section: 'access' | 'sandbox-shell';
 }) {
   const [settings, setSettings] = useState<ToolSettings | null>(null);
   const [options, setOptions] = useState<ToolSettingsOptions | null>(null);
   const [shellDenyText, setShellDenyText] = useState('');
+  const [shellCommandQuery, setShellCommandQuery] = useState('');
   const [saving, setSaving] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [message, setMessage] = useState('');
@@ -638,6 +762,14 @@ function ToolsSettingsPanel({
 
   const toolOptions = options?.tools ?? [];
   const shellCommandOptions = options?.shellCommands ?? [];
+  const filteredShellCommandOptions = useMemo(() => {
+    const query = shellCommandQuery.trim().toLowerCase();
+    if (!query) return shellCommandOptions;
+    return shellCommandOptions.filter((command) => {
+      const path = command.path ?? '';
+      return command.name.toLowerCase().includes(query) || path.toLowerCase().includes(query);
+    });
+  }, [shellCommandOptions, shellCommandQuery]);
   const allToolNames = useMemo(() => toolOptions.map((tool) => tool.name), [toolOptions]);
   const selectedToolSet = useMemo(
     () => new Set(settings?.toolAccessMode === 'allow' ? settings.allow : settings?.deny ?? []),
@@ -725,108 +857,60 @@ function ToolsSettingsPanel({
   if (!settings || !options) {
     return <div className="flex min-h-64 items-center justify-center text-sm text-muted-foreground">正在读取配置...</div>;
   }
+  const accessSection = section === 'access';
 
   return (
-    <div className="grid gap-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">沙箱</h2>
-          <p className="mt-1 text-sm text-muted-foreground">路径限制、网络开关、工具准入和 shell 运行边界</p>
-        </div>
-        <div className="flex items-center gap-3">
+    <SettingsPanelShell
+      title={accessSection ? '工具准入' : 'Shell / 沙箱'}
+      description={accessSection ? '选择可调用或拒绝调用的工具' : 'Shell 执行方式、bwrap 后端、PATH 和可见指令'}
+      contentClassName={accessSection ? 'flex flex-col gap-4' : 'grid content-start gap-4'}
+      actions={
+        <>
           {message && <span className="text-sm text-muted-foreground">{message}</span>}
           <Button onClick={() => void save()} disabled={saving}>
             <Save className="h-4 w-4" />
             {saving ? '保存中' : '保存'}
           </Button>
-        </div>
-      </div>
+        </>
+      }
+    >
 
-      <Card className="rounded-lg shadow-sm">
-        <CardHeader>
-          <CardTitle>工具沙箱</CardTitle>
-          <CardDescription>路径限制、bwrap 后端和网络开关</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-3">
-          <Field label="沙箱模式">
-            <Select value={settings.sandbox} onValueChange={(value) => setSettings({ ...settings, sandbox: value as ToolSettings['sandbox'] })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="off">off</SelectItem>
-                <SelectItem value="enforce">enforce</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="沙箱后端">
-            <Select
-              value={settings.sandboxBackend}
-              onValueChange={(value) => setSettings({ ...settings, sandboxBackend: value as ToolSettings['sandboxBackend'] })}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">auto</SelectItem>
-                <SelectItem value="none">none</SelectItem>
-                <SelectItem value="bwrap">bwrap</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="网络">
-            <Select value={settings.network} onValueChange={(value) => setSettings({ ...settings, network: value as ToolSettings['network'] })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="disabled">disabled</SelectItem>
-                <SelectItem value="enabled">enabled</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          <div className="md:col-span-3">
-            <Field label="工作区根目录">
-              <Input value={settings.workspaceRoot} onChange={(event) => setSettings({ ...settings, workspaceRoot: event.target.value })} />
-            </Field>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-lg shadow-sm">
-        <CardHeader>
-          <CardTitle>工具准入</CardTitle>
-          <CardDescription>工具候选由后端真实注册表下发；白名单只允许选中项，黑名单拒绝选中项</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),auto] md:items-end">
-            <Field label="准入模式">
-              <Select value={settings.toolAccessMode} onValueChange={(value) => setToolMode(value as ToolSettings['toolAccessMode'])}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="allow">白名单</SelectItem>
-                  <SelectItem value="deny">黑名单</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
+      {accessSection ? (
+        <div className="flex min-h-0 flex-1 flex-col gap-4">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
+            <div className="inline-flex h-8 items-center gap-2 rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm">
+              <span className={cn(settings.toolAccessMode === 'deny' ? 'text-foreground' : 'text-muted-foreground')}>黑名单</span>
+              <Switch
+                checked={settings.toolAccessMode === 'allow'}
+                onCheckedChange={(checked) => setToolMode(checked ? 'allow' : 'deny')}
+              />
+              <span className={cn(settings.toolAccessMode === 'allow' ? 'text-foreground' : 'text-muted-foreground')}>白名单</span>
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={() => setAllTools(true)}>全选</Button>
               <Button variant="outline" size="sm" onClick={() => setAllTools(false)}>全不选</Button>
               <Button variant="outline" size="sm" onClick={resetTools}>重置</Button>
             </div>
           </div>
-          <div className="grid gap-2">
+          <div className="flex min-h-0 flex-1 flex-col gap-2">
             <div className="text-sm font-medium">{settings.toolAccessMode === 'allow' ? '白名单工具' : '黑名单工具'}</div>
             <OptionList
+              fill
               empty="后端没有下发工具候选"
               items={toolOptions}
               selected={(name) => selectedToolSet.has(name)}
               onToggle={setToolSelected}
             />
           </div>
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-lg shadow-sm">
-        <CardHeader>
-          <CardTitle>Shell</CardTitle>
-          <CardDescription>可见指令由后端按当前配置和 PATH 下发，命令 deny 仍支持正则</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2">
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          <div>
+            <Field label="工作区根目录">
+              <Input value={settings.workspaceRoot} onChange={(event) => setSettings({ ...settings, workspaceRoot: event.target.value })} />
+            </Field>
+          </div>
+          <div className="grid gap-4 md:grid-cols-3">
             <Field label="Shell 执行方式">
               <Select
                 value={settings.shellUseHostPath ? 'host' : 'sandbox'}
@@ -839,6 +923,37 @@ function ToolsSettingsPanel({
                 </SelectContent>
               </Select>
             </Field>
+            <Field label="Shell 策略模式">
+              <Select value={settings.sandbox} onValueChange={(value) => setSettings({ ...settings, sandbox: value as ToolSettings['sandbox'] })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off">off</SelectItem>
+                  <SelectItem value="enforce">enforce</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Shell 沙箱后端">
+              <Select
+                value={settings.sandboxBackend}
+                onValueChange={(value) => setSettings({ ...settings, sandboxBackend: value as ToolSettings['sandboxBackend'] })}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">auto</SelectItem>
+                  <SelectItem value="none">none</SelectItem>
+                  <SelectItem value="bwrap">bwrap</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="网络">
+              <Select value={settings.network} onValueChange={(value) => setSettings({ ...settings, network: value as ToolSettings['network'] })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="disabled">disabled</SelectItem>
+                  <SelectItem value="enabled">enabled</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
             <Field label="单条工具结果上限">
               <Input
                 type="number"
@@ -847,61 +962,84 @@ function ToolsSettingsPanel({
                 onChange={(event) => setSettings({ ...settings, maxOutput: Number(event.target.value) })}
               />
             </Field>
-            <Field label="PATH 来源">
-              <Select
-                value={settings.shellPathMode}
-                onValueChange={(value) => setSettings({ ...settings, shellPathMode: value as ToolSettings['shellPathMode'] })}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="system">使用系统 PATH</SelectItem>
-                  <SelectItem value="custom">手动输入 PATH</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="PATH">
-              <Input
-                value={settings.shellPathMode === 'system' ? options.systemPath : settings.shellPath}
-                disabled={settings.shellPathMode === 'system'}
-                onChange={(event) => setSettings({ ...settings, shellPath: event.target.value })}
-              />
-            </Field>
-            <div className="grid gap-2">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-medium">可见指令</div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setSettings({ ...settings, shellAllowCommands: shellCommandOptions.map((command) => command.name) })}>
-                    全选
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => setSettings({ ...settings, shellAllowCommands: [] })}>
-                    全不选
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => void scanShellCommands()} disabled={scanning}>
-                    <RefreshCw className={cn('h-4 w-4', scanning && 'animate-spin')} />
-                    {scanning ? '扫描中' : '扫描'}
-                  </Button>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 content-start">
+              <div className="grid gap-2 text-sm font-medium">
+                <span>PATH 来源</span>
+                <div className="inline-flex h-10 w-fit items-center gap-2 rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm">
+                  <span className={cn(settings.shellPathMode === 'system' ? 'text-foreground' : 'text-muted-foreground')}>系统</span>
+                  <Switch
+                    checked={settings.shellPathMode === 'custom'}
+                    onCheckedChange={(checked) => setSettings({ ...settings, shellPathMode: checked ? 'custom' : 'system' })}
+                  />
+                  <span className={cn(settings.shellPathMode === 'custom' ? 'text-foreground' : 'text-muted-foreground')}>手动</span>
                 </div>
               </div>
-              <OptionList
-                empty="后端没有下发可见指令候选"
-                items={shellCommandOptions.map((command) => ({
-                  name: command.name,
-                  description: command.path ?? '当前 PATH 未找到，保存后也不会被 bwrap 投射',
-                }))}
-                selected={(name) => shellCommandSet.has(name)}
-                renderMeta={(item) => {
-                  const command = shellCommandOptions.find((option) => option.name === item.name);
-                  return command?.available ? null : <Badge variant="outline">未找到</Badge>;
-                }}
-                onToggle={setShellCommand}
+              <PathListField
+                label="PATH"
+                value={settings.shellPathMode === 'system' ? options.systemPath : settings.shellPath}
+                disabled={settings.shellPathMode === 'system'}
+                onChange={(value) => setSettings({ ...settings, shellPath: value })}
               />
             </div>
             <Field label="Shell deny 正则">
-              <Textarea rows={8} value={shellDenyText} onChange={(event) => setShellDenyText(event.target.value)} />
+              <Textarea rows={10} value={shellDenyText} onChange={(event) => setShellDenyText(event.target.value)} />
             </Field>
-        </CardContent>
-      </Card>
-    </div>
+          </div>
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-medium">可见指令</div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const next = new Set(settings.shellAllowCommands);
+                    for (const command of filteredShellCommandOptions) next.add(command.name);
+                    setSettings({ ...settings, shellAllowCommands: [...next].sort() });
+                  }}
+                >
+                  全选当前
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const visible = new Set(filteredShellCommandOptions.map((command) => command.name));
+                    setSettings({ ...settings, shellAllowCommands: settings.shellAllowCommands.filter((name) => !visible.has(name)) });
+                  }}
+                >
+                  清空当前
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => void scanShellCommands()} disabled={scanning}>
+                  <RefreshCw className={cn('h-4 w-4', scanning && 'animate-spin')} />
+                  {scanning ? '扫描中' : '扫描'}
+                </Button>
+              </div>
+            </div>
+            <Input
+              value={shellCommandQuery}
+              onChange={(event) => setShellCommandQuery(event.target.value)}
+              placeholder={`搜索命令或路径，当前 ${filteredShellCommandOptions.length} / ${shellCommandOptions.length}`}
+            />
+            <OptionList
+              empty={shellCommandQuery.trim() ? '没有匹配的可见指令' : '后端没有下发可见指令候选'}
+              items={filteredShellCommandOptions.map((command) => ({
+                name: command.name,
+                description: command.path ?? '当前 PATH 未找到，保存后也不会被 bwrap 投射',
+              }))}
+              selected={(name) => shellCommandSet.has(name)}
+              renderMeta={(item) => {
+                const command = shellCommandOptions.find((option) => option.name === item.name);
+                return command?.available ? null : <Badge variant="outline">未找到</Badge>;
+              }}
+              onToggle={setShellCommand}
+            />
+          </div>
+        </div>
+      )}
+    </SettingsPanelShell>
   );
 }
 
@@ -1002,6 +1140,7 @@ function DatasourceSettingsPanel({ page }: { page: DatasourceSettingsPage }) {
       name: datasourceForm.name.trim(),
       type: datasourceForm.type,
       status: datasourceForm.status,
+      enabled: datasourceForm.enabled,
       connection,
       poolConfig,
     };
@@ -1151,7 +1290,10 @@ function DatasourceSettingsPanel({ page }: { page: DatasourceSettingsPage }) {
               >
                 <span className="flex min-w-0 items-center justify-between gap-2">
                   <span className="truncate text-sm font-medium">{item.name}</span>
-                  <Badge variant={statusVariant(item.status)}>{item.status}</Badge>
+                  <span className="flex shrink-0 items-center gap-1">
+                    {!item.enabled && <Badge variant="outline">LLM 隐藏</Badge>}
+                    <Badge variant={statusVariant(item.status)}>{item.status}</Badge>
+                  </span>
                 </span>
                 <span className="text-xs text-muted-foreground">{item.type}</span>
               </button>
@@ -1170,6 +1312,17 @@ function DatasourceSettingsPanel({ page }: { page: DatasourceSettingsPage }) {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-2 text-sm font-medium md:col-span-2">
+                    <span>LLM 可见性</span>
+                    <div className="inline-flex h-10 w-fit items-center gap-2 rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm">
+                      <span className={cn(!datasourceForm.enabled ? 'text-foreground' : 'text-muted-foreground')}>隐藏</span>
+                      <Switch
+                        checked={datasourceForm.enabled}
+                        onCheckedChange={(enabled) => setDatasourceForm({ ...datasourceForm, enabled })}
+                      />
+                      <span className={cn(datasourceForm.enabled ? 'text-foreground' : 'text-muted-foreground')}>可见</span>
+                    </div>
+                  </div>
                   <Field label="名称">
                     <Input value={datasourceForm.name} onChange={(event) => setDatasourceForm({ ...datasourceForm, name: event.target.value })} />
                   </Field>
@@ -1457,7 +1610,6 @@ export function SettingsView({ embedded = false, onWorkspaceChanged }: { embedde
       <div className={cn('mx-auto flex max-w-7xl flex-col gap-4 px-6 py-5', embedded && 'h-full min-h-0 w-full')}>
         {!embedded && <div>
           <h1 className="text-xl font-semibold">设置</h1>
-          <p className="mt-1 text-sm text-muted-foreground">外观、用量展示、运行策略和数据源</p>
         </div>}
 
         <div className={cn('grid items-start gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]', embedded && 'h-full min-h-0 flex-1')}>
@@ -1477,8 +1629,11 @@ export function SettingsView({ embedded = false, onWorkspaceChanged }: { embedde
                 </SectionButton>
               </NavGroup>
               <NavGroup label="工具">
+                <SectionButton active={panel === 'tools-access'} icon={<Shield className="h-4 w-4" />} onClick={() => setPanel('tools-access')}>
+                  工具准入
+                </SectionButton>
                 <SectionButton active={panel === 'tools-sandbox'} icon={<Wrench className="h-4 w-4" />} onClick={() => setPanel('tools-sandbox')}>
-                  沙箱
+                  Shell / 沙箱
                 </SectionButton>
               </NavGroup>
               <NavGroup label="数据源">
@@ -1498,11 +1653,12 @@ export function SettingsView({ embedded = false, onWorkspaceChanged }: { embedde
             </CardContent>
           </Card>
 
-          <div className={cn('min-w-0', embedded && 'h-full min-h-0 pr-1', embedded && (datasourcePanel ? 'overflow-hidden' : 'overflow-y-auto'))}>
+          <div className={cn('min-w-0', embedded && 'h-full min-h-0 overflow-hidden pr-1')}>
             {panel === 'appearance' && <AppearanceSettingsPanel />}
             {panel === 'status-card' && <StatusCardSettingsPanel />}
             {panel === 'usage-stats' && <UsageStatsSettingsPanel />}
-            {panel === 'tools-sandbox' && <ToolsSettingsPanel onWorkspaceChanged={onWorkspaceChanged} />}
+            {panel === 'tools-access' && <ToolsSettingsPanel onWorkspaceChanged={onWorkspaceChanged} section="access" />}
+            {panel === 'tools-sandbox' && <ToolsSettingsPanel onWorkspaceChanged={onWorkspaceChanged} section="sandbox-shell" />}
             {datasourcePanel && <DatasourceSettingsPanel page={panel} />}
           </div>
         </div>

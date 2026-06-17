@@ -27,6 +27,7 @@ export interface DatasourceRow {
   name: string;
   type: DatasourceType;
   status: DatasourceStatus;
+  enabled: boolean;
   connection: Record<string, unknown>;
   admin_config: Record<string, unknown>;
   pool_config: Record<string, unknown>;

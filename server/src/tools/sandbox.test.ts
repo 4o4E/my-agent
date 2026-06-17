@@ -1,10 +1,11 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   buildBwrapArgs,
+  buildShellSpawnSpec,
   describeShellSandbox,
   findExecutable,
   parentDirs,
@@ -58,6 +59,45 @@ test('scanExecutableNames returns executable files from PATH directories', async
   await chmod(bin, 0o755);
 
   assert.deepEqual(scanExecutableNames(dir), ['scan-me']);
+});
+
+test('buildShellSpawnSpec limits host PATH to selected commands', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'my-agent-sandbox-'));
+  tempDirs.push(dir);
+  const allowed = join(dir, 'allowed');
+  const hidden = join(dir, 'hidden');
+  await writeFile(allowed, '#!/bin/sh\n');
+  await writeFile(hidden, '#!/bin/sh\n');
+  await chmod(allowed, 0o755);
+  await chmod(hidden, 0o755);
+
+  const spec = buildShellSpawnSpec('allowed', {
+    policyMode: 'off',
+    backend: 'none',
+    workspaceRoot: dir,
+    allowCommands: ['allowed'],
+    useHostPath: false,
+    envPath: dir,
+    shareNet: false,
+  });
+  assert.equal(spec.backend, 'host');
+  assert.notEqual(spec.env?.PATH, dir);
+  assert.deepEqual(await readdir(spec.env?.PATH ?? ''), ['allowed']);
+  await Promise.all((spec.cleanupPaths ?? []).map((path) => rm(path, { recursive: true, force: true })));
+
+  const hostSpec = buildShellSpawnSpec('allowed', {
+    policyMode: 'off',
+    backend: 'none',
+    workspaceRoot: dir,
+    allowCommands: ['allowed'],
+    useHostPath: true,
+    envPath: dir,
+    shareNet: false,
+  });
+  assert.equal(hostSpec.backend, 'host');
+  assert.notEqual(hostSpec.env?.PATH, dir);
+  assert.deepEqual(await readdir(hostSpec.env?.PATH ?? ''), ['allowed']);
+  await Promise.all((hostSpec.cleanupPaths ?? []).map((path) => rm(path, { recursive: true, force: true })));
 });
 
 test('buildBwrapArgs confines workspace and hides network by default', () => {
@@ -133,6 +173,6 @@ test('describeShellSandbox reports effective shell mode', () => {
       useHostPath: true,
       shareNet: false,
     }),
-    'host (PATH: host)',
+    'host (visible commands)',
   );
 });

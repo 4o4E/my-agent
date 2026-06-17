@@ -40,6 +40,7 @@
 
 - **提交**：Conventional Commits（`feat(server): …` / `fix(web): …`）。提交前 `npm test` 必须全绿。
 - **提交时机**：仅在用户明确要求时提交/推送。
+- **前端组件**：能用组件库的控件一律用组件库，优先复用 `web/src/components/ui/` 已有 shadcn 组件；缺少组件时按 shadcn/Radix 官方模式补本地封装，不要手写外观相似但行为自造的替代组件。
 - **压缩不变式**（改压缩务必守住，见设计文档 §6）：
   - `tool_call ↔ tool_result` 配对永不破坏；
   - `messages.content` 永远是原始内容，压缩只派生视图、从不覆盖/删除；

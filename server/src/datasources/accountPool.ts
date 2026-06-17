@@ -51,6 +51,10 @@ function numberValue(value: unknown, fallback: number): number {
   return Math.floor(value);
 }
 
+function boolValue(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
 function poolNumber(profile: PermissionProfileRow, datasource: DatasourceRow, key: string, fallback: number): number {
   const profileValue = profile.pool_config[key];
   if (typeof profileValue === 'number') return numberValue(profileValue, fallback);
@@ -102,14 +106,16 @@ export async function createDatasource(input: unknown): Promise<DatasourceRow> {
   const name = stringValue(body.name);
   if (!name) throw new DatasourceError(400, 'name 为必填');
   const type = datasourceType(body.type);
+  const enabled = boolValue(body.enabled, true);
   const { rows } = await query<DatasourceRow>(
-    `INSERT INTO datasources (id, name, type, connection, admin_config, pool_config)
-     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)
+    `INSERT INTO datasources (id, name, type, enabled, connection, admin_config, pool_config)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb)
      RETURNING *`,
     [
       id,
       name,
       type,
+      enabled,
       JSON.stringify(jsonObject(body.connection)),
       JSON.stringify(jsonObject(body.adminConfig)),
       JSON.stringify(jsonObject(body.poolConfig)),
@@ -134,13 +140,15 @@ export async function updateDatasource(id: string, input: unknown): Promise<Data
   const body = jsonObject(input);
   const name = stringValue(body.name, current.name);
   const status = body.status === 'disabled' ? 'disabled' : body.status === 'active' ? 'active' : current.status;
+  const enabled = boolValue(body.enabled, current.enabled);
   const { rows } = await query<DatasourceRow>(
     `UPDATE datasources
      SET name = $2,
          status = $3,
-         connection = $4::jsonb,
-         admin_config = $5::jsonb,
-         pool_config = $6::jsonb,
+         enabled = $4,
+         connection = $5::jsonb,
+         admin_config = $6::jsonb,
+         pool_config = $7::jsonb,
          updated_at = now()
      WHERE id = $1
      RETURNING *`,
@@ -148,6 +156,7 @@ export async function updateDatasource(id: string, input: unknown): Promise<Data
       id,
       name,
       status,
+      enabled,
       JSON.stringify('connection' in body ? jsonObject(body.connection) : current.connection),
       JSON.stringify('adminConfig' in body ? jsonObject(body.adminConfig) : current.admin_config),
       JSON.stringify('poolConfig' in body ? jsonObject(body.poolConfig) : current.pool_config),
@@ -354,6 +363,7 @@ async function loadDatasourceAndProfile(datasourceId: string, profileName: strin
   );
   const row = rows[0];
   if (!row) throw new DatasourceError(404, '数据源或权限档位不存在');
+  if (!row.enabled) throw new DatasourceError(409, '数据源未启用，LLM 运行期不可访问');
   if (row.status !== 'active') throw new DatasourceError(409, '数据源已禁用');
   return {
     datasource: {
@@ -361,6 +371,7 @@ async function loadDatasourceAndProfile(datasourceId: string, profileName: strin
       name: row.name,
       type: row.type,
       status: row.status,
+      enabled: row.enabled,
       connection: row.connection,
       admin_config: row.admin_config,
       pool_config: row.pool_config,
@@ -543,6 +554,7 @@ async function loadLease(id: string): Promise<{
     datasource_connection: Record<string, unknown>;
     datasource_admin_config: Record<string, unknown>;
     datasource_pool_config: Record<string, unknown>;
+    datasource_enabled: boolean;
   }>(
     `SELECT l.*,
             a.username AS account_username,
@@ -550,6 +562,7 @@ async function loadLease(id: string): Promise<{
             ds.name AS datasource_name,
             ds.type AS datasource_type,
             ds.status AS datasource_status,
+            ds.enabled AS datasource_enabled,
             ds.connection AS datasource_connection,
             ds.admin_config AS datasource_admin_config,
             ds.pool_config AS datasource_pool_config
@@ -583,6 +596,7 @@ async function loadLease(id: string): Promise<{
       name: row.datasource_name,
       type: row.datasource_type,
       status: row.datasource_status as DatasourceRow['status'],
+      enabled: row.datasource_enabled,
       connection: row.datasource_connection,
       admin_config: row.datasource_admin_config,
       pool_config: row.datasource_pool_config,

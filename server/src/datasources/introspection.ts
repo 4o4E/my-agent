@@ -22,6 +22,7 @@ function draftDatasource(input: unknown): DatasourceRow {
     name: stringValue(body.name, 'draft'),
     type: datasourceType(body.type),
     status: body.status === 'disabled' ? 'disabled' : 'active',
+    enabled: typeof body.enabled === 'boolean' ? body.enabled : true,
     connection: jsonObject(body.connection),
     admin_config: jsonObject(body.adminConfig),
     pool_config: jsonObject(body.poolConfig),

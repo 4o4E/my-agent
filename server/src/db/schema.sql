@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS datasources (
   name          TEXT NOT NULL,
   type          TEXT NOT NULL CHECK (type IN ('postgres', 'mysql', 'mongodb', 'hive')),
   status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  enabled       BOOLEAN NOT NULL DEFAULT true,
   connection    JSONB NOT NULL DEFAULT '{}'::jsonb,
   admin_config  JSONB NOT NULL DEFAULT '{}'::jsonb,
   pool_config   JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -113,6 +114,8 @@ CREATE TABLE IF NOT EXISTS datasources (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_datasources_name ON datasources(name);
+
+ALTER TABLE datasources ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true;
 
 -- 权限档位：例如 readonly / limited_write。账号池账号只绑定档位，不在 run
 -- 开始时临时拼复杂授权，避免权限漂移。

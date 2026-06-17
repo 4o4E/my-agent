@@ -20,10 +20,12 @@ export function publicDatasourceForTool(datasource: DatasourceRow, profiles: Per
     name: datasource.name,
     type: datasource.type,
     status: datasource.status,
+    enabled: datasource.enabled,
     connection: redactValue(datasource.connection),
     hasAdminConfig: Object.keys(datasource.admin_config).length > 0,
-    usable: datasource.status === 'active' && profiles.length > 0,
+    usable: datasource.enabled && datasource.status === 'active' && profiles.length > 0,
     issues: [
+      ...(datasource.enabled ? [] : ['not_enabled']),
       ...(profiles.length ? [] : ['profiles_empty']),
       ...(Object.keys(datasource.admin_config).length > 0 ? [] : ['admin_config_empty']),
     ],
@@ -46,7 +48,7 @@ export const datasourceListTool: Tool = {
   },
   async run(args) {
     const includeDisabled = args.includeDisabled === true;
-    const datasources = (await listDatasources()).filter((datasource) => includeDisabled || datasource.status === 'active');
+    const datasources = (await listDatasources()).filter((datasource) => datasource.enabled && (includeDisabled || datasource.status === 'active'));
     const result = [];
     for (const datasource of datasources) {
       result.push(publicDatasourceForTool(datasource, await listPermissionProfiles(datasource.id)));

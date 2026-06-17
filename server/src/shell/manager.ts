@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readFile, unlink } from 'node:fs/promises';
+import { readFile, rm, unlink } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { runBus } from '../agent/bus.js';
 import type { AgentEvent } from '../agent/types.js';
@@ -35,6 +35,7 @@ interface ActiveCommand {
   step: number;
   startedAt: number;
   outputBytes: number;
+  cleanupPaths: string[];
   softTimer?: NodeJS.Timeout;
   hardTimer?: NodeJS.Timeout;
   killRequested?: boolean;
@@ -414,6 +415,7 @@ export class ShellManager {
       step: input.context.step ?? 0,
       startedAt: Date.now(),
       outputBytes: 0,
+      cleanupPaths: spec.cleanupPaths ?? [],
       writeChain: Promise.resolve(),
     };
     this.active.set(input.command.id, active);
@@ -524,6 +526,7 @@ export class ShellManager {
     await sleep(25);
     await active.writeChain;
     this.active.delete(active.commandId);
+    await Promise.all(active.cleanupPaths.map((path) => rm(path, { recursive: true, force: true }).catch(() => undefined)));
 
     const rowBefore = await store.getShellCommand(active.commandId);
     const finalStatus = rowBefore?.attention === 'hard_timeout' ? 'timed_out' : active.killRequested ? 'killed' : status;

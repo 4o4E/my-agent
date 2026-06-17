@@ -9,6 +9,7 @@ export interface Datasource {
   name: string;
   type: DatasourceType;
   status: DatasourceStatus;
+  enabled: boolean;
   connection: Record<string, unknown>;
   pool_config: Record<string, unknown>;
   hasAdminConfig: boolean;
@@ -60,6 +61,7 @@ export interface DatasourceInput {
   name: string;
   type: DatasourceType;
   status?: DatasourceStatus;
+  enabled?: boolean;
   connection: Record<string, unknown>;
   adminConfig?: Record<string, unknown>;
   poolConfig?: Record<string, unknown>;
