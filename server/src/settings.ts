@@ -1,12 +1,25 @@
 import { resolve } from 'node:path';
-import type { LlmAiSdkFlavor, LlmModelOption, LlmProviderName, LlmProviderSettings, LlmSettings, SandboxBackendName, ToolSettings } from '@my-agent/contracts';
-export type { LlmModelOption, LlmProviderSettings, LlmSettings, ToolSettings } from '@my-agent/contracts';
+import type {
+  LlmAiSdkFlavor,
+  LlmModelOption,
+  LlmProviderName,
+  LlmProviderSettings,
+  LlmSettings,
+  McpEnvSettings,
+  McpHeaderSettings,
+  McpServerSettings,
+  McpSettings,
+  SandboxBackendName,
+  ToolSettings,
+} from '@my-agent/contracts';
+export type { LlmModelOption, LlmProviderSettings, LlmSettings, McpServerSettings, McpSettings, ToolSettings } from '@my-agent/contracts';
 import { config } from './config.js';
 import { query } from './db/pool.js';
 
 type SettingRow = { key: string; value: unknown };
 const PAGE_STATE_KEY = 'ui.pageState';
 const LLM_SETTINGS_KEY = 'llm.settings';
+const MCP_SETTINGS_KEY = 'mcp.settings';
 const MAX_PAGE_STATE_BYTES = 200_000;
 
 const TOOL_SETTING_KEYS = [
@@ -103,6 +116,29 @@ function uniqStrings(items: string[]): string[] {
   return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
 }
 
+function keyValueList<T extends McpHeaderSettings | McpEnvSettings>(value: unknown): T[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      const name = typeof row.name === 'string' ? row.name.trim() : '';
+      const value = typeof row.value === 'string' ? row.value : '';
+      return name ? ({ name, value } as T) : null;
+    })
+    .filter((item): item is T => Boolean(item));
+}
+
+function mcpServerIdValue(value: unknown, fallback: string): string {
+  const raw = stringValue(value, fallback)
+    .replace(/[^0-9A-Za-z_.-]/g, '-')
+    .replace(/_{2,}/g, '-');
+  return raw || fallback;
+}
+
+function mcpTransportValue(value: unknown, fallback: McpServerSettings['transport']): McpServerSettings['transport'] {
+  return value === 'stdio' || value === 'http' ? value : fallback;
+}
+
 function defaultToolSettings(): ToolSettings {
   return {
     sandbox: config.tools.sandbox,
@@ -153,6 +189,10 @@ function defaultLlmSettings(): LlmSettings {
     defaultModelRef: modelRef(provider.id, provider.defaultModel),
     providers: [provider],
   };
+}
+
+function defaultMcpSettings(): McpSettings {
+  return { servers: [] };
 }
 
 function rowsToMap(rows: SettingRow[]): Map<string, unknown> {
@@ -253,6 +293,87 @@ export async function saveToolSettings(input: unknown): Promise<ToolSettings> {
       [key, JSON.stringify(value)],
     );
   }
+  return settings;
+}
+
+function normalizeMcpServer(input: unknown, fallback: McpServerSettings, usedIds: Set<string>): McpServerSettings {
+  const body = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const rawId = mcpServerIdValue(body.id, fallback.id);
+  let id = rawId;
+  for (let i = 2; usedIds.has(id); i += 1) id = `${rawId}-${i}`;
+  usedIds.add(id);
+  return {
+    id,
+    label: stringValue(body.label, fallback.label || id),
+    enabled: boolValue(body.enabled, fallback.enabled),
+    transport: mcpTransportValue(body.transport, fallback.transport),
+    command: stringValue(body.command, fallback.command),
+    args: stringList(body.args, fallback.args),
+    cwd: typeof body.cwd === 'string' ? body.cwd.trim() : fallback.cwd,
+    env: keyValueList<McpEnvSettings>(body.env),
+    url: stringValue(body.url, fallback.url),
+    bearerToken: typeof body.bearerToken === 'string' ? body.bearerToken : fallback.bearerToken,
+    headers: keyValueList<McpHeaderSettings>(body.headers),
+    allowedTools: uniqStrings(stringList(body.allowedTools, fallback.allowedTools)),
+    timeoutMs: positiveIntValue(body.timeoutMs, fallback.timeoutMs, 1000, 600_000),
+    maxOutput: outputLimitValue(body.maxOutput, fallback.maxOutput),
+  };
+}
+
+export function normalizeMcpSettings(input: unknown): McpSettings {
+  const defaults = defaultMcpSettings();
+  const body = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const rawServers = Array.isArray(body.servers) ? body.servers : defaults.servers;
+  const usedIds = new Set<string>();
+  const fallback: McpServerSettings = {
+    id: 'mcp',
+    label: 'MCP Server',
+    enabled: false,
+    transport: 'stdio',
+    command: '',
+    args: [],
+    cwd: '',
+    env: [],
+    url: '',
+    bearerToken: '',
+    headers: [],
+    allowedTools: [],
+    timeoutMs: 60_000,
+    maxOutput: 40_000,
+  };
+  return {
+    servers: rawServers.map((server, index) => normalizeMcpServer(server, { ...fallback, id: `mcp-${index + 1}` }, usedIds)),
+  };
+}
+
+export async function getMcpSettings(): Promise<McpSettings> {
+  try {
+    const { rows } = await query<SettingRow>(`SELECT value FROM app_settings WHERE key = $1`, [MCP_SETTINGS_KEY]);
+    if (!rows.length) {
+      const defaults = defaultMcpSettings();
+      await query(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ($1, $2::jsonb, now())
+         ON CONFLICT (key) DO NOTHING`,
+        [MCP_SETTINGS_KEY, JSON.stringify(defaults)],
+      );
+      return defaults;
+    }
+    return normalizeMcpSettings(rows[0].value);
+  } catch (err) {
+    warnOnce('mcp-settings-fallback', `MCP settings fallback to empty defaults: ${(err as Error).message}`);
+    return defaultMcpSettings();
+  }
+}
+
+export async function saveMcpSettings(input: unknown): Promise<McpSettings> {
+  const settings = normalizeMcpSettings(input);
+  await query(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ($1, $2::jsonb, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [MCP_SETTINGS_KEY, JSON.stringify(settings)],
+  );
   return settings;
 }
 

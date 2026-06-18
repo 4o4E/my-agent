@@ -12,6 +12,10 @@ import type {
   LlmProviderSettings,
   LlmSettings,
   LlmSettingsOptions,
+  McpServerProbeResult,
+  McpServerSettings,
+  McpSettings,
+  McpSettingsOptions,
   PageState,
   PermissionProfile,
   PermissionProfileInput,
@@ -108,6 +112,24 @@ export const updateToolSettings = (settings: ToolSettings) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   }).then(json<ToolSettings>);
+
+export const getMcpSettings = () => fetch('/api/settings/mcp').then(json<McpSettings>);
+
+export const getMcpSettingsOptions = () => fetch('/api/settings/mcp/options').then(json<McpSettingsOptions>);
+
+export const updateMcpSettings = (settings: McpSettings) =>
+  fetch('/api/settings/mcp', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  }).then(json<McpSettings>);
+
+export const probeMcpServer = (server: McpServerSettings) =>
+  fetch('/api/settings/mcp/server/probe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ server }),
+  }).then(json<McpServerProbeResult>);
 
 export const getLlmSettings = () => fetch('/api/settings/llm').then(json<LlmSettings>);
 

@@ -15,13 +15,15 @@ import { publicDatasourceForTool } from './datasourceList.js';
 import { shellExecTool } from './managedShell.js';
 import { requiresDatabaseAccess } from './databaseAccessGuard.js';
 import type { ToolResult, ToolRunContext } from './types.js';
-import { normalizeToolSettings } from '../settings.js';
+import { normalizeMcpSettings, normalizeToolSettings } from '../settings.js';
 import { shellCommandOptions, toolOptions } from '../api/settings.js';
+import { mcpToolName, parseMcpToolName } from '../mcp/client.js';
 
 /** 工具可能返回 string 或 ToolResult，测试统一取文本断言。 */
 const text = (r: string | ToolResult): string => (typeof r === 'string' ? r : r.text);
 
 let dir: string;
+const emptyMcpSettings = { servers: [] };
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), 'my-agent-test-'));
@@ -36,7 +38,7 @@ after(async () => {
 });
 
 test('registry exposes neutral tool schemas and dispatches by name', async () => {
-  const schemas = toolSchemas();
+  const schemas = await toolSchemas(undefined, emptyMcpSettings);
   assert.ok(schemas.find((s) => s.name === 'shell'));
   assert.equal(schemas.some((s) => s.name === 'finish_conversation'), false);
   assert.equal(schemas.some((s) => s.name.includes('artifact')), false);
@@ -44,17 +46,17 @@ test('registry exposes neutral tool schemas and dispatches by name', async () =>
   assert.ok(schemas.find((s) => s.name === 'workflow_list'));
   assert.ok(schemas.find((s) => s.name === 'workflow_read'));
   assert.ok(schemas.find((s) => s.name === 'datasource_list'));
-  assert.ok(toolSchemas(['file_read']).some((s) => s.name === 'file_read'));
-  assert.equal(toolSchemas(['file_read']).some((s) => s.name === 'shell'), false);
-  assert.ok(toolSchemas(['file_read']).some((s) => s.name === 'update_plan'));
-  assert.ok(toolSchemas(['file_read']).some((s) => s.name === 'workflow_read'));
-  assert.ok(toolSchemas(['datasource_list']).some((s) => s.name === 'datasource_list'));
+  assert.ok((await toolSchemas(['file_read'], emptyMcpSettings)).some((s) => s.name === 'file_read'));
+  assert.equal((await toolSchemas(['file_read'], emptyMcpSettings)).some((s) => s.name === 'shell'), false);
+  assert.ok((await toolSchemas(['file_read'], emptyMcpSettings)).some((s) => s.name === 'update_plan'));
+  assert.ok((await toolSchemas(['file_read'], emptyMcpSettings)).some((s) => s.name === 'workflow_read'));
+  assert.ok((await toolSchemas(['datasource_list'], emptyMcpSettings)).some((s) => s.name === 'datasource_list'));
   assert.ok(getTool('glob'));
   assert.match((await runTool('does_not_exist', {})).text, /未知工具/);
 });
 
-test('tool settings options come from backend tool registry and command resolution', () => {
-  const tools = toolOptions();
+test('tool settings options come from backend tool registry and command resolution', async () => {
+  const tools = await toolOptions(emptyMcpSettings);
   assert.ok(tools.find((tool) => tool.name === 'shell'));
   assert.ok(tools.find((tool) => tool.name === 'file_read'));
   assert.equal(tools.some((tool) => tool.name === 'finish_conversation'), false);
@@ -63,6 +65,18 @@ test('tool settings options come from backend tool registry and command resoluti
   assert.deepEqual(commands.map((command) => command.name).sort(), ['definitely_missing_command_for_test', 'sh']);
   assert.equal(commands.find((command) => command.name === 'sh')?.available, true);
   assert.equal(commands.find((command) => command.name === 'definitely_missing_command_for_test')?.available, false);
+});
+
+test('mcp tool names are mapped into a separate namespace', () => {
+  const name = mcpToolName('github', 'search');
+  assert.equal(name, 'mcp__github__search');
+  assert.deepEqual(parseMcpToolName(name), { serverId: 'github', toolName: 'search' });
+  assert.equal(parseMcpToolName('search'), null);
+});
+
+test('mcp server ids cannot collide with the tool-name separator', () => {
+  const settings = normalizeMcpSettings({ servers: [{ id: 'bad__server', label: 'Bad', transport: 'http', url: 'https://example.com/mcp' }] });
+  assert.equal(settings.servers[0].id, 'bad-server');
 });
 
 test('datasource_list public view redacts secrets and admin config', () => {

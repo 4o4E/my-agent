@@ -7,12 +7,15 @@ import {
   getDatasourceDetail,
   getLlmSettings,
   getLlmSettingsOptions,
+  getMcpSettings,
+  getMcpSettingsOptions,
   getThread,
   getToolSettings,
   getToolSettingsOptions,
   listDatasources,
   listThreads,
   pingLlmProvider,
+  probeMcpServer,
   probeLlmProviderModels,
   scanShellCommandOptions,
   testDatasource,
@@ -20,6 +23,7 @@ import {
   testLlmProviderChat,
   updateDatasource,
   updateLlmSettings,
+  updateMcpSettings,
   updatePermissionProfile,
   updateToolSettings,
   type AgentEvent,
@@ -34,6 +38,11 @@ import {
   type LlmProviderSettings,
   type LlmSettings,
   type LlmSettingsOptions,
+  type McpServerProbeResult,
+  type McpServerSettings,
+  type McpSettings,
+  type McpSettingsOptions,
+  type McpToolOption,
   type PermissionMode,
   type PermissionProfile,
   type PermissionProfileInput,
@@ -70,6 +79,7 @@ type SettingsPanel =
   | 'status-card'
   | 'usage-stats'
   | 'llm-models'
+  | 'mcp-client'
   | 'tools-sandbox'
   | 'tools-access'
   | 'datasource-connection'
@@ -379,6 +389,45 @@ const AI_SDK_FLAVOR_OPTIONS: Array<{ value: LlmProviderSettings['aisdkFlavor']; 
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
 ];
+
+function linesToList(text: string): string[] {
+  return text.split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+function keyValueRowsToText(rows: Array<{ name: string; value: string }>): string {
+  return rows.map((row) => `${row.name}=${row.value}`).join('\n');
+}
+
+function textToKeyValueRows(text: string): Array<{ name: string; value: string }> {
+  return text
+    .split('\n')
+    .map((line) => {
+      const sep = line.indexOf('=');
+      const name = (sep >= 0 ? line.slice(0, sep) : line).trim();
+      const value = sep >= 0 ? line.slice(sep + 1) : '';
+      return name ? { name, value } : null;
+    })
+    .filter((row): row is { name: string; value: string } => Boolean(row));
+}
+
+function newMcpServer(): McpServerSettings {
+  return {
+    id: `mcp-${Date.now()}`,
+    label: 'MCP Server',
+    enabled: false,
+    transport: 'stdio',
+    command: '',
+    args: [],
+    cwd: '',
+    env: [],
+    url: '',
+    bearerToken: '',
+    headers: [],
+    allowedTools: [],
+    timeoutMs: 60000,
+    maxOutput: 40000,
+  };
+}
 
 function llmModelPrefix(model: string): string {
   const separators = ['-', ':', '/', '_', '.'];
@@ -1117,6 +1166,220 @@ function ToolsSettingsPanel({
           </div>
         </div>
       )}
+    </SettingsPanelShell>
+  );
+}
+
+function McpSettingsPanel() {
+  const { notify } = useNotifications();
+  const [settings, setSettings] = useState<McpSettings | null>(null);
+  const [options, setOptions] = useState<McpSettingsOptions | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [probing, setProbing] = useState<string | null>(null);
+  const [probeResults, setProbeResults] = useState<Record<string, McpServerProbeResult>>({});
+  const [message, setMessage] = useState('');
+
+  async function reload() {
+    const [nextSettings, nextOptions] = await Promise.all([getMcpSettings(), getMcpSettingsOptions()]);
+    setSettings(nextSettings);
+    setOptions(nextOptions);
+  }
+
+  useEffect(() => {
+    reload().catch((err) => setMessage((err as Error).message));
+  }, []);
+
+  function updateServer(index: number, patch: Partial<McpServerSettings>) {
+    if (!settings) return;
+    const servers = settings.servers.map((server, rowIndex) => rowIndex === index ? { ...server, ...patch } : server);
+    setSettings({ servers });
+  }
+
+  function removeServer(index: number) {
+    if (!settings) return;
+    setSettings({ servers: settings.servers.filter((_, rowIndex) => rowIndex !== index) });
+  }
+
+  function toolsForServer(server: McpServerSettings): McpToolOption[] {
+    const probed = probeResults[server.id]?.tools;
+    if (probed) return probed;
+    return (options?.tools ?? []).filter((tool) => tool.serverId === server.id);
+  }
+
+  function setToolAllowed(index: number, toolName: string, checked: boolean) {
+    if (!settings) return;
+    const server = settings.servers[index];
+    const next = new Set(server.allowedTools);
+    if (checked) next.add(toolName);
+    else next.delete(toolName);
+    updateServer(index, { allowedTools: [...next].sort() });
+  }
+
+  async function save() {
+    if (!settings) return;
+    setSaving(true);
+    setMessage('');
+    try {
+      const next = await updateMcpSettings(settings);
+      setSettings(next);
+      setOptions(await getMcpSettingsOptions());
+      notify({ variant: 'success', title: 'MCP 配置已保存' });
+    } catch (err) {
+      const text = (err as Error).message;
+      setMessage(text);
+      notify({ variant: 'error', title: 'MCP 配置保存失败', description: text });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function probe(index: number) {
+    if (!settings) return;
+    const server = settings.servers[index];
+    setProbing(server.id);
+    try {
+      const result = await probeMcpServer(server);
+      setProbeResults((prev) => ({ ...prev, [server.id]: result }));
+      notify({ variant: result.ok ? 'success' : 'error', title: result.ok ? 'MCP 连接成功' : 'MCP 连接失败', description: result.message });
+    } catch (err) {
+      const result: McpServerProbeResult = { ok: false, message: (err as Error).message, toolCount: 0, tools: [] };
+      setProbeResults((prev) => ({ ...prev, [server.id]: result }));
+      notify({ variant: 'error', title: 'MCP 连接失败', description: result.message });
+    } finally {
+      setProbing(null);
+    }
+  }
+
+  if (!settings || !options) {
+    return <div className="flex min-h-64 items-center justify-center text-sm text-muted-foreground">正在读取配置...</div>;
+  }
+
+  return (
+    <SettingsPanelShell
+      title="MCP Client"
+      description="连接外部 MCP Server，并选择允许模型调用的远端工具"
+      contentClassName="grid content-start gap-4"
+      actions={
+        <>
+          {message && <span className="text-sm text-muted-foreground">{message}</span>}
+          <Button variant="outline" onClick={() => setSettings({ servers: [...settings.servers, newMcpServer()] })}>
+            <Plus className="h-4 w-4" />
+            添加
+          </Button>
+          <Button onClick={() => void save()} disabled={saving}>
+            <Save className="h-4 w-4" />
+            {saving ? '保存中' : '保存'}
+          </Button>
+        </>
+      }
+    >
+      {settings.servers.length === 0 && (
+        <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">还没有 MCP server。</div>
+      )}
+      {settings.servers.map((server, index) => {
+        const serverTools = toolsForServer(server);
+        const probeResult = probeResults[server.id];
+        const allowed = new Set(server.allowedTools);
+        return (
+          <Card key={`${server.id}-${index}`} className="rounded-lg shadow-sm">
+            <CardHeader className="space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="grid min-w-0 flex-1 gap-3 md:grid-cols-[minmax(0,12rem),minmax(0,1fr)]">
+                  <Field label="ID">
+                    <Input value={server.id} onChange={(event) => updateServer(index, { id: event.target.value })} />
+                  </Field>
+                  <Field label="名称">
+                    <Input value={server.label} onChange={(event) => updateServer(index, { label: event.target.value })} />
+                  </Field>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <Badge variant={server.enabled ? 'default' : 'outline'}>{server.enabled ? '已启用' : '未启用'}</Badge>
+                  <Switch checked={server.enabled} onCheckedChange={(checked) => updateServer(index, { enabled: checked })} />
+                  <Button variant="outline" size="icon" onClick={() => removeServer(index)} aria-label="删除 MCP server">
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-4">
+                <Field label="传输">
+                  <Select value={server.transport} onValueChange={(value) => updateServer(index, { transport: value as McpServerSettings['transport'] })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="stdio">stdio（本地进程）</SelectItem>
+                      <SelectItem value="http">HTTP（远程服务）</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="超时 ms">
+                  <Input type="number" min={1000} value={server.timeoutMs} onChange={(event) => updateServer(index, { timeoutMs: Number(event.target.value) })} />
+                </Field>
+                <Field label="结果上限">
+                  <Input type="number" min={1000} value={server.maxOutput} onChange={(event) => updateServer(index, { maxOutput: Number(event.target.value) })} />
+                </Field>
+                <div className="flex items-end">
+                  <Button variant="outline" className="w-full" onClick={() => void probe(index)} disabled={probing === server.id}>
+                    <RefreshCw className={cn('h-4 w-4', probing === server.id && 'animate-spin')} />
+                    {probing === server.id ? '测试中' : '测试'}
+                  </Button>
+                </div>
+              </div>
+              {probeResult && (
+                <div className={cn('rounded-md border px-3 py-2 text-sm', probeResult.ok ? 'text-foreground' : 'text-destructive')}>
+                  {probeResult.message}
+                </div>
+              )}
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              {server.transport === 'stdio' ? (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label="command">
+                    <Input value={server.command} onChange={(event) => updateServer(index, { command: event.target.value })} placeholder="node" />
+                  </Field>
+                  <Field label="cwd">
+                    <Input value={server.cwd} onChange={(event) => updateServer(index, { cwd: event.target.value })} placeholder="/path/to/server" />
+                  </Field>
+                  <Field label="args">
+                    <Textarea rows={4} value={server.args.join('\n')} onChange={(event) => updateServer(index, { args: linesToList(event.target.value) })} />
+                  </Field>
+                  <Field label="env">
+                    <Textarea rows={4} value={keyValueRowsToText(server.env)} onChange={(event) => updateServer(index, { env: textToKeyValueRows(event.target.value) })} />
+                  </Field>
+                </div>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label="URL">
+                    <Input value={server.url} onChange={(event) => updateServer(index, { url: event.target.value })} placeholder="https://example.com/mcp" />
+                  </Field>
+                  <Field label="Bearer Token">
+                    <Input type="password" value={server.bearerToken} onChange={(event) => updateServer(index, { bearerToken: event.target.value })} />
+                  </Field>
+                  <div className="md:col-span-2">
+                    <Field label="Headers">
+                      <Textarea rows={4} value={keyValueRowsToText(server.headers)} onChange={(event) => updateServer(index, { headers: textToKeyValueRows(event.target.value) })} />
+                    </Field>
+                  </div>
+                </div>
+              )}
+              <div className="grid gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium">允许工具</div>
+                  <div className="text-xs text-muted-foreground">已允许 {server.allowedTools.length} / 已发现 {serverTools.length}</div>
+                </div>
+                <OptionList
+                  empty="还没有发现工具，请先测试连接"
+                  items={serverTools.map((tool) => ({ name: tool.name, description: tool.description }))}
+                  selected={(name) => allowed.has(name)}
+                  renderMeta={(item) => {
+                    const tool = serverTools.find((candidate) => candidate.name === item.name);
+                    return tool ? <Badge variant="outline">{tool.mappedName}</Badge> : null;
+                  }}
+                  onToggle={(name, checked) => setToolAllowed(index, name, checked)}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
     </SettingsPanelShell>
   );
 }
@@ -2246,6 +2509,9 @@ export function SettingsView({ embedded = false, onWorkspaceChanged }: { embedde
                 <SectionButton active={panel === 'tools-sandbox'} icon={<Wrench className="h-4 w-4" />} onClick={() => setPanel('tools-sandbox')}>
                   Shell / 沙箱
                 </SectionButton>
+                <SectionButton active={panel === 'mcp-client'} icon={<Wifi className="h-4 w-4" />} onClick={() => setPanel('mcp-client')}>
+                  MCP Client
+                </SectionButton>
               </NavGroup>
               <NavGroup label="数据源">
                 <SectionButton active={panel === 'datasource-connection'} icon={<Database className="h-4 w-4" />} onClick={() => setPanel('datasource-connection')}>
@@ -2269,6 +2535,7 @@ export function SettingsView({ embedded = false, onWorkspaceChanged }: { embedde
             {panel === 'status-card' && <StatusCardSettingsPanel />}
             {panel === 'usage-stats' && <UsageStatsSettingsPanel />}
             {panel === 'llm-models' && <LlmSettingsPanel />}
+            {panel === 'mcp-client' && <McpSettingsPanel />}
             {panel === 'tools-access' && <ToolsSettingsPanel onWorkspaceChanged={onWorkspaceChanged} section="access" />}
             {panel === 'tools-sandbox' && <ToolsSettingsPanel onWorkspaceChanged={onWorkspaceChanged} section="sandbox-shell" />}
             {datasourcePanel && <DatasourceSettingsPanel page={panel} />}

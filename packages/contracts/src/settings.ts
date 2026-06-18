@@ -34,6 +34,59 @@ export interface ToolSettingsOptions {
   systemPath: string;
 }
 
+export type McpTransportType = 'stdio' | 'http';
+
+export interface McpHeaderSettings {
+  name: string;
+  value: string;
+}
+
+export interface McpEnvSettings {
+  name: string;
+  value: string;
+}
+
+export interface McpServerSettings {
+  id: string;
+  label: string;
+  enabled: boolean;
+  transport: McpTransportType;
+  command: string;
+  args: string[];
+  cwd: string;
+  env: McpEnvSettings[];
+  url: string;
+  bearerToken: string;
+  headers: McpHeaderSettings[];
+  allowedTools: string[];
+  timeoutMs: number;
+  maxOutput: number;
+}
+
+export interface McpSettings {
+  servers: McpServerSettings[];
+}
+
+export interface McpToolOption {
+  serverId: string;
+  serverLabel: string;
+  name: string;
+  mappedName: string;
+  description: string;
+  enabled: boolean;
+}
+
+export interface McpSettingsOptions {
+  tools: McpToolOption[];
+}
+
+export interface McpServerProbeResult {
+  ok: boolean;
+  message: string;
+  toolCount: number;
+  tools: McpToolOption[];
+}
+
 export type LlmProviderName = 'aisdk' | 'openai-responses' | 'openai-chat' | 'anthropic' | 'mock';
 export type LlmAiSdkFlavor = 'openai-compatible' | 'openai' | 'anthropic';
 

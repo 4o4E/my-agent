@@ -2,7 +2,8 @@ import type { Tool, ToolResult } from './types.js';
 import { toLlmTool } from './types.js';
 import type { LlmTool } from '../llm/types.js';
 import { createPolicy } from './policy.js';
-import { getToolSettings } from '../settings.js';
+import { getToolSettings, type McpSettings } from '../settings.js';
+import { callMcpTool, mcpToolSchemas, parseMcpToolName } from '../mcp/client.js';
 import { shellTool } from './shell.js';
 import { fileReadTool } from './fileRead.js';
 import { fileWriteTool } from './fileWrite.js';
@@ -52,10 +53,15 @@ const CORE_TOOL_NAMES = new Set([
   'subagent_list',
 ]);
 
-export function toolSchemas(allowedTools?: string[]): LlmTool[] {
-  if (!allowedTools) return TOOLS.map(toLlmTool);
+export async function toolSchemas(allowedTools?: string[], mcpSettings?: McpSettings): Promise<LlmTool[]> {
+  const builtinTools = !allowedTools ? TOOLS.map(toLlmTool) : (() => {
+    const allowed = new Set([...allowedTools, ...CORE_TOOL_NAMES]);
+    return TOOLS.filter((tool) => allowed.has(tool.name)).map(toLlmTool);
+  })();
+  const mcpTools = await mcpToolSchemas(mcpSettings);
+  if (!allowedTools) return [...builtinTools, ...mcpTools];
   const allowed = new Set([...allowedTools, ...CORE_TOOL_NAMES]);
-  return TOOLS.filter((tool) => allowed.has(tool.name)).map(toLlmTool);
+  return [...builtinTools, ...mcpTools.filter((tool) => allowed.has(tool.name))];
 }
 
 export function getTool(name: string): Tool | undefined {
@@ -76,16 +82,23 @@ export async function runTool(
     runId?: string;
     stepId?: string;
     step?: number;
+    mcpSettings?: McpSettings;
   } = {},
 ): Promise<ToolResult> {
+  const mcpTool = parseMcpToolName(name);
   const tool = byName.get(name);
-  if (!tool) return { text: `未知工具：${name}` };
+  if (!tool && !mcpTool) return { text: `未知工具：${name}` };
   // 所有工具调用先经过沙箱/权限策略。
   const settings = ctx.settings ?? (await getToolSettings());
   const policy = createPolicy(settings);
   const decision = policy.check(name, args);
   if (!decision.ok) return { text: `工具策略已阻止：${decision.reason}` };
   try {
+    if (mcpTool) {
+      const result = await callMcpTool(name, args, ctx.mcpSettings);
+      return { text: policy.capOutput(result.text) };
+    }
+    if (!tool) return { text: `未知工具：${name}` };
     const raw = await tool.run(args, { ...ctx, settings });
     const result: ToolResult = typeof raw === 'string' ? { text: raw } : raw;
     return { text: policy.capOutput(result.text) };

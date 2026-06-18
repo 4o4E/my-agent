@@ -12,8 +12,8 @@ import { runBus } from './bus.js';
 import type { AgentEvent } from './types.js';
 import { store as defaultStore } from '../store/index.js';
 import type { Store } from '../store/types.js';
-import { getToolSettings } from '../settings.js';
-import type { ToolSettings } from '../settings.js';
+import { getMcpSettings, getToolSettings } from '../settings.js';
+import type { McpSettings, ToolSettings } from '../settings.js';
 import { withSpan } from '../telemetry.js';
 import type { AskUserAnswer, AskUserMode, AskUserOption, AskUserSpec, StreamStage, StreamStats } from './types.js';
 import { renderRuntimeContext } from './context.js';
@@ -40,6 +40,7 @@ export interface ExecutorDeps {
   stream: boolean;
   resume: boolean;
   toolSettings?: ToolSettings;
+  mcpSettings?: McpSettings;
   databaseRuntimeEnv?: (runId: string) => Promise<DatabaseRuntimeEnv>;
 }
 
@@ -448,6 +449,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
     let goal = initialRun.goal_state ?? initGoal(userInput);
     if (!initialRun.goal_state) await store.setGoalState(runId, goal);
     const toolSettings = deps.toolSettings ?? (await getToolSettings());
+    const mcpSettings = deps.mcpSettings ?? (deps.store === defaultStore ? await getMcpSettings() : { servers: [] });
     const toolEnv: Record<string, string> = {};
     const databaseRuntimeEnvProvider = deps.databaseRuntimeEnv ?? (deps.store === defaultStore ? createDefaultDatabaseRuntimeEnv : null);
     let databaseRuntimeSummary = '';
@@ -773,7 +775,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
       const streamedToolNames = new Map<string, string>();
       const stopLlmHeartbeat = streamStats.startHeartbeat(stepIdx, () => llmStage, () => llmActiveTool);
       try {
-        const tools = toolSchemas(activeAllowedTools(activeSkills));
+        const tools = await toolSchemas(activeAllowedTools(activeSkills), mcpSettings);
         if (stream && provider.completeStream) {
           try {
             result = await provider.completeStream(ctx.all(), tools, (d) => {
@@ -1060,6 +1062,7 @@ export async function executeRun(runId: string, overrides: Partial<ExecutorDeps>
                 runId,
                 stepId: step.id,
                 step: stepIdx,
+                mcpSettings,
               });
               span.setAttribute('tool.result.length', out.text.length);
               return out;
