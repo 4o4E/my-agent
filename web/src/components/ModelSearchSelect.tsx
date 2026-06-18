@@ -59,7 +59,7 @@ export function ModelSearchSelect({
           <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[--radix-popover-trigger-width] p-0">
+      <PopoverContent align="start" className="w-max min-w-[--radix-popover-trigger-width] p-0">
         <Command>
           <CommandInput placeholder="搜索供应商或模型" />
           <CommandList>
@@ -75,9 +75,9 @@ export function ModelSearchSelect({
                   }}
                 >
                   <Check className={cn('h-4 w-4', option.ref === value ? 'opacity-100' : 'opacity-0')} />
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">{option.model}</div>
-                    <div className="truncate text-xs text-muted-foreground">{option.providerLabel} · {option.ref}</div>
+                  <div className="min-w-max">
+                    <div className="whitespace-nowrap text-sm font-medium">{option.model}</div>
+                    <div className="whitespace-nowrap text-xs text-muted-foreground">{option.providerLabel} · {option.ref}</div>
                   </div>
                 </CommandItem>
               ))}
