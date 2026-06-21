@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { FileUp, Folder, FolderUp, Paperclip, RefreshCw, Terminal } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { ClipboardEvent as ReactClipboardEvent, DragEvent as ReactDragEvent } from 'react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +24,7 @@ import { listRemoteFiles, type RemoteFileEntry } from '@/api';
 import type { LlmModelOption } from '@/api';
 import type { UsageSnapshot } from './Conversation';
 import { ModelSearchSelect } from './ModelSearchSelect';
+import { useNotifications } from './GlobalNotifications';
 
 export interface ComposerAttachment {
   kind: 'remote' | 'local' | 'shell';
@@ -59,6 +61,47 @@ function formatSize(size?: number): string {
 
 function textareaOverflowsInline(textarea: HTMLTextAreaElement): boolean {
   return textarea.value.length > 0 && textarea.scrollWidth > textarea.clientWidth + 1;
+}
+
+function hasFileTransfer(data: DataTransfer | null): boolean {
+  return Boolean(data?.types && Array.from(data.types).includes('Files'));
+}
+
+function filesFromTransfer(files: FileList | null | undefined): File[] {
+  return files ? Array.from(files) : [];
+}
+
+function filesFromClipboard(data: DataTransfer | null): File[] {
+  const files = filesFromTransfer(data?.files);
+  if (files.length) return files;
+  return Array.from(data?.items ?? [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+}
+
+function extensionFromType(type: string): string {
+  if (type === 'image/png') return '.png';
+  if (type === 'image/jpeg') return '.jpg';
+  if (type === 'image/gif') return '.gif';
+  if (type === 'image/webp') return '.webp';
+  if (type === 'image/svg+xml') return '.svg';
+  if (type === 'image/avif') return '.avif';
+  return '';
+}
+
+function safeUploadName(name: string, fallback: string): string {
+  const cleaned = name.trim().replace(/[\\/]+/g, '-').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return cleaned || fallback;
+}
+
+function autoUploadPath(file: File, index: number, source: 'paste' | 'drop'): string {
+  const stamp = String(Date.now());
+  const fallback = source === 'paste'
+    ? `clipboard-${stamp}-${index + 1}${extensionFromType(file.type) || '.bin'}`
+    : `file-${stamp}-${index + 1}${extensionFromType(file.type)}`;
+  const name = safeUploadName(file.name, fallback);
+  return `uploads/${stamp}-${index + 1}-${name}`;
 }
 
 function ContextUsageMeter({ usage }: { usage: UsageSnapshot | null }) {
@@ -123,10 +166,12 @@ export function Composer({
   onOpenRemoteFiles,
   onUploadLocal,
 }: Props) {
+  const { notify } = useNotifications();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const promptFrameRef = useRef<HTMLDivElement>(null);
   const restorePromptFocusRef = useRef(false);
   const previousMultilineRef = useRef(false);
+  const dragDepthRef = useRef(0);
   const waitingForAskUser = !!waitingQuestion;
   const [localDraft, setLocalDraft] = useState(draft);
   const [localFile, setLocalFile] = useState<File | null>(null);
@@ -137,6 +182,8 @@ export function Composer({
   const [dirParent, setDirParent] = useState<string | null>(null);
   const [dirLoading, setDirLoading] = useState(false);
   const [dirError, setDirError] = useState<string | null>(null);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const [quickUploading, setQuickUploading] = useState(false);
   const localDraftRef = useRef(draft);
   const [autoMultiline, setAutoMultiline] = useState(false);
   const multilineDraft = localDraft.includes('\n') || autoMultiline;
@@ -226,6 +273,71 @@ export function Composer({
     }
   }
 
+  async function uploadInlineFiles(files: File[], source: 'paste' | 'drop') {
+    if (!files.length) return;
+    if (disabled || waitingForAskUser) {
+      notify({ variant: 'error', title: '现在不能添加附件', description: waitingForAskUser ? '请先回答上方问题。' : '当前对话正在运行。' });
+      return;
+    }
+
+    setQuickUploading(true);
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        await onUploadLocal(files[index], autoUploadPath(files[index], index, source));
+      }
+      notify({
+        variant: 'success',
+        title: source === 'paste' ? '已粘贴附件' : '已添加拖拽附件',
+        description: `${files.length} 个文件已上传到 uploads/ 并加入本轮消息。`,
+      });
+    } catch (err) {
+      notify({ variant: 'error', title: '附件上传失败', description: (err as Error).message });
+    } finally {
+      setQuickUploading(false);
+    }
+  }
+
+  function handlePasteFiles(event: ReactClipboardEvent<HTMLTextAreaElement>) {
+    const files = filesFromClipboard(event.clipboardData);
+    if (!files.length) return;
+    event.preventDefault();
+    void uploadInlineFiles(files, 'paste');
+  }
+
+  function handleDragEnter(event: ReactDragEvent<HTMLFormElement>) {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepthRef.current += 1;
+    setDraggingFiles(true);
+  }
+
+  function handleDragOver(event: ReactDragEvent<HTMLFormElement>) {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = disabled || waitingForAskUser ? 'none' : 'copy';
+    setDraggingFiles(true);
+  }
+
+  function handleDragLeave(event: ReactDragEvent<HTMLFormElement>) {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDraggingFiles(false);
+  }
+
+  function handleDrop(event: ReactDragEvent<HTMLFormElement>) {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepthRef.current = 0;
+    setDraggingFiles(false);
+    const files = filesFromTransfer(event.dataTransfer.files);
+    void uploadInlineFiles(files, 'drop');
+  }
+
   async function loadUploadDirs(path = uploadDir || '.') {
     setDirLoading(true);
     setDirError(null);
@@ -287,12 +399,30 @@ export function Composer({
                 <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{waitingQuestion}</div>
               </div>
             )}
-            <PromptInput className={cn('composer-input', !multilineDraft && 'composer-single-line')} onSubmit={handleSubmit}>
+            <PromptInput
+              className={cn(
+                'composer-input',
+                !multilineDraft && 'composer-single-line',
+                draggingFiles && 'ring-1 ring-primary/60',
+              )}
+              disableFileHandling
+              onDragEnterCapture={handleDragEnter}
+              onDragLeaveCapture={handleDragLeave}
+              onDragOverCapture={handleDragOver}
+              onDropCapture={handleDrop}
+              onSubmit={handleSubmit}
+            >
+              {draggingFiles && (
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md border border-primary/50 bg-background/85 text-sm font-medium text-foreground shadow-sm">
+                  松开添加附件
+                </div>
+              )}
               {multilineDraft ? (
                 <>
                   <PromptInputBody>
                     <PromptInputTextarea
                       onChange={(event) => handleDraftChange(event.currentTarget.value, event.currentTarget)}
+                      onPaste={handlePasteFiles}
                       disabled={disabled || waitingForAskUser}
                       placeholder={waitingForAskUser ? '请在上方 ask_user 表单中回答' : '描述一个任务…（Enter 发送，Shift+Enter 换行）'}
                       value={localDraft}
@@ -367,6 +497,7 @@ export function Composer({
                   </DropdownMenu>
                   <PromptInputTextarea
                     onChange={(event) => handleDraftChange(event.currentTarget.value, event.currentTarget)}
+                    onPaste={handlePasteFiles}
                     disabled={disabled || waitingForAskUser}
                     placeholder={waitingForAskUser ? '请在上方 ask_user 表单中回答' : '描述一个任务…（Enter 发送，Shift+Enter 换行）'}
                     value={localDraft}
@@ -393,6 +524,9 @@ export function Composer({
                 onChange={(event) => chooseLocal(event.currentTarget.files?.[0])}
               />
             </PromptInput>
+            {quickUploading && (
+              <div className="mt-2 text-xs text-muted-foreground">正在上传附件…</div>
+            )}
           </div>
         </div>
         <div className="hidden w-7 shrink-0 xl:block" />

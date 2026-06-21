@@ -23,6 +23,22 @@ export interface FilePreview {
   hasMore: boolean;
 }
 
+export interface FileHexRow {
+  offset: number;
+  hex: string;
+  ascii: string;
+}
+
+export interface FileHexPreview {
+  path: string;
+  size: number;
+  offset: number;
+  limit: number;
+  rows: FileHexRow[];
+  nextOffset: number | null;
+  hasMore: boolean;
+}
+
 export interface RemoteFileInfo {
   workspaceRoot: string;
   rootPath: string;

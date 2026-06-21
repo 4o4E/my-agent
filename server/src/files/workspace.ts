@@ -30,6 +30,19 @@ export function mediaTypeFromPath(path: string): string {
   if (lower.endsWith('.svg')) return 'image/svg+xml';
   if (lower.endsWith('.bmp')) return 'image/bmp';
   if (lower.endsWith('.avif')) return 'image/avif';
+  if (lower.endsWith('.mp4')) return 'video/mp4';
+  if (lower.endsWith('.webm')) return 'video/webm';
+  if (lower.endsWith('.ogv')) return 'video/ogg';
+  if (lower.endsWith('.mov')) return 'video/quicktime';
+  if (lower.endsWith('.m4v')) return 'video/x-m4v';
+  if (lower.endsWith('.mkv')) return 'video/x-matroska';
+  if (lower.endsWith('.mp3')) return 'audio/mpeg';
+  if (lower.endsWith('.wav')) return 'audio/wav';
+  if (lower.endsWith('.ogg') || lower.endsWith('.oga')) return 'audio/ogg';
+  if (lower.endsWith('.m4a')) return 'audio/mp4';
+  if (lower.endsWith('.flac')) return 'audio/flac';
+  if (lower.endsWith('.aac')) return 'audio/aac';
+  if (lower.endsWith('.weba')) return 'audio/webm';
   return 'application/octet-stream';
 }
 
@@ -37,6 +50,6 @@ export function isImageMediaType(mediaType: string): boolean {
   return mediaType.startsWith('image/');
 }
 
-export function streamWorkspaceFile(path: string) {
-  return createReadStream(path);
+export function streamWorkspaceFile(path: string, options: { start?: number; end?: number } = {}) {
+  return createReadStream(path, options);
 }

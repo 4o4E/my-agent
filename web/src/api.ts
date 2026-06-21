@@ -5,6 +5,7 @@ import type {
   DatasourceDetailResponse,
   DatasourceInput,
   DatasourceTestResult,
+  FileHexPreview,
   FilePreview,
   LlmProviderChatTestResult,
   LlmProviderPingResult,
@@ -99,6 +100,15 @@ export const previewRemoteFile = (path: string, startLine = 1, limit = 200, opti
   });
   if (options.render) params.set('render', '1');
   return fetch(`/api/files/preview?${params.toString()}`).then(json<FilePreview>);
+};
+
+export const previewRemoteFileHex = (path: string, offset = 0, limit = 4096) => {
+  const params = new URLSearchParams({
+    path,
+    offset: String(offset),
+    limit: String(limit),
+  });
+  return fetch(`/api/files/hex?${params.toString()}`).then(json<FileHexPreview>);
 };
 
 export const remoteFileRawUrl = (path: string) => `/api/files/raw?path=${encodeURIComponent(path)}`;

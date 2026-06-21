@@ -209,6 +209,7 @@ const PromptInputController = createContext<PromptInputControllerProps | null>(
 const ProviderAttachmentsContext = createContext<AttachmentsContext | null>(
   null
 );
+const FileHandlingDisabledContext = createContext(false);
 
 export const usePromptInputController = () => {
   const ctx = useContext(PromptInputController);
@@ -501,6 +502,8 @@ export type PromptInputProps = Omit<
   maxFiles?: number;
   // bytes
   maxFileSize?: number;
+  // 禁用组件内置文件粘贴/拖拽处理，允许业务层接管附件上传与落库。
+  disableFileHandling?: boolean;
   onError?: (err: {
     code: "max_files" | "max_file_size" | "accept";
     message: string;
@@ -519,6 +522,7 @@ export const PromptInput = ({
   syncHiddenInput,
   maxFiles,
   maxFileSize,
+  disableFileHandling = false,
   onError,
   onSubmit,
   children,
@@ -735,7 +739,7 @@ export const PromptInput = ({
     if (!form) {
       return;
     }
-    if (globalDrop) {
+    if (globalDrop || disableFileHandling) {
       // when global drop is on, let the document-level handler own drops
       return;
     }
@@ -759,10 +763,10 @@ export const PromptInput = ({
       form.removeEventListener("dragover", onDragOver);
       form.removeEventListener("drop", onDrop);
     };
-  }, [add, globalDrop]);
+  }, [add, globalDrop, disableFileHandling]);
 
   useEffect(() => {
-    if (!globalDrop) {
+    if (!globalDrop || disableFileHandling) {
       return;
     }
 
@@ -785,7 +789,7 @@ export const PromptInput = ({
       document.removeEventListener("dragover", onDragOver);
       document.removeEventListener("drop", onDrop);
     };
-  }, [add, globalDrop]);
+  }, [add, globalDrop, disableFileHandling]);
 
   useEffect(
     () => () => {
@@ -915,14 +919,16 @@ export const PromptInput = ({
         title="Upload files"
         type="file"
       />
-      <form
-        className={cn("w-full", className)}
-        onSubmit={handleSubmit}
-        ref={formRef}
-        {...props}
-      >
-        <InputGroup className="overflow-hidden">{children}</InputGroup>
-      </form>
+      <FileHandlingDisabledContext.Provider value={disableFileHandling}>
+        <form
+          className={cn("w-full", className)}
+          onSubmit={handleSubmit}
+          ref={formRef}
+          {...props}
+        >
+          <InputGroup className="overflow-hidden">{children}</InputGroup>
+        </form>
+      </FileHandlingDisabledContext.Provider>
     </>
   );
 
@@ -956,12 +962,14 @@ export type PromptInputTextareaProps = ComponentProps<
 export const PromptInputTextarea = ({
   onChange,
   onKeyDown,
+  onPaste,
   className,
   placeholder = "What would you like to know?",
   ...props
 }: PromptInputTextareaProps) => {
   const controller = useOptionalPromptInputController();
   const attachments = usePromptInputAttachments();
+  const fileHandlingDisabled = useContext(FileHandlingDisabledContext);
   const [isComposing, setIsComposing] = useState(false);
 
   const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = useCallback(
@@ -1013,6 +1021,11 @@ export const PromptInputTextarea = ({
 
   const handlePaste: ClipboardEventHandler<HTMLTextAreaElement> = useCallback(
     (event) => {
+      onPaste?.(event);
+      if (event.defaultPrevented || fileHandlingDisabled) {
+        return;
+      }
+
       const items = event.clipboardData?.items;
 
       if (!items) {
@@ -1035,7 +1048,7 @@ export const PromptInputTextarea = ({
         attachments.add(files);
       }
     },
-    [attachments]
+    [attachments, onPaste, fileHandlingDisabled]
   );
 
   const handleCompositionEnd = useCallback(() => setIsComposing(false), []);

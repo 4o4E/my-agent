@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { BundledLanguage } from 'shiki';
 import { Code2, Eye, ChevronRight, FileText, Folder, FolderOpen, PanelRightClose, PanelRightOpen, Paperclip, RefreshCw, X } from 'lucide-react';
-import { listRemoteFiles, previewRemoteFile, type FilePreview, type RemoteFileEntry } from '@/api';
+import { listRemoteFiles, previewRemoteFile, previewRemoteFileHex, remoteFileRawUrl, type FileHexPreview, type FileHexRow, type FilePreview, type RemoteFileEntry } from '@/api';
 import { CodeBlock } from '@/components/ai-elements/code-block';
 import { MarkdownContent } from '@/components/MarkdownContent';
 import { Button } from '@/components/ui/button';
@@ -17,6 +17,8 @@ interface PreviewRow {
   lineNumber: number;
   text: string;
 }
+
+type MediaKind = 'image' | 'video' | 'audio';
 
 interface Props {
   open: boolean;
@@ -54,6 +56,30 @@ const LANGUAGE_BY_EXT: Record<string, BundledLanguage> = {
 };
 const INITIAL_PREVIEW_LINES = 80;
 const MORE_PREVIEW_LINES = 240;
+const INITIAL_HEX_BYTES = 4 * 1024;
+const MORE_HEX_BYTES = 16 * 1024;
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif']);
+const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mkv']);
+const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'flac', 'aac', 'weba']);
+const BINARY_EXTENSIONS = new Set([
+  'pdf',
+  'zip',
+  'gz',
+  'tgz',
+  'tar',
+  '7z',
+  'rar',
+  'wasm',
+  'sqlite',
+  'sqlite3',
+  'db',
+  'bin',
+  'exe',
+  'dll',
+  'so',
+  'dylib',
+]);
 
 function fileName(path: string): string {
   const parts = path.split('/').filter(Boolean);
@@ -75,6 +101,23 @@ function extOf(path: string): string {
 
 function languageForPath(path: string): BundledLanguage {
   return LANGUAGE_BY_EXT[extOf(path)] ?? 'log';
+}
+
+function mediaKindForPath(path: string): MediaKind | null {
+  const ext = extOf(path);
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio';
+  return null;
+}
+
+function shouldUseHexSource(path: string): boolean {
+  const ext = extOf(path);
+  return mediaKindForPath(path) != null || BINARY_EXTENSIONS.has(ext);
+}
+
+function formatHexOffset(offset: number): string {
+  return offset.toString(16).toUpperCase().padStart(8, '0');
 }
 
 function fileTone(path: string): string {
@@ -121,11 +164,14 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
   const [selectedSize, setSelectedSize] = useState<number | undefined>();
   const [preview, setPreview] = useState<FilePreview | null>(null);
   const [chunks, setChunks] = useState<PreviewChunk[]>([]);
+  const [hexPreview, setHexPreview] = useState<FileHexPreview | null>(null);
+  const [hexRows, setHexRows] = useState<FileHexRow[]>([]);
   const [previewMode, setPreviewMode] = useState<'preview' | 'source'>('source');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const previewRequestRef = useRef(0);
   const pendingPreviewStartsRef = useRef<Set<number>>(new Set());
+  const pendingHexOffsetsRef = useRef<Set<number>>(new Set());
 
   async function loadDir(path = currentPath, select = true) {
     setLoading(true);
@@ -145,19 +191,34 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
     if (startLine > 1 && pendingPreviewStartsRef.current.has(startLine)) return;
     const requestId = previewRequestRef.current + 1;
     previewRequestRef.current = requestId;
+    const mediaKind = mediaKindForPath(path);
+    const hexSource = shouldUseHexSource(path);
     if (startLine === 1) {
       pendingPreviewStartsRef.current.clear();
+      pendingHexOffsetsRef.current.clear();
       setSelectedPath(path);
       setSelectedSize(size);
       setPreview(null);
       setChunks([]);
-      setPreviewMode(['html', 'htm', 'md'].includes(extOf(path)) ? 'preview' : 'source');
+      setHexPreview(null);
+      setHexRows([]);
+      setPreviewMode(mediaKind || ['html', 'htm', 'md'].includes(extOf(path)) ? 'preview' : 'source');
     } else {
       pendingPreviewStartsRef.current.add(startLine);
     }
     setLoading(true);
     setError(null);
     try {
+      if (hexSource) {
+        const data = await previewRemoteFileHex(path, 0, INITIAL_HEX_BYTES);
+        if (previewRequestRef.current !== requestId) return;
+        setSelectedPath(data.path);
+        setSelectedSize(size ?? data.size);
+        setHexPreview(data);
+        setHexRows(data.rows);
+        return;
+      }
+
       const limit = startLine === 1 ? INITIAL_PREVIEW_LINES : MORE_PREVIEW_LINES;
       const renderable = ['html', 'htm', 'md'].includes(extOf(path));
       const data = await previewRemoteFile(path, startLine, limit, { render: startLine === 1 && renderable });
@@ -172,6 +233,28 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
       setError((err as Error).message);
     } finally {
       pendingPreviewStartsRef.current.delete(startLine);
+      if (previewRequestRef.current === requestId) setLoading(false);
+    }
+  }
+
+  async function loadMoreHex() {
+    if (!selectedPath || !hexPreview?.nextOffset || loading || pendingHexOffsetsRef.current.has(hexPreview.nextOffset)) return;
+    const requestId = previewRequestRef.current;
+    const offset = hexPreview.nextOffset;
+    pendingHexOffsetsRef.current.add(offset);
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await previewRemoteFileHex(selectedPath, offset, MORE_HEX_BYTES);
+      if (previewRequestRef.current !== requestId) return;
+      setSelectedSize(data.size);
+      setHexPreview(data);
+      setHexRows((current) => [...current, ...data.rows]);
+    } catch (err) {
+      if (previewRequestRef.current !== requestId) return;
+      setError((err as Error).message);
+    } finally {
+      pendingHexOffsetsRef.current.delete(offset);
       if (previewRequestRef.current === requestId) setLoading(false);
     }
   }
@@ -207,9 +290,11 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
 
   const previewLanguage = selectedPath ? languageForPath(selectedPath) : 'log';
   const selectedExt = selectedPath ? extOf(selectedPath) : '';
+  const selectedMediaKind = selectedPath ? mediaKindForPath(selectedPath) : null;
+  const selectedUsesHexSource = selectedPath ? shouldUseHexSource(selectedPath) : false;
   const selectedIsHtml = ['html', 'htm'].includes(selectedExt);
   const selectedIsMarkdown = selectedExt === 'md';
-  const selectedCanRender = selectedIsHtml || selectedIsMarkdown;
+  const selectedCanRender = selectedIsHtml || selectedIsMarkdown || selectedMediaKind != null;
   const previewRows = useMemo<PreviewRow[]>(() => {
     const byLine = new Map<number, string>();
     const sortedChunks = [...chunks].sort((a, b) => a.startLine - b.startLine);
@@ -231,6 +316,7 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
   const previewStartLine = previewRows[0]?.lineNumber ?? 1;
   const loadedLines = previewRows.length;
   const totalLines = preview?.totalLines ?? null;
+  const rawUrl = selectedPath ? remoteFileRawUrl(selectedPath) : '';
 
   if (!open) return null;
   const hasUnloadedLines = preview?.mode === 'chunk' && (totalLines == null || loadedLines < totalLines);
@@ -239,6 +325,7 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
     if (!selectedPath || nextLine == null || loading || !hasUnloadedLines) return;
     void openFile(selectedPath, selectedSize, nextLine);
   };
+  const hasMoreHex = selectedUsesHexSource && Boolean(hexPreview?.hasMore && hexPreview.nextOffset != null);
 
   const renderRows = (entries: RemoteFileEntry[] | undefined, depth: number): JSX.Element[] =>
     (entries ?? []).flatMap((entry) => {
@@ -311,7 +398,7 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{selectedPath}</div>
                   <div className="text-xs text-muted-foreground">
-                    {formatSize(selectedSize)}{totalLines != null ? ` · ${totalLines} 行` : ''}
+                    {formatSize(selectedSize)}{!selectedUsesHexSource && totalLines != null ? ` · ${totalLines} 行` : ''}
                   </div>
                 </div>
                 {selectedCanRender && (
@@ -321,7 +408,7 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
                       size="sm"
                       className="h-8 px-2"
                       onClick={() => setPreviewMode('preview')}
-                      title={selectedIsHtml ? '渲染 HTML' : '渲染 Markdown'}
+                      title={selectedMediaKind ? '预览媒体' : selectedIsHtml ? '渲染 HTML' : '渲染 Markdown'}
                     >
                       <Eye className="size-4" />
                     </Button>
@@ -346,7 +433,54 @@ export function RemoteFilesPanel({ open, width, previewPath, embedded = false, o
                 </Button>
               </div>
               <div className="min-h-0 flex-1">
-                {loading && chunks.length === 0 ? (
+                {selectedMediaKind === 'image' && previewMode === 'preview' ? (
+                  <div className="flex h-full items-center justify-center overflow-auto rounded-md border bg-muted/20 p-3">
+                    <img src={rawUrl} alt={fileName(selectedPath)} className="max-h-full max-w-full object-contain" />
+                  </div>
+                ) : selectedMediaKind === 'video' && previewMode === 'preview' ? (
+                  <div className="flex h-full items-center justify-center overflow-auto rounded-md border bg-black p-3">
+                    <video src={rawUrl} className="max-h-full max-w-full" controls />
+                  </div>
+                ) : selectedMediaKind === 'audio' && previewMode === 'preview' ? (
+                  <div className="flex h-full items-center justify-center rounded-md border bg-muted/20 px-4">
+                    <audio src={rawUrl} className="w-full max-w-xl" controls />
+                  </div>
+                ) : selectedUsesHexSource && previewMode === 'source' && hexRows.length > 0 ? (
+                  <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-background">
+                    <div className="grid grid-cols-[6rem_minmax(24rem,1fr)_8rem] border-b bg-muted/40 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+                      <span>Offset</span>
+                      <span>Hex</span>
+                      <span>ASCII</span>
+                    </div>
+                    <div className="scrollbar-thin min-h-0 flex-1 overflow-auto">
+                      {hexRows.map((row) => (
+                        <div
+                          key={`${row.offset}-${row.hex}`}
+                          className="grid grid-cols-[6rem_minmax(24rem,1fr)_8rem] gap-3 border-b border-border/40 px-3 py-1 font-mono text-[12px] leading-5"
+                        >
+                          <span className="text-muted-foreground">{formatHexOffset(row.offset)}</span>
+                          <span className="whitespace-pre text-foreground">{row.hex}</span>
+                          <span className="whitespace-pre text-muted-foreground">{row.ascii}</span>
+                        </div>
+                      ))}
+                      {hasMoreHex && (
+                        <div className="flex justify-center p-3">
+                          <Button variant="outline" size="sm" onClick={() => void loadMoreHex()} disabled={loading}>
+                            {loading ? '正在加载…' : '加载更多'}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : selectedUsesHexSource && previewMode === 'source' && hexPreview ? (
+                  <div className="flex h-full items-center justify-center rounded-md border bg-muted/20 px-3 py-8 text-center text-sm text-muted-foreground">
+                    暂无 Hex 内容
+                  </div>
+                ) : selectedUsesHexSource && previewMode === 'source' ? (
+                  <div className="flex h-full items-center justify-center rounded-md border bg-muted/20 px-3 py-8 text-center text-sm text-muted-foreground">
+                    正在加载 Hex 源码…
+                  </div>
+                ) : loading && chunks.length === 0 ? (
                   <div className="flex h-full items-center justify-center rounded-md border bg-muted/20 px-3 py-8 text-center text-sm text-muted-foreground">
                     正在加载前 {INITIAL_PREVIEW_LINES} 行…
                   </div>
