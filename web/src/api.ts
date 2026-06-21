@@ -31,6 +31,7 @@ import type {
   Thread,
   ThreadDetailResponse,
   ThreadSearchResponse,
+  ThreadUpdateInput,
   ToolSettings,
   ToolSettingsOptions,
 } from '@my-agent/contracts';
@@ -51,7 +52,12 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const listThreads = () => fetch('/api/threads').then(json<Thread[]>);
+export const listThreads = (options: { archived?: boolean } = {}) => {
+  const params = new URLSearchParams();
+  if (options.archived) params.set('archived', '1');
+  const query = params.toString();
+  return fetch(`/api/threads${query ? `?${query}` : ''}`).then(json<Thread[]>);
+};
 
 export const searchThreads = (query: string, limit = 50) => {
   const params = new URLSearchParams({ q: query, limit: String(limit) });
@@ -72,6 +78,13 @@ export const deleteThread = (id: string) =>
   fetch(`/api/threads/${id}`, { method: 'DELETE' }).then((res) => {
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   });
+
+export const updateThread = (id: string, input: ThreadUpdateInput) =>
+  fetch(`/api/threads/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }).then(json<Thread>);
 
 export const listRemoteFiles = (path = '.') =>
   fetch(`/api/files/list?path=${encodeURIComponent(path)}`).then(json<RemoteFileList>);

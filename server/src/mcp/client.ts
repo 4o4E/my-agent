@@ -1,5 +1,4 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CallToolResultSchema, type CallToolResult, type Tool as McpSdkTool } from '@modelcontextprotocol/sdk/types.js';
 import type { LlmTool } from '../llm/types.js';
@@ -38,11 +37,6 @@ export function parseMcpToolName(name: string): { serverId: string; toolName: st
 
 function configSignature(server: McpServerSettings): string {
   return JSON.stringify({
-    transport: server.transport,
-    command: server.command,
-    args: server.args,
-    cwd: server.cwd,
-    env: server.env,
     url: server.url,
     bearerToken: server.bearerToken,
     headers: server.headers,
@@ -74,23 +68,10 @@ async function connectServer(server: McpServerSettings): Promise<Client> {
   await closeEntry(server.id);
 
   const client = new Client({ name: 'my-agent', version: '0.1.0' }, { capabilities: {} });
-  if (server.transport === 'stdio') {
-    if (!server.command.trim()) throw new Error(`MCP server ${server.id} 缺少启动命令`);
-    const env = { ...getDefaultEnvironment() };
-    for (const item of server.env) env[item.name] = item.value;
-    await client.connect(new StdioClientTransport({
-      command: server.command,
-      args: server.args,
-      cwd: server.cwd || undefined,
-      env,
-      stderr: 'pipe',
-    }), { timeout: server.timeoutMs });
-  } else {
-    if (!server.url.trim()) throw new Error(`MCP server ${server.id} 缺少 HTTP URL`);
-    await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
-      requestInit: { headers: headersForServer(server) },
-    }), { timeout: server.timeoutMs });
-  }
+  if (!server.url.trim()) throw new Error(`MCP server ${server.id} 缺少远程 MCP URL`);
+  await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+    requestInit: { headers: headersForServer(server) },
+  }), { timeout: server.timeoutMs });
 
   clients.set(server.id, { client, signature });
   return client;

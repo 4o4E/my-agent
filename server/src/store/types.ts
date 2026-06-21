@@ -5,6 +5,8 @@ import type { LlmMessage } from '../llm/types.js';
 export interface ThreadRow {
   id: string;
   title: string | null;
+  pinned_at: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -139,7 +141,11 @@ export interface ThreadSearchResultRow {
 export interface Store {
   createThread(title?: string): Promise<ThreadRow>;
   getThread(id: string): Promise<ThreadRow | null>;
-  listThreads(limit?: number): Promise<ThreadRow[]>;
+  listThreads(limit?: number, options?: { archived?: boolean }): Promise<ThreadRow[]>;
+  updateThread(
+    id: string,
+    fields: { title?: string | null; pinned?: boolean; archived?: boolean },
+  ): Promise<ThreadRow | null>;
   deleteThread(id: string): Promise<boolean>;
   searchThreadMessages(query: string, limit?: number): Promise<ThreadSearchResultRow[]>;
 

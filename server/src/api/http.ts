@@ -80,6 +80,10 @@ function optionalText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
 async function validateRunModelRef(modelRef: string | null): Promise<string | null> {
   if (!modelRef) return null;
   const settings = await getLlmSettings();
@@ -105,9 +109,10 @@ api.post('/threads', async (req, res) => {
   res.status(201).json(thread);
 });
 
-// 列出所有 thread。
-api.get('/threads', async (_req, res) => {
-  res.json(await store.listThreads());
+// 列出 thread。默认只返回未归档列表；设置页通过 archived=1 查看归档列表。
+api.get('/threads', async (req, res) => {
+  const archived = req.query.archived === '1' || req.query.archived === 'true';
+  res.json(await store.listThreads(50, { archived }));
 });
 
 // thread 详情：包含 run 和事件，用于恢复对话。
@@ -119,6 +124,23 @@ api.get('/threads/:id', async (req, res) => {
     runs.map(async (run) => ({ ...run, events: await store.getEvents(run.id) })),
   );
   res.json({ thread, runs: withEvents });
+});
+
+// 更新 thread 元信息：重命名、置顶/取消置顶、归档/取消归档。
+api.patch('/threads/:id', async (req, res) => {
+  const fields: { title?: string | null; pinned?: boolean; archived?: boolean } = {};
+  if (Object.prototype.hasOwnProperty.call(req.body ?? {}, 'title')) {
+    const title = typeof req.body.title === 'string' ? req.body.title.trim() : '';
+    fields.title = title || null;
+  }
+  const pinned = optionalBoolean(req.body?.pinned);
+  if (pinned !== undefined) fields.pinned = pinned;
+  const archived = optionalBoolean(req.body?.archived);
+  if (archived !== undefined) fields.archived = archived;
+  if (!Object.keys(fields).length) return res.status(400).json({ error: '缺少可更新字段' });
+  const thread = await store.updateThread(req.params.id, fields);
+  if (!thread) return res.status(404).json({ error: 'thread 不存在' });
+  res.json(thread);
 });
 
 // thread 下的 subagent 子任务列表。右侧资源栏用它恢复和打开历史 subagent。

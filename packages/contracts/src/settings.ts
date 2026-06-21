@@ -34,14 +34,7 @@ export interface ToolSettingsOptions {
   systemPath: string;
 }
 
-export type McpTransportType = 'stdio' | 'http';
-
 export interface McpHeaderSettings {
-  name: string;
-  value: string;
-}
-
-export interface McpEnvSettings {
   name: string;
   value: string;
 }
@@ -50,11 +43,6 @@ export interface McpServerSettings {
   id: string;
   label: string;
   enabled: boolean;
-  transport: McpTransportType;
-  command: string;
-  args: string[];
-  cwd: string;
-  env: McpEnvSettings[];
   url: string;
   bearerToken: string;
   headers: McpHeaderSettings[];

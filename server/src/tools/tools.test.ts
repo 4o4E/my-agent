@@ -75,8 +75,30 @@ test('mcp tool names are mapped into a separate namespace', () => {
 });
 
 test('mcp server ids cannot collide with the tool-name separator', () => {
-  const settings = normalizeMcpSettings({ servers: [{ id: 'bad__server', label: 'Bad', transport: 'http', url: 'https://example.com/mcp' }] });
+  const settings = normalizeMcpSettings({ servers: [{ id: 'bad__server', label: 'Bad', url: 'https://example.com/mcp' }] });
   assert.equal(settings.servers[0].id, 'bad-server');
+});
+
+test('mcp settings only keep remote server connection fields', () => {
+  const settings = normalizeMcpSettings({
+    servers: [{
+      id: 'local',
+      label: 'Local',
+      transport: 'stdio',
+      command: 'node',
+      args: ['server.js'],
+      cwd: '/tmp',
+      env: [{ name: 'API_KEY', value: 'secret' }],
+      url: 'https://example.com/mcp',
+    }],
+  });
+  const server = settings.servers[0] as unknown as Record<string, unknown>;
+  assert.equal(server.url, 'https://example.com/mcp');
+  assert.equal('transport' in server, false);
+  assert.equal('command' in server, false);
+  assert.equal('args' in server, false);
+  assert.equal('cwd' in server, false);
+  assert.equal('env' in server, false);
 });
 
 test('datasource_list public view redacts secrets and admin config', () => {

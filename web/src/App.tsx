@@ -14,6 +14,7 @@ import {
   listThreads,
   subscribeRun,
   updatePageState,
+  updateThread,
   uploadLocalFile,
   type AskUserAnswer,
   type AskUserSpec,
@@ -848,6 +849,30 @@ export function App() {
     }
   }
 
+  async function renameThread(id: string) {
+    const current = threads.find((thread) => thread.id === id);
+    const nextTitle = window.prompt('重命名会话', current?.title ?? '');
+    if (nextTitle === null) return;
+    await updateThread(id, { title: nextTitle });
+    refreshThreads();
+  }
+
+  async function toggleThreadPin(id: string) {
+    const current = threads.find((thread) => thread.id === id);
+    await updateThread(id, { pinned: !current?.pinned_at });
+    refreshThreads();
+  }
+
+  async function archiveThread(id: string) {
+    stop();
+    await updateThread(id, { archived: true });
+    setThreads((current) => current.filter((thread) => thread.id !== id));
+    if (activeThreadId === id) {
+      navigateChatRoute({ draft: '', threadId: null });
+      setMessages([]);
+    }
+  }
+
   function changeDraft(text: string) {
     draftRef.current = text;
     if (activeThreadId) {
@@ -1030,6 +1055,9 @@ export function App() {
           onSearch={openSearch}
           onSettings={openSettings}
           onSelect={selectThread}
+          onRename={(id) => void renameThread(id)}
+          onTogglePin={(id) => void toggleThreadPin(id)}
+          onArchive={(id) => void archiveThread(id)}
           onDelete={(id) => void removeThread(id)}
         />
       </div>
@@ -1130,7 +1158,7 @@ export function App() {
             <DialogTitle>设置</DialogTitle>
             <DialogDescription>外观、用量统计、工具策略和数据源</DialogDescription>
           </DialogHeader>
-          <SettingsView embedded onWorkspaceChanged={refreshWorkspaceRoot} />
+          <SettingsView embedded onThreadsChanged={refreshThreads} onWorkspaceChanged={refreshWorkspaceRoot} />
         </DialogContent>
       </Dialog>
     </div>

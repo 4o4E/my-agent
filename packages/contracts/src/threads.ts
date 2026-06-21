@@ -4,8 +4,16 @@ import type { GoalState } from './goal.js';
 export interface Thread {
   id: string;
   title: string | null;
+  pinned_at: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ThreadUpdateInput {
+  title?: string | null;
+  pinned?: boolean;
+  archived?: boolean;
 }
 
 export interface RunWithEvents {

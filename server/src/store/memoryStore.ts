@@ -51,15 +51,47 @@ export class MemoryStore implements Store {
   private now = () => new Date().toISOString();
 
   async createThread(title?: string): Promise<ThreadRow> {
-    const row: ThreadRow = { id: newThreadId(), title: title ?? null, created_at: this.now(), updated_at: this.now() };
+    const row: ThreadRow = {
+      id: newThreadId(),
+      title: title ?? null,
+      pinned_at: null,
+      archived_at: null,
+      created_at: this.now(),
+      updated_at: this.now(),
+    };
     this.threads.set(row.id, row);
     return row;
   }
   async getThread(id: string) {
     return this.threads.get(id) ?? null;
   }
-  async listThreads(limit = 50) {
-    return [...this.threads.values()].slice(0, limit);
+  async listThreads(limit = 50, options: { archived?: boolean } = {}) {
+    const archived = options.archived === true;
+    return [...this.threads.values()]
+      .filter((thread) => archived ? Boolean(thread.archived_at) : !thread.archived_at)
+      .sort((a, b) => {
+        if (a.pinned_at && !b.pinned_at) return -1;
+        if (!a.pinned_at && b.pinned_at) return 1;
+        const pinDiff = Date.parse(b.pinned_at ?? '') - Date.parse(a.pinned_at ?? '');
+        if (Number.isFinite(pinDiff) && pinDiff !== 0) return pinDiff;
+        const updateDiff = Date.parse(b.updated_at) - Date.parse(a.updated_at);
+        return updateDiff || Date.parse(b.created_at) - Date.parse(a.created_at);
+      })
+      .slice(0, limit);
+  }
+  async updateThread(id: string, fields: { title?: string | null; pinned?: boolean; archived?: boolean }) {
+    const thread = this.threads.get(id);
+    if (!thread) return null;
+    const now = this.now();
+    const next: ThreadRow = {
+      ...thread,
+      title: Object.prototype.hasOwnProperty.call(fields, 'title') ? fields.title ?? null : thread.title,
+      pinned_at: fields.pinned === undefined ? thread.pinned_at : fields.pinned ? thread.pinned_at ?? now : null,
+      archived_at: fields.archived === undefined ? thread.archived_at : fields.archived ? thread.archived_at ?? now : null,
+      updated_at: now,
+    };
+    this.threads.set(id, next);
+    return next;
   }
   async deleteThread(id: string) {
     const existed = this.threads.delete(id);

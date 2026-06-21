@@ -5,7 +5,6 @@ import type {
   LlmProviderName,
   LlmProviderSettings,
   LlmSettings,
-  McpEnvSettings,
   McpHeaderSettings,
   McpServerSettings,
   McpSettings,
@@ -116,16 +115,16 @@ function uniqStrings(items: string[]): string[] {
   return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
 }
 
-function keyValueList<T extends McpHeaderSettings | McpEnvSettings>(value: unknown): T[] {
+function keyValueList(value: unknown): McpHeaderSettings[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((item) => {
       const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
       const name = typeof row.name === 'string' ? row.name.trim() : '';
       const value = typeof row.value === 'string' ? row.value : '';
-      return name ? ({ name, value } as T) : null;
+      return name ? { name, value } : null;
     })
-    .filter((item): item is T => Boolean(item));
+    .filter((item): item is McpHeaderSettings => Boolean(item));
 }
 
 function mcpServerIdValue(value: unknown, fallback: string): string {
@@ -133,10 +132,6 @@ function mcpServerIdValue(value: unknown, fallback: string): string {
     .replace(/[^0-9A-Za-z_.-]/g, '-')
     .replace(/_{2,}/g, '-');
   return raw || fallback;
-}
-
-function mcpTransportValue(value: unknown, fallback: McpServerSettings['transport']): McpServerSettings['transport'] {
-  return value === 'stdio' || value === 'http' ? value : fallback;
 }
 
 function defaultToolSettings(): ToolSettings {
@@ -306,14 +301,9 @@ function normalizeMcpServer(input: unknown, fallback: McpServerSettings, usedIds
     id,
     label: stringValue(body.label, fallback.label || id),
     enabled: boolValue(body.enabled, fallback.enabled),
-    transport: mcpTransportValue(body.transport, fallback.transport),
-    command: stringValue(body.command, fallback.command),
-    args: stringList(body.args, fallback.args),
-    cwd: typeof body.cwd === 'string' ? body.cwd.trim() : fallback.cwd,
-    env: keyValueList<McpEnvSettings>(body.env),
     url: stringValue(body.url, fallback.url),
     bearerToken: typeof body.bearerToken === 'string' ? body.bearerToken : fallback.bearerToken,
-    headers: keyValueList<McpHeaderSettings>(body.headers),
+    headers: keyValueList(body.headers),
     allowedTools: uniqStrings(stringList(body.allowedTools, fallback.allowedTools)),
     timeoutMs: positiveIntValue(body.timeoutMs, fallback.timeoutMs, 1000, 600_000),
     maxOutput: outputLimitValue(body.maxOutput, fallback.maxOutput),
@@ -329,11 +319,6 @@ export function normalizeMcpSettings(input: unknown): McpSettings {
     id: 'mcp',
     label: 'MCP Server',
     enabled: false,
-    transport: 'stdio',
-    command: '',
-    args: [],
-    cwd: '',
-    env: [],
     url: '',
     bearerToken: '',
     headers: [],

@@ -1,7 +1,14 @@
 import type { MouseEvent } from 'react';
-import { Bot, PanelLeftClose, PanelLeftOpen, Search, Settings, SquarePen, Trash2 } from 'lucide-react';
+import { Archive, Bot, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Search, Settings, SquarePen, Trash2 } from 'lucide-react';
 import type { Thread } from '../api';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 
@@ -20,6 +27,9 @@ interface Props {
   onSearch: () => void;
   onSettings: () => void;
   onSelect: (id: string) => void;
+  onRename: (id: string) => void;
+  onTogglePin: (id: string) => void;
+  onArchive: (id: string) => void;
   onDelete: (id: string) => void;
 }
 
@@ -47,6 +57,9 @@ export function Sidebar({
   onSearch,
   onSettings,
   onSelect,
+  onRename,
+  onTogglePin,
+  onArchive,
   onDelete,
 }: Props) {
   if (collapsed) {
@@ -177,22 +190,43 @@ export function Sidebar({
                 onSelect(t.id);
               }}
               title={threadLabel(t)}
-              className="min-w-0 flex-1 truncate py-2 pl-2 pr-3 text-left text-sm transition-[padding] group-hover/thread:pr-9"
+              className="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-2 pr-3 text-left text-sm transition-[padding] group-hover/thread:pr-9"
             >
-              {threadLabel(t)}
+              {t.pinned_at && <Pin className="size-3 shrink-0 text-muted-foreground" />}
+              <span className="min-w-0 truncate">{threadLabel(t)}</span>
             </a>
-            <button
-              type="button"
-              title="删除会话"
-              onClick={(event) => {
-                event.stopPropagation();
-                onDelete(t.id);
-              }}
-              className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md bg-accent text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover/thread:opacity-100"
-            >
-              <Trash2 className="size-3.5" />
-              <span className="sr-only">删除会话</span>
-            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  title="会话操作"
+                  onClick={(event) => event.stopPropagation()}
+                  className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:opacity-100 group-hover/thread:opacity-100"
+                >
+                  <MoreHorizontal className="size-4" />
+                  <span className="sr-only">会话操作</span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-36" onClick={(event) => event.stopPropagation()}>
+                <DropdownMenuItem onSelect={() => onTogglePin(t.id)}>
+                  {t.pinned_at ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+                  {t.pinned_at ? '取消置顶' : '置顶'}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => onRename(t.id)}>
+                  <Pencil className="size-4" />
+                  重命名
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => onArchive(t.id)}>
+                  <Archive className="size-4" />
+                  归档
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => onDelete(t.id)}>
+                  <Trash2 className="size-4" />
+                  删除
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         ))}
       </nav>

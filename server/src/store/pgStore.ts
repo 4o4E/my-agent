@@ -38,12 +38,29 @@ export class PgStore implements Store {
     return rows[0] ?? null;
   }
 
-  async listThreads(limit = 50): Promise<ThreadRow[]> {
+  async listThreads(limit = 50, options: { archived?: boolean } = {}): Promise<ThreadRow[]> {
     const { rows } = await query<ThreadRow>(
-      `SELECT * FROM threads ORDER BY created_at DESC LIMIT $1`,
-      [limit],
+      `SELECT * FROM threads
+       WHERE (($2::boolean AND archived_at IS NOT NULL) OR (NOT $2::boolean AND archived_at IS NULL))
+       ORDER BY pinned_at DESC NULLS LAST, updated_at DESC, created_at DESC
+       LIMIT $1`,
+      [limit, options.archived === true],
     );
     return rows;
+  }
+
+  async updateThread(id: string, fields: { title?: string | null; pinned?: boolean; archived?: boolean }): Promise<ThreadRow | null> {
+    const { rows } = await query<ThreadRow>(
+      `UPDATE threads
+       SET title = CASE WHEN $2 THEN $3 ELSE title END,
+           pinned_at = CASE WHEN $4::boolean IS NULL THEN pinned_at WHEN $4 THEN COALESCE(pinned_at, now()) ELSE NULL END,
+           archived_at = CASE WHEN $5::boolean IS NULL THEN archived_at WHEN $5 THEN COALESCE(archived_at, now()) ELSE NULL END,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [id, Object.prototype.hasOwnProperty.call(fields, 'title'), fields.title ?? null, fields.pinned ?? null, fields.archived ?? null],
+    );
+    return rows[0] ?? null;
   }
 
   async deleteThread(id: string): Promise<boolean> {

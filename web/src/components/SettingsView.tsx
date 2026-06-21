@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useId, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Activity, Bot, ChevronRight, Database, Gauge, MessageSquare, Moon, Palette, Plus, RefreshCw, Save, Shield, Sun, Trash2, Wifi, Wrench } from 'lucide-react';
+import { Activity, ArchiveRestore, Bot, ChevronRight, Database, Gauge, MessageSquare, Moon, Palette, Plus, RefreshCw, Save, Shield, Sun, Trash2, Wifi, Wrench } from 'lucide-react';
 import {
   createDatasource,
   createPermissionProfile,
@@ -25,6 +25,7 @@ import {
   updateLlmSettings,
   updateMcpSettings,
   updatePermissionProfile,
+  updateThread,
   updateToolSettings,
   type AgentEvent,
   type Datasource,
@@ -46,6 +47,7 @@ import {
   type PermissionMode,
   type PermissionProfile,
   type PermissionProfileInput,
+  type Thread,
   type ToolSettings,
   type ToolSettingsOptions,
   createReadonlyProfile,
@@ -78,6 +80,7 @@ type SettingsPanel =
   | 'appearance'
   | 'status-card'
   | 'usage-stats'
+  | 'archived-threads'
   | 'llm-models'
   | 'mcp-client'
   | 'tools-sandbox'
@@ -390,10 +393,6 @@ const AI_SDK_FLAVOR_OPTIONS: Array<{ value: LlmProviderSettings['aisdkFlavor']; 
   { value: 'anthropic', label: 'Anthropic' },
 ];
 
-function linesToList(text: string): string[] {
-  return text.split('\n').map((line) => line.trim()).filter(Boolean);
-}
-
 function keyValueRowsToText(rows: Array<{ name: string; value: string }>): string {
   return rows.map((row) => `${row.name}=${row.value}`).join('\n');
 }
@@ -415,11 +414,6 @@ function newMcpServer(): McpServerSettings {
     id: `mcp-${Date.now()}`,
     label: 'MCP Server',
     enabled: false,
-    transport: 'stdio',
-    command: '',
-    args: [],
-    cwd: '',
-    env: [],
     url: '',
     bearerToken: '',
     headers: [],
@@ -722,8 +716,9 @@ function UsageStatsSettingsPanel() {
   const refreshStats = () => {
     setLoading(true);
     setMessage('');
-    listThreads()
-      .then(async (threads) => {
+    Promise.all([listThreads(), listThreads({ archived: true })])
+      .then(async ([activeThreads, archivedThreads]) => {
+        const threads = [...activeThreads, ...archivedThreads];
         const details = await Promise.all(threads.map((thread) => getThread(thread.id)));
         setStats(buildUsageStats(details));
       })
@@ -840,6 +835,81 @@ function UsageStatsSettingsPanel() {
           </div>
         </CardContent>
       </Card>
+    </SettingsPanelShell>
+  );
+}
+
+function threadTitle(thread: Thread): string {
+  return thread.title || `会话 ${thread.id.slice(0, 8)}`;
+}
+
+function ArchivedThreadsSettingsPanel({ onThreadsChanged }: { onThreadsChanged?: () => void }) {
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [message, setMessage] = useState('');
+
+  const refreshArchivedThreads = () => {
+    setLoading(true);
+    setMessage('');
+    listThreads({ archived: true })
+      .then(setThreads)
+      .catch((err) => setMessage(`读取已归档会话失败：${(err as Error).message}`))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(refreshArchivedThreads, []);
+
+  async function restoreThread(id: string) {
+    setRestoringId(id);
+    setMessage('');
+    try {
+      await updateThread(id, { archived: false });
+      setThreads((current) => current.filter((thread) => thread.id !== id));
+      onThreadsChanged?.();
+    } catch (err) {
+      setMessage(`取消归档失败：${(err as Error).message}`);
+    } finally {
+      setRestoringId(null);
+    }
+  }
+
+  return (
+    <SettingsPanelShell
+      title="已归档"
+      description="归档会话会从左侧列表隐藏，但保留历史运行记录"
+      contentClassName="grid content-start gap-3"
+      actions={
+        <>
+          {message && <span className="max-w-md truncate text-sm text-muted-foreground">{message}</span>}
+          <Button variant="outline" onClick={refreshArchivedThreads} disabled={loading}>
+            <RefreshCw className="h-4 w-4" />
+            {loading ? '刷新中' : '刷新'}
+          </Button>
+        </>
+      }
+    >
+      {threads.length === 0 && (
+        <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+          暂无已归档会话
+        </div>
+      )}
+      {threads.map((thread) => (
+        <Card key={thread.id} className="rounded-lg shadow-sm">
+          <CardContent className="flex min-w-0 items-center justify-between gap-3 p-4">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{threadTitle(thread)}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                归档：{shortTime(thread.archived_at)} · 更新：{shortTime(thread.updated_at)}
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => void restoreThread(thread.id)} disabled={restoringId === thread.id}>
+              {restoringId === thread.id ? <Spinner className="h-4 w-4" /> : <ArchiveRestore className="h-4 w-4" />}
+              取消归档
+            </Button>
+          </CardContent>
+        </Card>
+      ))}
     </SettingsPanelShell>
   );
 }
@@ -1278,10 +1348,9 @@ function McpSettingsPanel() {
       )}
       {settings.servers.map((server, index) => {
         const serverTools = toolsForServer(server);
-        const probeResult = probeResults[server.id];
         const allowed = new Set(server.allowedTools);
         return (
-          <Card key={`${server.id}-${index}`} className="rounded-lg shadow-sm">
+          <Card key={index} className="rounded-lg shadow-sm">
             <CardHeader className="space-y-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="grid min-w-0 flex-1 gap-3 md:grid-cols-[minmax(0,12rem),minmax(0,1fr)]">
@@ -1300,16 +1369,7 @@ function McpSettingsPanel() {
                   </Button>
                 </div>
               </div>
-              <div className="grid gap-3 md:grid-cols-4">
-                <Field label="传输">
-                  <Select value={server.transport} onValueChange={(value) => updateServer(index, { transport: value as McpServerSettings['transport'] })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="stdio">stdio（本地进程）</SelectItem>
-                      <SelectItem value="http">HTTP（远程服务）</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </Field>
+              <div className="grid gap-3 md:grid-cols-3">
                 <Field label="超时 ms">
                   <Input type="number" min={1000} value={server.timeoutMs} onChange={(event) => updateServer(index, { timeoutMs: Number(event.target.value) })} />
                 </Field>
@@ -1323,47 +1383,43 @@ function McpSettingsPanel() {
                   </Button>
                 </div>
               </div>
-              {probeResult && (
-                <div className={cn('rounded-md border px-3 py-2 text-sm', probeResult.ok ? 'text-foreground' : 'text-destructive')}>
-                  {probeResult.message}
-                </div>
-              )}
             </CardHeader>
             <CardContent className="grid gap-4">
-              {server.transport === 'stdio' ? (
-                <div className="grid gap-3 md:grid-cols-2">
-                  <Field label="command">
-                    <Input value={server.command} onChange={(event) => updateServer(index, { command: event.target.value })} placeholder="node" />
-                  </Field>
-                  <Field label="cwd">
-                    <Input value={server.cwd} onChange={(event) => updateServer(index, { cwd: event.target.value })} placeholder="/path/to/server" />
-                  </Field>
-                  <Field label="args">
-                    <Textarea rows={4} value={server.args.join('\n')} onChange={(event) => updateServer(index, { args: linesToList(event.target.value) })} />
-                  </Field>
-                  <Field label="env">
-                    <Textarea rows={4} value={keyValueRowsToText(server.env)} onChange={(event) => updateServer(index, { env: textToKeyValueRows(event.target.value) })} />
+              <div className="grid gap-3 md:grid-cols-2">
+                <Field label="URL">
+                  <Input value={server.url} onChange={(event) => updateServer(index, { url: event.target.value })} placeholder="https://example.com/mcp" />
+                </Field>
+                <Field label="Bearer Token">
+                  <Input type="password" value={server.bearerToken} onChange={(event) => updateServer(index, { bearerToken: event.target.value })} />
+                </Field>
+                <div className="md:col-span-2">
+                  <Field label="Headers">
+                    <Textarea rows={4} value={keyValueRowsToText(server.headers)} onChange={(event) => updateServer(index, { headers: textToKeyValueRows(event.target.value) })} />
                   </Field>
                 </div>
-              ) : (
-                <div className="grid gap-3 md:grid-cols-2">
-                  <Field label="URL">
-                    <Input value={server.url} onChange={(event) => updateServer(index, { url: event.target.value })} placeholder="https://example.com/mcp" />
-                  </Field>
-                  <Field label="Bearer Token">
-                    <Input type="password" value={server.bearerToken} onChange={(event) => updateServer(index, { bearerToken: event.target.value })} />
-                  </Field>
-                  <div className="md:col-span-2">
-                    <Field label="Headers">
-                      <Textarea rows={4} value={keyValueRowsToText(server.headers)} onChange={(event) => updateServer(index, { headers: textToKeyValueRows(event.target.value) })} />
-                    </Field>
-                  </div>
-                </div>
-              )}
+              </div>
               <div className="grid gap-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm font-medium">允许工具</div>
-                  <div className="text-xs text-muted-foreground">已允许 {server.allowedTools.length} / 已发现 {serverTools.length}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-xs text-muted-foreground">已允许 {server.allowedTools.length} / 已发现 {serverTools.length}</div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => updateServer(index, { allowedTools: serverTools.map((tool) => tool.name).sort() })}
+                      disabled={serverTools.length === 0}
+                    >
+                      全选
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => updateServer(index, { allowedTools: [] })}
+                      disabled={server.allowedTools.length === 0}
+                    >
+                      清空
+                    </Button>
+                  </div>
                 </div>
                 <OptionList
                   empty="还没有发现工具，请先测试连接"
@@ -2466,7 +2522,15 @@ function DatasourceSettingsPanel({ page }: { page: DatasourceSettingsPage }) {
   );
 }
 
-export function SettingsView({ embedded = false, onWorkspaceChanged }: { embedded?: boolean; onWorkspaceChanged: () => void }) {
+export function SettingsView({
+  embedded = false,
+  onThreadsChanged,
+  onWorkspaceChanged,
+}: {
+  embedded?: boolean;
+  onThreadsChanged?: () => void;
+  onWorkspaceChanged: () => void;
+}) {
   const [panel, setPanel] = useState<SettingsPanel>('appearance');
   const datasourcePanel =
     panel === 'datasource-connection' ||
@@ -2495,6 +2559,11 @@ export function SettingsView({ embedded = false, onWorkspaceChanged }: { embedde
               <NavGroup label="用量">
                 <SectionButton active={panel === 'usage-stats'} icon={<Activity className="h-4 w-4" />} onClick={() => setPanel('usage-stats')}>
                   用量统计
+                </SectionButton>
+              </NavGroup>
+              <NavGroup label="会话">
+                <SectionButton active={panel === 'archived-threads'} icon={<ArchiveRestore className="h-4 w-4" />} onClick={() => setPanel('archived-threads')}>
+                  已归档
                 </SectionButton>
               </NavGroup>
               <NavGroup label="模型">
@@ -2534,6 +2603,7 @@ export function SettingsView({ embedded = false, onWorkspaceChanged }: { embedde
             {panel === 'appearance' && <AppearanceSettingsPanel />}
             {panel === 'status-card' && <StatusCardSettingsPanel />}
             {panel === 'usage-stats' && <UsageStatsSettingsPanel />}
+            {panel === 'archived-threads' && <ArchivedThreadsSettingsPanel onThreadsChanged={onThreadsChanged} />}
             {panel === 'llm-models' && <LlmSettingsPanel />}
             {panel === 'mcp-client' && <McpSettingsPanel />}
             {panel === 'tools-access' && <ToolsSettingsPanel onWorkspaceChanged={onWorkspaceChanged} section="access" />}

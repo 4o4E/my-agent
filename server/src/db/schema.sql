@@ -4,9 +4,15 @@
 CREATE TABLE IF NOT EXISTS threads (
   id          TEXT PRIMARY KEY,
   title       TEXT,
+  pinned_at   TIMESTAMPTZ,
+  archived_at TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 会话列表状态：置顶只影响排序，归档只从默认列表隐藏，不删除历史数据。
+ALTER TABLE threads ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
+ALTER TABLE threads ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 
 -- One run = one user turn in a thread (input → agent works → output)
 CREATE TABLE IF NOT EXISTS runs (
@@ -69,6 +75,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, id);
 CREATE INDEX IF NOT EXISTS idx_messages_run ON messages(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_threads_created ON threads(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_sidebar ON threads(archived_at, pinned_at DESC, updated_at DESC, created_at DESC);
 
 -- subagent run 是父 run 内部派发的独立子任务。v1 先记录 workflow stage、
 -- task assignment、runtime profile 和最终输出，后续再扩展为可用工具的子 agent loop。
